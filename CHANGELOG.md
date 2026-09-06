@@ -3,6 +3,14 @@
 This project is pre-1.0. The wire format may change while the version is 0.x,
 and a format change is always called out here explicitly.
 
+## 0.2.1
+
+### Fixed
+
+- The Windows installer asked for administrator rights and could not complete
+  without them. It now installs for the current user, which needs no elevation
+  and matches what an unaudited tool should be allowed to do.
+
 ## 0.2.0
 
 The container format is **unchanged**: 0.1.0 containers open with 0.2.0 and the

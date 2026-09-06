@@ -1380,7 +1380,7 @@ checksum = "7f24254aa9a54b5c858eaee2f5bccdb46aaf0e486a595ed5fd8f86ba55232a70"
 
 [[package]]
 name = "hide-crypto"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "chacha20poly1305",
  "getrandom 0.4.3",
@@ -1395,7 +1395,7 @@ dependencies = [
 
 [[package]]
 name = "hide-desktop"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "base64 0.23.1",
  "hide-crypto",
@@ -1412,7 +1412,7 @@ dependencies = [
 
 [[package]]
 name = "hide-format"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "minicbor",
  "thiserror 2.0.20",
@@ -1420,7 +1420,7 @@ dependencies = [
 
 [[package]]
 name = "hide-keyring"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "argon2",
  "base64 0.23.1",
@@ -1433,7 +1433,7 @@ dependencies = [
 
 [[package]]
 name = "hide-object"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "hide-crypto",
  "hide-format",
