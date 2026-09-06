@@ -136,6 +136,12 @@ impl RecipientSecret {
         Ok(RecipientPublic(XWing::sk_to_pk(&secret)))
     }
 
+    /// Exposes the raw seed so it can be sealed for storage. Deliberately named
+    /// to make a plaintext write of the result look wrong at the call site.
+    pub fn expose_seed_for_sealing(&self) -> &[u8] {
+        self.0.as_ref()
+    }
+
     /// Explicit secret export for this experimental CLI only.
     /// The caller must protect the result and avoid logging or copying it.
     pub fn export_test_secret(&self) -> Zeroizing<Vec<u8>> {

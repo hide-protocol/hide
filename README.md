@@ -47,23 +47,61 @@ Being explicit here matters more than the feature list.
   **not** prove who created it.
 - **No forward secrecy** for stored objects: anyone who later obtains the recipient secret can decrypt
   previously captured containers. Device revocation cannot retroactively protect data an attacker already holds.
-- **No hardware protection.** `hide test-keygen` writes an **unencrypted** secret key file. There is no
-  Keychain, TPM, Secure Enclave or Keystore integration yet, and no passphrase.
+- **No hardware protection.** Secret keys are sealed with a passphrase (Argon2id + ChaCha20-Poly1305),
+  but there is no Keychain, TPM, Secure Enclave or Keystore integration, and `--insecure-plaintext`
+  still writes an unencrypted key on request.
 - **Recipient privacy is limited.** Stanzas carry no identifiers, but the recipient *count* and the
   ciphertext size are visible, and metadata is encrypted rather than hidden.
-- Not yet built: identity state, device enrollment, recovery, revocation, signatures, MLS messaging, GUI apps.
+- Not yet built: identity state, device enrollment, recovery, revocation, signatures, MLS messaging.
+
+## Download
+
+Releases carry three kinds of build. Verify any download against `SHA256SUMS` first.
+
+| Build | File | Use it when |
+| --- | --- | --- |
+| Desktop application | `HIDE_*-setup.exe`, `*.dmg`, `*.deb`, `*.AppImage` | You want a window, not a terminal. |
+| Portable | `hide-portable-*` | You want one executable, no installation, keys kept beside it. |
+| Command line | `hide-*` | You want to script it. |
+
+The portable build writes nothing outside its own folder: keys go into a `hide-keys` directory
+next to the executable, so it runs from a USB stick and leaves no trace in your user profile.
 
 ## Try it
 
 ```powershell
 cargo test --workspace --all-features
-cargo run -p hide-cli -- --experimental test-keygen --secret alice.test-secret --public alice.test-public
-cargo run -p hide-cli -- --experimental encrypt report.pdf --recipient alice.test-public --output report.pdf.hide
-cargo run -p hide-cli -- --experimental open report.pdf.hide --secret alice.test-secret --output report.pdf
+
+# A key pair. The secret is sealed with a passphrase unless you opt out.
+cargo run -p hide-cli -- --experimental keygen --secret alice.hide-key --public alice.hide-pub
+
+# Files.
+cargo run -p hide-cli -- --experimental encrypt report.pdf --recipient alice.hide-pub --output report.pdf.hide
+cargo run -p hide-cli -- --experimental open report.pdf.hide --secret alice.hide-key --output report.pdf
+
+# Text messages, as a block you can paste into email or chat.
+cargo run -p hide-cli -- --experimental seal "meet at six" --recipient alice.hide-pub
+cargo run -p hide-cli -- --experimental unseal message.txt --secret alice.hide-key
+
+# What is this file? Answered without decrypting it.
+cargo run -p hide-cli -- --experimental info report.pdf.hide
 ```
 
 The CLI never overwrites an existing file, writes plaintext to private staging first, and publishes the
 result only after authentication succeeds. `--experimental` is mandatory, so the risk is acknowledged explicitly.
+
+### Building the desktop application
+
+```powershell
+cd apps/hide-desktop
+pnpm install --ignore-workspace
+pnpm tauri build        # installer
+pnpm build:portable     # single portable executable
+```
+
+The application calls the same Rust crates as the CLI; it contains no separate cryptographic code.
+Key material never reaches the user interface layer. A test in `src-tauri/tests/interop.rs` asserts
+that each surface can open what the other produced, so they cannot silently diverge.
 
 ## Repository layout
 
@@ -72,7 +110,9 @@ result only after authentication succeeds. `--experimental` is mandatory, so the
 | `crates/hide-format` | Preamble, bounded canonical CBOR, portable-filename metadata |
 | `crates/hide-crypto` | HPKE X-Wing wrapping, HKDF, HMAC, ChaCha20-Poly1305; secrets zeroize and cannot be printed |
 | `crates/hide-object` | Envelope encryption and authenticated 64 KiB streaming |
+| `crates/hide-keyring` | Passphrase-sealed key files (Argon2id) and public-key armor |
 | `apps/hide-cli` | `hide` binary |
+| `apps/hide-desktop` | Desktop application (Tauri) and the portable build |
 | `conformance/` | Frozen vectors plus the independent Node verifier |
 | `spec/hide-0.1.md` | Wire format |
 

@@ -18,8 +18,13 @@ Reporting these is welcome, but they are known and documented, not new findings:
   person; there is no directory and no key transparency.
 - **No forward secrecy.** Anyone who later obtains a recipient secret can decrypt
   containers captured earlier.
-- **No hardware protection.** `hide test-keygen` writes an unencrypted secret key
-  file. There is no Keychain, TPM, Secure Enclave or Keystore integration.
+- **No hardware protection.** Secret keys are sealed at rest with Argon2id
+  (19 MiB, t=2) and ChaCha20-Poly1305, which resists an attacker who copies the
+  file but not one who can read the process memory while the key is in use.
+  There is no Keychain, TPM, Secure Enclave or Keystore integration, and
+  `keygen --insecure-plaintext` still writes an unencrypted key on request.
+- **A forgotten passphrase is unrecoverable.** There is no escrow, reset or
+  backdoor. Losing it destroys access to everything encrypted to that key.
 - **Metadata is encrypted, not hidden.** Ciphertext size and recipient count
   remain observable.
 

@@ -1,0 +1,47 @@
+[package]
+name = "hide-desktop"
+version = "0.2.0"
+edition = "2024"
+rust-version = "1.85"
+license = "Apache-2.0"
+publish = false
+description = "Desktop interface for the experimental HIDE encryption protocol"
+
+[lib]
+name = "hide_desktop_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[features]
+# Keeps keys beside the executable instead of in the user profile.
+portable = []
+
+[build-dependencies]
+tauri-build = { version = "=2.6.3", features = [] }
+
+[dependencies]
+hide-crypto = { path = "../../../crates/hide-crypto" }
+hide-keyring = { path = "../../../crates/hide-keyring" }
+hide-object = { path = "../../../crates/hide-object" }
+tauri = { version = "=2.11.5", features = [] }
+tauri-plugin-dialog = "=2.7.3"
+serde = { version = "=1.0.229", features = ["derive"] }
+serde_json = "=1.0.151"
+base64 = "=0.23.1"
+zeroize = { version = "=1.9.0", features = ["zeroize_derive"] }
+
+[dev-dependencies]
+tempfile = "=3.24.0"
+
+[profile.release]
+lto = "thin"
+overflow-checks = true
+codegen-units = 1
+panic = "abort"
+strip = "symbols"
+opt-level = "s"
+
+[lints.rust]
+unsafe_code = "forbid"
+
+[lints.clippy]
+all = "warn"

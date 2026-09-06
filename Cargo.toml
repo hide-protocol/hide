@@ -1,9 +1,12 @@
 [workspace]
 members = ["crates/*", "apps/hide-cli"]
+# The desktop app has its own workspace: it needs a built frontend before it
+# compiles, which would make `cargo test --workspace` in CI depend on Node.
+exclude = ["apps/hide-desktop/src-tauri"]
 resolver = "3"
 
 [workspace.package]
-version = "0.1.0"
+version = "0.2.0"
 edition = "2024"
 rust-version = "1.85"
 license = "Apache-2.0"
@@ -22,6 +25,9 @@ getrandom = "=0.4.3"
 clap = { version = "=4.6.6", features = ["derive"] }
 tempfile = "=3.27.0"
 proptest = "=1.11.0"
+argon2 = { version = "=0.6.0", features = ["alloc"] }
+rpassword = "=7.5.4"
+base64 = "=0.23.1"
 
 [workspace.lints.rust]
 unsafe_code = "forbid"

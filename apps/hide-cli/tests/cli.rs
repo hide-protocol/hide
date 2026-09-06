@@ -344,3 +344,191 @@ fn decrypted_filename_never_selects_the_output_path() -> Result<(), Box<dyn Erro
     assert_eq!(fs::read(directory.path().join("chosen.txt"))?, b"data");
     Ok(())
 }
+
+#[test]
+fn seals_and_unseals_a_text_message_through_the_armored_form() -> Result<(), Box<dyn Error>> {
+    let directory = tempfile::tempdir()?;
+    keys(directory.path());
+    let message = "transfer 100 RON to Ana\nsecond line";
+
+    let sealed = hide(
+        directory.path(),
+        &[
+            "--experimental",
+            "seal",
+            message,
+            "--recipient",
+            "alice.test-public",
+        ],
+    );
+    assert!(sealed.status.success());
+    let armored = String::from_utf8(sealed.stdout)?;
+    assert!(armored.starts_with("----- BEGIN HIDE MESSAGE -----"));
+    assert!(!armored.contains("transfer"), "plaintext leaked into armor");
+    fs::write(directory.path().join("note.txt"), &armored)?;
+
+    let opened = hide(
+        directory.path(),
+        &[
+            "--experimental",
+            "unseal",
+            "note.txt",
+            "--secret",
+            "alice.test-secret",
+        ],
+    );
+    assert!(opened.status.success());
+    assert_eq!(String::from_utf8(opened.stdout)?.trim_end(), message);
+    Ok(())
+}
+
+#[test]
+fn a_tampered_message_body_is_refused() -> Result<(), Box<dyn Error>> {
+    let directory = tempfile::tempdir()?;
+    keys(directory.path());
+    let sealed = hide(
+        directory.path(),
+        &[
+            "--experimental",
+            "seal",
+            "confidential",
+            "--recipient",
+            "alice.test-public",
+        ],
+    );
+    let armored = String::from_utf8(sealed.stdout)?;
+    let lines: Vec<&str> = armored.lines().collect();
+    let mut body = lines[1].to_owned();
+    // Flip one base64 character in the ciphertext.
+    let flipped = if body.starts_with('A') { 'B' } else { 'A' };
+    body.replace_range(0..1, &flipped.to_string());
+    let tampered = format!("{}\n{}\n{}\n", lines[0], body, lines[lines.len() - 1]);
+    fs::write(directory.path().join("bad.txt"), tampered)?;
+
+    let opened = hide(
+        directory.path(),
+        &[
+            "--experimental",
+            "unseal",
+            "bad.txt",
+            "--secret",
+            "alice.test-secret",
+        ],
+    );
+    assert!(!opened.status.success(), "tampered message was accepted");
+    assert!(opened.stdout.is_empty(), "published unauthenticated output");
+    Ok(())
+}
+
+#[test]
+fn info_reports_kinds_without_revealing_contents() -> Result<(), Box<dyn Error>> {
+    let directory = tempfile::tempdir()?;
+    keys(directory.path());
+    fs::write(directory.path().join("salary.txt"), b"top secret")?;
+    let encrypted = hide(
+        directory.path(),
+        &[
+            "--experimental",
+            "encrypt",
+            "salary.txt",
+            "--recipient",
+            "alice.test-public",
+            "--output",
+            "salary.hide",
+        ],
+    );
+    assert!(encrypted.status.success());
+
+    let public = hide(
+        directory.path(),
+        &["--experimental", "info", "alice.test-public"],
+    );
+    assert!(String::from_utf8(public.stdout)?.contains("public key"));
+
+    let secret = hide(
+        directory.path(),
+        &["--experimental", "info", "alice.test-secret"],
+    );
+    assert!(String::from_utf8(secret.stdout)?.contains("UNENCRYPTED"));
+
+    let container = hide(directory.path(), &["--experimental", "info", "salary.hide"]);
+    let text = String::from_utf8(container.stdout)?;
+    assert!(text.contains("HIDE container"));
+    assert!(!text.contains("salary.txt"), "info revealed the filename");
+    Ok(())
+}
+
+#[test]
+fn armored_public_keys_are_accepted_as_recipients() -> Result<(), Box<dyn Error>> {
+    let directory = tempfile::tempdir()?;
+    keys(directory.path());
+    let shared = hide(
+        directory.path(),
+        &["--experimental", "share", "alice.test-public"],
+    );
+    assert!(shared.status.success());
+    let armored = String::from_utf8(shared.stdout)?;
+    assert!(armored.starts_with("hide-public-key:"));
+    fs::write(directory.path().join("alice.pub.txt"), &armored)?;
+
+    fs::write(directory.path().join("memo.txt"), b"hello")?;
+    let encrypted = hide(
+        directory.path(),
+        &[
+            "--experimental",
+            "encrypt",
+            "memo.txt",
+            "--recipient",
+            "alice.pub.txt",
+            "--output",
+            "memo.hide",
+        ],
+    );
+    assert!(
+        encrypted.status.success(),
+        "{}",
+        String::from_utf8_lossy(&encrypted.stderr)
+    );
+
+    let opened = hide(
+        directory.path(),
+        &[
+            "--experimental",
+            "open",
+            "memo.hide",
+            "--secret",
+            "alice.test-secret",
+            "--output",
+            "memo.out",
+        ],
+    );
+    assert!(opened.status.success());
+    assert_eq!(fs::read(directory.path().join("memo.out"))?, b"hello");
+    Ok(())
+}
+
+#[test]
+fn refuses_to_read_a_passphrase_from_a_pipe() -> Result<(), Box<dyn Error>> {
+    let directory = tempfile::tempdir()?;
+    let result = hide(
+        directory.path(),
+        &[
+            "--experimental",
+            "keygen",
+            "--secret",
+            "bob.key",
+            "--public",
+            "bob.pub",
+        ],
+    );
+    assert!(!result.status.success());
+    assert!(
+        String::from_utf8_lossy(&result.stderr).contains("not a terminal"),
+        "expected a refusal to read a passphrase non-interactively"
+    );
+    assert!(
+        !directory.path().join("bob.key").exists(),
+        "left a partial key"
+    );
+    Ok(())
+}

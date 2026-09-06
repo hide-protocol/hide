@@ -73,8 +73,113 @@ jobs:
             dist/*.sha256
           retention-days: 7
 
+  # The desktop application and the portable build. Kept in a separate job so a
+  # failure here never blocks the CLI, and so the Node toolchain is installed
+  # only where it is actually needed.
+  desktop:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-24.04
+            target: x86_64-unknown-linux-gnu
+          - os: windows-2025
+            target: x86_64-pc-windows-msvc
+          - os: macos-15
+            target: aarch64-apple-darwin
+    runs-on: ${{ matrix.os }}
+    defaults:
+      run:
+        working-directory: apps/hide-desktop
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: apps/hide-desktop/src-tauri
+          key: desktop-${{ matrix.target }}
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 22
+          cache: pnpm
+          cache-dependency-path: apps/hide-desktop/pnpm-lock.yaml
+
+      # WebKitGTK is the Linux webview; the other platforms use the system one.
+      - name: Install Linux webview dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf
+        working-directory: .
+
+      - run: pnpm install --frozen-lockfile --ignore-workspace
+
+      # The desktop app must agree with the CLI about the format.
+      - name: Verify the two surfaces interoperate
+        run: |
+          cargo build --release -p hide-cli
+          cargo test --release --manifest-path apps/hide-desktop/src-tauri/Cargo.toml
+        working-directory: .
+
+      - name: Build the installer
+        run: pnpm tauri build
+
+      - name: Build the portable executable
+        run: pnpm build:portable
+
+      - name: Package
+        shell: bash
+        run: |
+          set -euo pipefail
+          release="src-tauri/target/release"
+          out="../../dist"
+          mkdir -p "$out"
+
+          # Installers, whatever the platform produced.
+          find "$release/bundle" -type f \
+            \( -name '*.exe' -o -name '*.dmg' -o -name '*.deb' -o -name '*.AppImage' \) \
+            -exec cp {} "$out/" \; 2>/dev/null || true
+
+          # The portable build is a single self-contained executable.
+          portable="hide-portable-${GITHUB_REF_NAME}-${{ matrix.target }}"
+          mkdir -p "$out/$portable"
+          if [ -f "$release/hide-desktop.exe" ]; then
+            cp "$release/hide-desktop.exe" "$out/$portable/HIDE-Portable.exe"
+          else
+            cp "$release/hide-desktop" "$out/$portable/HIDE-Portable"
+          fi
+          cp ../../README.md ../../LICENSE ../../SECURITY.md "$out/$portable/"
+
+          cd "$out"
+          if [ "${{ runner.os }}" = "Windows" ]; then
+            7z a -tzip "$portable.zip" "$portable" >/dev/null
+          else
+            tar -czf "$portable.tar.gz" "$portable"
+          fi
+          rm -rf "$portable"
+
+          for file in *.exe *.dmg *.deb *.AppImage *.zip *.tar.gz; do
+            [ -f "$file" ] || continue
+            shasum -a 256 "$file" | cut -d' ' -f1 > "$file.sha256"
+          done
+          ls -la
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: desktop-${{ matrix.target }}
+          path: |
+            dist/*
+            !dist/*/
+          retention-days: 7
+
   publish:
-    needs: build
+    needs: [build, desktop]
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v7
@@ -97,20 +202,34 @@ jobs:
           files: |
             dist/*.tar.gz
             dist/*.zip
+            dist/*.exe
+            dist/*.dmg
+            dist/*.deb
+            dist/*.AppImage
             dist/SHA256SUMS
           prerelease: true
           generate_release_notes: true
           body: |
             **Experimental and unaudited. Do not protect real data with this release.**
 
-            HIDE/0.1 implements the file-format engine only: HPKE X-Wing
-            (X25519 + ML-KEM-768) key wrapping, and authenticated 64 KiB
-            streaming with constant memory.
+            HIDE implements the file-format engine: HPKE X-Wing (X25519 +
+            ML-KEM-768) key wrapping, and authenticated 64 KiB streaming with
+            constant memory.
+
+            ### What to download
+
+            - **Desktop application** — `HIDE_*_x64-setup.exe` (Windows),
+              `*.dmg` (macOS), `*.deb` / `*.AppImage` (Linux). Installs a
+              graphical application for keys, files and messages.
+            - **Portable** — `hide-portable-*`. A single executable that needs
+              no installation and keeps its keys in a `hide-keys` folder beside
+              itself. Suitable for a USB stick.
+            - **Command line** — `hide-*`. The `hide` tool.
 
             There is no identity system, no key transparency, no sender
             authentication, no forward secrecy and no hardware-backed key
-            storage. `hide test-keygen` writes an unencrypted secret key file.
-            See SECURITY.md for the full list.
+            storage. Secret keys are sealed with a passphrase by default, but
+            `--insecure-plaintext` writes one unencrypted. See SECURITY.md.
 
             The wire format may change while the version is 0.x.
 
