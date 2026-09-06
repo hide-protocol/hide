@@ -44,6 +44,44 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - run: cargo test --workspace --all-features
 
+  # The desktop app is outside the cargo workspace, so it needs its own job.
+  # Linux only: this checks the shared logic and the CLI/desktop interop, and
+  # the release workflow is what builds every platform's bundle.
+  desktop:
+    needs: lint
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy, rustfmt
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: apps/hide-desktop/src-tauri
+          key: desktop
+      - name: Install Linux webview dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf
+      - run: cargo fmt --check
+        working-directory: apps/hide-desktop/src-tauri
+      - run: cargo clippy --all-targets --all-features -- -D warnings
+        working-directory: apps/hide-desktop/src-tauri
+
+      # The interop test skips itself when the CLI is absent, which would make
+      # it silently decorative. Build the CLI first, then assert it ran.
+      - run: cargo build -p hide-cli
+      - name: Desktop tests, including CLI interoperability
+        run: |
+          set -euo pipefail
+          cargo test --manifest-path apps/hide-desktop/src-tauri/Cargo.toml \
+            --all-features -- --nocapture | tee desktop-tests.log
+          if grep -q 'skipping: the hide CLI has not been built' desktop-tests.log; then
+            echo "::error::the interoperability test skipped itself" >&2
+            exit 1
+          fi
+
   # Proves the wire format is implementable from the spec alone.
   interoperability:
     needs: lint
