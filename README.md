@@ -94,6 +94,9 @@ every other surface can open.
 | Browser | [`sdk/wasm`](sdk/wasm) | WebAssembly, compiled from the same crates |
 | Go | [`sdk/go`](sdk/go) | `cgo` |
 | Java / Kotlin | [`sdk/java`](sdk/java) | Foreign Function & Memory API, no JNI shim |
+| Ruby | [`sdk/ruby`](sdk/ruby) | stdlib `fiddle`, no native gem to build |
+| PHP | [`sdk/php`](sdk/php) | `ext-ffi` |
+| .NET / C# | [`sdk/dotnet`](sdk/dotnet) | Source-generated `LibraryImport` |
 
 Secret keys never cross into the host language: each SDK holds an opaque handle, and there is
 deliberately no function that exports key material.

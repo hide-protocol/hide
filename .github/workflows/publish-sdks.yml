@@ -21,6 +21,14 @@ on:
         description: "Publish the Node and WASM SDKs to npm"
         type: boolean
         default: false
+      rubygems:
+        description: "Publish the Ruby SDK to RubyGems"
+        type: boolean
+        default: false
+      nuget:
+        description: "Publish the .NET SDK to NuGet"
+        type: boolean
+        default: false
       dry_run:
         description: "Build and validate everything, publish nothing"
         type: boolean
@@ -204,3 +212,70 @@ jobs:
           # cannot express in one tarball; published as source with a clear
           # error when the library is missing.
           npm publish --provenance --access public ./sdk/node
+
+  rubygems:
+    needs: verify
+    if: inputs.rubygems
+    runs-on: ubuntu-24.04
+    environment: rubygems
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - uses: ruby/setup-ruby@v1
+        with:
+          ruby-version: "3.3"
+
+      - name: Build the core and run the suite against it
+        run: |
+          set -euo pipefail
+          cargo build --release --locked -p hide-ffi
+          cd sdk/ruby
+          HIDE_LIBRARY=$PWD/../../target/release/libhide_ffi.so \
+            ruby -Ilib -Itest test/test_hide.rb
+
+      # Pure Ruby via fiddle, so one gem serves every platform. The user
+      # supplies the native library, as the README explains.
+      - name: Build the gem
+        working-directory: sdk/ruby
+        run: gem build hide-protocol.gemspec
+
+      - name: Publish
+        if: '!inputs.dry_run'
+        working-directory: sdk/ruby
+        env:
+          GEM_HOST_API_KEY: ${{ secrets.RUBYGEMS_API_KEY }}
+        run: gem push hide-protocol-${{ inputs.version }}.gem
+
+  nuget:
+    needs: verify
+    if: inputs.nuget
+    runs-on: ubuntu-24.04
+    environment: nuget
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - uses: actions/setup-dotnet@v5
+        with:
+          dotnet-version: "8.0"
+
+      - name: Build the core and run the suite against it
+        env:
+          HIDE_LIBRARY: ${{ github.workspace }}/target/release/libhide_ffi.so
+        run: |
+          set -euo pipefail
+          cargo build --release --locked -p hide-ffi
+          dotnet test sdk/dotnet --verbosity quiet
+
+      - name: Pack
+        run: dotnet pack sdk/dotnet/HideProtocol/HideProtocol.csproj -c Release -o nupkg
+
+      - name: Publish
+        if: '!inputs.dry_run'
+        env:
+          NUGET_API_KEY: ${{ secrets.NUGET_API_KEY }}
+        run: |
+          set -euo pipefail
+          dotnet nuget push 'nupkg/*.nupkg' --api-key "$NUGET_API_KEY" \
+            --source https://api.nuget.org/v3/index.json --skip-duplicate

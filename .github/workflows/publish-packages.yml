@@ -1,0 +1,118 @@
+name: Publish package manifests
+
+# Separate from Release, and manual, for the same reason publishing an SDK is:
+# pushing to a tap makes the tool installable with one command by people who
+# will not have read SECURITY.md. A release should be downloadable immediately;
+# being installable is a decision someone takes deliberately.
+#
+# Needs a PAT with `contents: write` on the tap repositories, as
+# secrets.TAP_TOKEN. The default GITHUB_TOKEN cannot push to another repo.
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Released version, without the leading v (e.g. 0.4.0)"
+        required: true
+      homebrew:
+        description: "Push the formula to hide-protocol/homebrew-tap"
+        type: boolean
+        default: false
+      scoop:
+        description: "Push the manifest to hide-protocol/scoop-bucket"
+        type: boolean
+        default: false
+      dry_run:
+        description: "Generate and validate everything, push nothing"
+        type: boolean
+        default: true
+
+permissions:
+  contents: read
+
+jobs:
+  generate:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+
+      # Regenerated from the checksums of the published release, never from a
+      # local build: a manifest must describe the bytes users will download.
+      - name: Rebuild the manifests from the published release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          mkdir -p dist
+          gh release download "v${{ inputs.version }}" --dir dist --pattern 'SHA256SUMS'
+          bash packaging/generate.sh "${{ inputs.version }}" dist
+
+      # A manifest whose checksum does not match the asset it names would make
+      # every install fail, so verify before pushing rather than after.
+      - name: The manifests must match the real assets
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          cd dist
+          gh release download "v${{ inputs.version }}" --dir . --pattern '*.tar.gz' --pattern '*.zip'
+          sha256sum --check --ignore-missing SHA256SUMS
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: packaging-manifests
+          path: dist/packaging/**
+          retention-days: 7
+
+  homebrew:
+    needs: generate
+    if: inputs.homebrew && !inputs.dry_run
+    runs-on: ubuntu-24.04
+    environment: packaging
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          name: packaging-manifests
+          path: packaging
+      - name: Push the formula
+        env:
+          GH_TOKEN: ${{ secrets.TAP_TOKEN }}
+        run: |
+          set -euo pipefail
+          git clone --depth 1 \
+            "https://x-access-token:${GH_TOKEN}@github.com/hide-protocol/homebrew-tap.git" tap
+          mkdir -p tap/Formula
+          cp packaging/homebrew/hide.rb tap/Formula/hide.rb
+          cd tap
+          git config user.name "hide-protocol-bot"
+          git config user.email "bot@hide-protocol.invalid"
+          git add Formula/hide.rb
+          git diff --cached --quiet && { echo "already up to date"; exit 0; }
+          git commit -m "hide ${{ inputs.version }}"
+          git push
+
+  scoop:
+    needs: generate
+    if: inputs.scoop && !inputs.dry_run
+    runs-on: ubuntu-24.04
+    environment: packaging
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          name: packaging-manifests
+          path: packaging
+      - name: Push the manifest
+        env:
+          GH_TOKEN: ${{ secrets.TAP_TOKEN }}
+        run: |
+          set -euo pipefail
+          git clone --depth 1 \
+            "https://x-access-token:${GH_TOKEN}@github.com/hide-protocol/scoop-bucket.git" bucket
+          mkdir -p bucket/bucket
+          cp packaging/scoop/hide.json bucket/bucket/hide.json
+          cd bucket
+          git config user.name "hide-protocol-bot"
+          git config user.email "bot@hide-protocol.invalid"
+          git add bucket/hide.json
+          git diff --cached --quiet && { echo "already up to date"; exit 0; }
+          git commit -m "hide ${{ inputs.version }}"
+          git push
