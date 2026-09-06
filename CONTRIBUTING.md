@@ -10,6 +10,20 @@ truth; the Rust code is one implementation of it.
 
 ## Running everything
 
+Install the git hooks once, so failures surface locally instead of in CI:
+
+```powershell
+npm install
+```
+
+`pre-commit` runs `cargo fmt --check` and clippy (about 3 s warm, and skipped
+entirely when no Rust file is staged). `pre-push` runs the full test suite and a
+release build (about 20 s warm), and refuses the push if `conformance/vectors`
+has uncommitted changes.
+
+Node is only needed for these hooks and for the independent verifier; the
+protocol itself is pure Rust.
+
 ```powershell
 cargo test --workspace --all-features
 cargo fmt --all --check

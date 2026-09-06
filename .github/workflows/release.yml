@@ -1,0 +1,117 @@
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: 0
+
+jobs:
+  build:
+    strategy:
+      fail-fast: true
+      matrix:
+        include:
+          - os: ubuntu-24.04
+            target: x86_64-unknown-linux-gnu
+          - os: windows-2025
+            target: x86_64-pc-windows-msvc
+          - os: macos-15
+            target: aarch64-apple-darwin
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: release-${{ matrix.target }}
+
+      # A release binary that cannot decrypt the frozen vectors is not shippable.
+      - run: cargo test -p hide-object --test vectors --release
+      - run: cargo build --release --locked -p hide-cli --target ${{ matrix.target }}
+
+      - name: Package
+        shell: bash
+        run: |
+          set -euo pipefail
+          name="hide-${GITHUB_REF_NAME}-${{ matrix.target }}"
+          mkdir -p "dist/$name"
+          if [ -f "target/${{ matrix.target }}/release/hide.exe" ]; then
+            cp "target/${{ matrix.target }}/release/hide.exe" "dist/$name/"
+          else
+            cp "target/${{ matrix.target }}/release/hide" "dist/$name/"
+          fi
+          cp README.md LICENSE SECURITY.md "dist/$name/"
+          cp spec/hide-0.1.md "dist/$name/"
+          cd dist
+          if [ "${{ runner.os }}" = "Windows" ]; then
+            7z a -tzip "$name.zip" "$name" >/dev/null
+            certutil -hashfile "$name.zip" SHA256 | sed -n 2p | tr -d ' \r' > "$name.zip.sha256"
+          else
+            tar -czf "$name.tar.gz" "$name"
+            shasum -a 256 "$name.tar.gz" | cut -d' ' -f1 > "$name.tar.gz.sha256"
+          fi
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: ${{ matrix.target }}
+          path: |
+            dist/*.tar.gz
+            dist/*.zip
+            dist/*.sha256
+          retention-days: 7
+
+  publish:
+    needs: build
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/download-artifact@v8
+        with:
+          path: dist
+          merge-multiple: true
+
+      - name: Collect checksums
+        run: |
+          set -euo pipefail
+          cd dist
+          for file in *.sha256; do
+            printf '%s  %s\n' "$(cat "$file")" "${file%.sha256}" >> SHA256SUMS
+          done
+          cat SHA256SUMS
+
+      - uses: softprops/action-gh-release@v3
+        with:
+          files: |
+            dist/*.tar.gz
+            dist/*.zip
+            dist/SHA256SUMS
+          prerelease: true
+          generate_release_notes: true
+          body: |
+            **Experimental and unaudited. Do not protect real data with this release.**
+
+            HIDE/0.1 implements the file-format engine only: HPKE X-Wing
+            (X25519 + ML-KEM-768) key wrapping, and authenticated 64 KiB
+            streaming with constant memory.
+
+            There is no identity system, no key transparency, no sender
+            authentication, no forward secrecy and no hardware-backed key
+            storage. `hide test-keygen` writes an unencrypted secret key file.
+            See SECURITY.md for the full list.
+
+            The wire format may change while the version is 0.x.
+
+            Verify a download against `SHA256SUMS` before running it.

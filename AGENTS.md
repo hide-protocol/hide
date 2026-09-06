@@ -8,6 +8,8 @@ Experimental encrypted-file protocol. Rust workspace; the CLI exists to exercise
 - `cargo run -p hide-object --features test-vectors --example generate_vectors` — regenerate vectors;
   only when the format intentionally changes.
 - `cd conformance/node; pnpm install --ignore-workspace; node verify.mjs` — independent verification.
+- `npm install` at the root installs the husky hooks: pre-commit runs fmt +
+  clippy, pre-push runs the full suite and a release build.
 - Linux check: copy `Cargo.toml crates apps conformance` into WSL and run cargo there. Export a clean
   `PATH` first; the inherited Windows PATH contains parentheses that break `bash -lc`.
 
