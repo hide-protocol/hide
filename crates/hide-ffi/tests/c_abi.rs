@@ -1,12 +1,27 @@
 //! Compiles and runs a real C program against the built library, so the header
 //! cannot drift from the implementation without the build breaking.
 
-use std::{env, fs, path::PathBuf, process::Command};
+use std::{
+    env, fs,
+    path::{Path, PathBuf},
+    process::Command,
+};
 
 fn cc() -> Option<&'static str> {
     ["cc", "gcc", "clang"]
         .into_iter()
         .find(|candidate| Command::new(candidate).arg("--version").output().is_ok())
+}
+
+fn find_library(target_dir: &Path) -> Option<PathBuf> {
+    ["debug", "release", ""]
+        .into_iter()
+        .flat_map(|profile| {
+            ["libhide_ffi.a", "hide_ffi.lib"]
+                .into_iter()
+                .map(move |name| target_dir.join(profile).join(name))
+        })
+        .find(|candidate| candidate.exists())
 }
 
 #[test]
@@ -22,24 +37,20 @@ fn a_c_program_links_against_the_header_and_round_trips() {
     let source = out.join("abi_check.c");
     fs::write(&source, PROGRAM).expect("write the C program");
 
-    // CARGO_TARGET_TMPDIR is <target>/tmp, so the staticlib is under a profile
-    // directory beside it. Missing means fail loudly, never skip: a skipped
-    // ABI test is indistinguishable from a passing one.
+    // CARGO_TARGET_TMPDIR is <target>/tmp, so the staticlib sits under a
+    // profile directory beside it. `cargo test` does not build a staticlib, so
+    // build it here rather than skipping: a skipped ABI test is
+    // indistinguishable from a passing one.
     let target_dir = out.parent().expect("target dir").to_path_buf();
-    let mut library = None;
-    for profile in ["debug", "release", ""] {
-        for name in ["libhide_ffi.a", "hide_ffi.lib"] {
-            let candidate = target_dir.join(profile).join(name);
-            if candidate.exists() {
-                library = Some(candidate);
-            }
-        }
-    }
-    let library = library.unwrap_or_else(|| {
-        panic!(
-            "no static library under {}. Run `cargo build -p hide-ffi` first.",
-            target_dir.display()
-        )
+    let library = find_library(&target_dir).unwrap_or_else(|| {
+        let built = Command::new(env!("CARGO"))
+            .args(["build", "-p", "hide-ffi"])
+            .current_dir(manifest.join("../.."))
+            .status()
+            .expect("cargo runs");
+        assert!(built.success(), "could not build the static library");
+        find_library(&target_dir)
+            .unwrap_or_else(|| panic!("no static library under {}", target_dir.display()))
     });
 
     let binary = out.join(if cfg!(windows) { "abi.exe" } else { "abi" });
