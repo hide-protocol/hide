@@ -3,9 +3,10 @@
 This project is pre-1.0. The wire format may change while the version is 0.x,
 and a format change is always called out here explicitly.
 
-## Unreleased
+## 0.3.0
 
-The container format is **unchanged**.
+The container format is **unchanged**: 0.1.0 containers still open, and the
+frozen vectors still pass byte for byte in every language.
 
 ### Added
 
