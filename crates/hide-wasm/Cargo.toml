@@ -1,0 +1,32 @@
+[package]
+name = "hide-wasm"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish = false
+description = "WebAssembly bindings for the HIDE protocol"
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+hide-crypto = { path = "../hide-crypto" }
+hide-keyring = { path = "../hide-keyring" }
+hide-object = { path = "../hide-object" }
+wasm-bindgen = "=0.2.128"
+zeroize.workspace = true
+
+# The browser has no OS randomness source unless getrandom is told to use
+# crypto.getRandomValues.
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+getrandom = { workspace = true, features = ["wasm_js"] }
+
+[dev-dependencies]
+wasm-bindgen-test = "=0.3.78"
+
+[lints.rust]
+unsafe_code = "forbid"
+
+[lints.clippy]
+all = "warn"

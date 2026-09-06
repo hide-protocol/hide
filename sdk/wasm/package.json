@@ -1,0 +1,33 @@
+{
+  "name": "@hide-protocol/wasm",
+  "version": "0.2.1",
+  "description": "HIDE for the browser via WebAssembly. Experimental and unaudited.",
+  "type": "module",
+  "license": "Apache-2.0",
+  "main": "./hide_wasm.js",
+  "types": "./hide_wasm.d.ts",
+  "files": [
+    "hide_wasm.js",
+    "hide_wasm.d.ts",
+    "hide_wasm_bg.wasm",
+    "hide_wasm_bg.wasm.d.ts",
+    "README.md",
+    "LICENSE"
+  ],
+  "sideEffects": [
+    "./hide_wasm.js"
+  ],
+  "keywords": [
+    "encryption",
+    "post-quantum",
+    "cryptography",
+    "webassembly",
+    "ml-kem"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/hide-protocol/hide.git",
+    "directory": "sdk/wasm"
+  },
+  "homepage": "https://github.com/hide-protocol/hide"
+}
