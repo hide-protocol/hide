@@ -7,10 +7,27 @@ use std::{
     process::Command,
 };
 
+/// Picks a compiler that can actually link the library we build.
+///
+/// On an MSVC toolchain the staticlib is MSVC-ABI, and MinGW `gcc` cannot link
+/// it — it fails on `__chkstk` and the MSVC type_info vtable. Only `cl` will
+/// do there, so a MinGW gcc that happens to be on PATH must not be chosen.
 fn cc() -> Option<&'static str> {
-    ["cc", "gcc", "clang"]
-        .into_iter()
-        .find(|candidate| Command::new(candidate).arg("--version").output().is_ok())
+    let candidates: &[&str] = if cfg!(target_env = "msvc") {
+        &["cl"]
+    } else {
+        &["cc", "gcc", "clang"]
+    };
+    candidates.iter().copied().find(|candidate| {
+        // `cl` has no --version and exits non-zero with no arguments, so
+        // only check that it can be spawned at all.
+        let probe = if *candidate == "cl" {
+            Command::new(candidate).output()
+        } else {
+            Command::new(candidate).arg("--version").output()
+        };
+        probe.is_ok()
+    })
 }
 
 fn find_library(target_dir: &Path) -> Option<PathBuf> {
@@ -27,7 +44,10 @@ fn find_library(target_dir: &Path) -> Option<PathBuf> {
 #[test]
 fn a_c_program_links_against_the_header_and_round_trips() {
     let Some(cc) = cc() else {
-        // Deliberately loud: CI asserts this line is absent.
+        // Skipping here is only safe because CI asserts this line is absent on
+        // Linux, where a compiler is always present. On Windows `cl` is only
+        // on PATH inside a Visual Studio shell, and MinGW gcc cannot link an
+        // MSVC staticlib, so there is nothing to run.
         eprintln!("skipping: no C compiler found");
         return;
     };
@@ -55,18 +75,35 @@ fn a_c_program_links_against_the_header_and_round_trips() {
 
     let binary = out.join(if cfg!(windows) { "abi.exe" } else { "abi" });
     let mut build = Command::new(cc);
-    build
-        .arg(&source)
-        .arg(&library)
-        .arg("-I")
-        .arg(manifest.join("include"))
-        .arg("-o")
-        .arg(&binary);
-    if cfg!(target_os = "linux") {
-        build.args(["-lpthread", "-ldl", "-lm"]);
-    }
-    if cfg!(windows) {
-        build.args(["-lbcrypt", "-ladvapi32", "-luserenv", "-lntdll", "-lws2_32"]);
+    if cc == "cl" {
+        // MSVC takes its own flags, and wants the system libraries by name.
+        build
+            .arg("/nologo")
+            .arg(&source)
+            .arg(format!("/I{}", manifest.join("include").display()))
+            .arg(format!("/Fe:{}", binary.display()))
+            .arg(format!("/Fo:{}\\", out.display()))
+            .arg("/link")
+            .arg(&library)
+            .args([
+                "bcrypt.lib",
+                "advapi32.lib",
+                "userenv.lib",
+                "ntdll.lib",
+                "ws2_32.lib",
+                "msvcrt.lib",
+            ]);
+    } else {
+        build
+            .arg(&source)
+            .arg(&library)
+            .arg("-I")
+            .arg(manifest.join("include"))
+            .arg("-o")
+            .arg(&binary);
+        if cfg!(target_os = "linux") {
+            build.args(["-lpthread", "-ldl", "-lm"]);
+        }
     }
 
     let compiled = build.output().expect("the C compiler runs");
