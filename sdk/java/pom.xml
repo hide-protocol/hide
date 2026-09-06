@@ -1,0 +1,61 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 https://maven.apache.org/xsd/maven-4.0.0.xsd">
+  <modelVersion>4.0.0</modelVersion>
+
+  <groupId>org.hide-protocol</groupId>
+  <artifactId>hide</artifactId>
+  <version>0.2.1</version>
+  <packaging>jar</packaging>
+
+  <name>HIDE</name>
+  <description>
+    Experimental hybrid post-quantum file and message encryption
+    (X25519 + ML-KEM-768). Unaudited: do not protect data you cannot afford to
+    lose or expose.
+  </description>
+  <url>https://github.com/hide-protocol/hide</url>
+
+  <licenses>
+    <license>
+      <name>Apache-2.0</name>
+      <url>https://www.apache.org/licenses/LICENSE-2.0</url>
+    </license>
+  </licenses>
+
+  <developers>
+    <developer>
+      <name>HIDE Protocol contributors</name>
+      <url>https://github.com/hide-protocol</url>
+    </developer>
+  </developers>
+
+  <scm>
+    <url>https://github.com/hide-protocol/hide</url>
+    <connection>scm:git:https://github.com/hide-protocol/hide.git</connection>
+  </scm>
+
+  <properties>
+    <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
+    <!-- The Foreign Function and Memory API is final in 22. -->
+    <maven.compiler.release>22</maven.compiler.release>
+  </properties>
+
+  <build>
+    <sourceDirectory>src/main/java</sourceDirectory>
+    <testSourceDirectory>src/test/java</testSourceDirectory>
+    <plugins>
+      <plugin>
+        <groupId>org.apache.maven.plugins</groupId>
+        <artifactId>maven-surefire-plugin</artifactId>
+        <version>3.5.2</version>
+        <configuration>
+          <!-- The tests are a plain main(); they are run by the CI workflow,
+               which also supplies the native library path. -->
+          <skipTests>true</skipTests>
+        </configuration>
+      </plugin>
+    </plugins>
+  </build>
+</project>

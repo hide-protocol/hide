@@ -1,0 +1,47 @@
+# Maintainer: HIDE Protocol contributors <https://github.com/hide-protocol>
+#
+# Builds from source rather than shipping the release binary, which is what the
+# AUR expects and lets Arch users read what they are compiling.
+pkgname=hide-protocol
+pkgver=0.2.1
+pkgrel=1
+pkgdesc="Experimental hybrid post-quantum file and message encryption (X25519 + ML-KEM-768). UNAUDITED."
+arch=('x86_64' 'aarch64')
+url="https://github.com/hide-protocol/hide"
+license=('Apache-2.0')
+depends=('gcc-libs')
+makedepends=('cargo')
+provides=('hide')
+conflicts=('hide')
+source=("$pkgname-$pkgver.tar.gz::https://github.com/hide-protocol/hide/archive/refs/tags/v$pkgver.tar.gz")
+sha256sums=('PLACEHOLDER_SOURCE_TARBALL')
+
+prepare() {
+  cd "hide-$pkgver"
+  # Vendor dependencies so the build is offline and reproducible, as the AUR
+  # guidelines require.
+  export RUSTUP_TOOLCHAIN=stable
+  cargo fetch --locked --target "$(rustc -vV | sed -n 's/host: //p')"
+}
+
+build() {
+  cd "hide-$pkgver"
+  export RUSTUP_TOOLCHAIN=stable
+  export CARGO_TARGET_DIR=target
+  cargo build --frozen --release -p hide-cli
+}
+
+check() {
+  cd "hide-$pkgver"
+  export RUSTUP_TOOLCHAIN=stable
+  # A binary that cannot decrypt the frozen vectors is not shippable.
+  cargo test --frozen --release -p hide-object --test vectors
+}
+
+package() {
+  cd "hide-$pkgver"
+  install -Dm0755 "target/release/hide" "$pkgdir/usr/bin/hide"
+  install -Dm0644 LICENSE "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
+  install -Dm0644 README.md "$pkgdir/usr/share/doc/$pkgname/README.md"
+  install -Dm0644 SECURITY.md "$pkgdir/usr/share/doc/$pkgname/SECURITY.md"
+}

@@ -1,0 +1,42 @@
+{
+    "version": "0.2.1",
+    "description": "Experimental hybrid post-quantum file and message encryption. UNAUDITED: do not protect data you cannot afford to lose or expose.",
+    "homepage": "https://github.com/hide-protocol/hide",
+    "license": "Apache-2.0",
+    "notes": [
+        "HIDE is experimental and has not been independently audited.",
+        "A successful decryption proves the data was not altered; it does NOT prove who sent it.",
+        "Every command requires --experimental. The wire format may change while the version is 0.x."
+    ],
+    "architecture": {
+        "64bit": {
+            "url": "https://github.com/hide-protocol/hide/releases/download/v0.2.1/hide-v0.2.1-x86_64-pc-windows-msvc.zip",
+            "hash": "PLACEHOLDER_WINDOWS_X86_64",
+            "extract_dir": "hide-v0.2.1-x86_64-pc-windows-msvc"
+        },
+        "arm64": {
+            "url": "https://github.com/hide-protocol/hide/releases/download/v0.2.1/hide-v0.2.1-aarch64-pc-windows-msvc.zip",
+            "hash": "PLACEHOLDER_WINDOWS_ARM64",
+            "extract_dir": "hide-v0.2.1-aarch64-pc-windows-msvc"
+        }
+    },
+    "bin": "hide.exe",
+    "checkver": {
+        "github": "https://github.com/hide-protocol/hide"
+    },
+    "autoupdate": {
+        "architecture": {
+            "64bit": {
+                "url": "https://github.com/hide-protocol/hide/releases/download/v$version/hide-v$version-x86_64-pc-windows-msvc.zip",
+                "extract_dir": "hide-v$version-x86_64-pc-windows-msvc"
+            },
+            "arm64": {
+                "url": "https://github.com/hide-protocol/hide/releases/download/v$version/hide-v$version-aarch64-pc-windows-msvc.zip",
+                "extract_dir": "hide-v$version-aarch64-pc-windows-msvc"
+            }
+        },
+        "hash": {
+            "url": "https://github.com/hide-protocol/hide/releases/download/v$version/SHA256SUMS"
+        }
+    }
+}

@@ -67,6 +67,49 @@ Releases carry three kinds of build. Verify any download against `SHA256SUMS` fi
 The portable build writes nothing outside its own folder: keys go into a `hide-keys` directory
 next to the executable, so it runs from a USB stick and leaves no trace in your user profile.
 
+### Platforms
+
+The CLI is built for Linux (x86-64, ARM64, and a static musl build for Alpine and
+scratch containers), Windows (x86-64, ARM64) and macOS (Apple silicon, Intel).
+
+### Package managers
+
+Manifests for Homebrew, Scoop, WinGet and the AUR live in [`packaging/`](packaging/) and are
+generated with the real checksums by the release workflow. None is published yet: putting an
+unaudited encryption tool in a default package manager reaches people who will not read the
+warnings, so that step is taken deliberately rather than automatically.
+
+## SDKs
+
+Every binding calls the same Rust core through one C ABI ([`crates/hide-ffi`](crates/hide-ffi)).
+No language reimplements the cryptography, so there is a single implementation to review, and
+[`conformance/cross-surface`](conformance/cross-surface) asserts that what one surface produces
+every other surface can open.
+
+| Language | Path | How it binds |
+| --- | --- | --- |
+| C / C++ | [`crates/hide-ffi/include/hide.h`](crates/hide-ffi/include/hide.h) | The ABI itself |
+| Python | [`sdk/python`](sdk/python) | `ctypes`, so a wheel needs no compiler |
+| TypeScript / Node | [`sdk/node`](sdk/node) | `koffi` over the same shared library |
+| Browser | [`sdk/wasm`](sdk/wasm) | WebAssembly, compiled from the same crates |
+| Go | [`sdk/go`](sdk/go) | `cgo` |
+| Java / Kotlin | [`sdk/java`](sdk/java) | Foreign Function & Memory API, no JNI shim |
+
+Secret keys never cross into the host language: each SDK holds an opaque handle, and there is
+deliberately no function that exports key material.
+
+```python
+import hide_protocol as hide
+
+with hide.SecretKey.generate() as secret:
+  box = hide.encrypt(b"hello", [secret.public_key()])
+  assert hide.decrypt(box, secret).data == b"hello"
+```
+
+A browser is a weaker place to hold a key than a desktop: any script on the page shares the
+heap, so an XSS bug is equivalent to key theft. Prefer the CLI or the desktop application for
+keys that matter.
+
 ## Try it
 
 ```powershell
@@ -111,8 +154,12 @@ that each surface can open what the other produced, so they cannot silently dive
 | `crates/hide-crypto` | HPKE X-Wing wrapping, HKDF, HMAC, ChaCha20-Poly1305; secrets zeroize and cannot be printed |
 | `crates/hide-object` | Envelope encryption and authenticated 64 KiB streaming |
 | `crates/hide-keyring` | Passphrase-sealed key files (Argon2id) and public-key armor |
+| `crates/hide-ffi` | The C ABI every language binding calls |
+| `crates/hide-wasm` | WebAssembly bindings for the browser |
 | `apps/hide-cli` | `hide` binary |
 | `apps/hide-desktop` | Desktop application (Tauri) and the portable build |
+| `sdk/` | Python, Node, WASM, Go and Java packages |
+| `packaging/` | Homebrew, Scoop, WinGet and AUR manifests |
 | `conformance/` | Frozen vectors plus the independent Node verifier |
 | `spec/hide-0.1.md` | Wire format |
 

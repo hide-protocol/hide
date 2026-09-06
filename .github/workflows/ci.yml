@@ -82,6 +82,88 @@ jobs:
             exit 1
           fi
 
+  # The SDKs are the surface most likely to drift from the ABI without anyone
+  # noticing, because they live outside the cargo workspace.
+  sdks:
+    needs: lint
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+      - uses: Swatinem/rust-cache@v2
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 22
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+      - uses: actions/setup-go@v6
+        with:
+          go-version: "1.24"
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: "22"
+
+      - name: Build the core and the CLI
+        run: cargo build -p hide-ffi -p hide-cli
+
+      - name: Python
+        env:
+          HIDE_LIBRARY: ${{ github.workspace }}/target/debug/libhide_ffi.so
+          PYTHONPATH: ${{ github.workspace }}/sdk/python/src
+        run: |
+          python -m pip install --quiet pytest
+          python -m pytest -q sdk/python/tests
+
+      - name: Node
+        env:
+          HIDE_LIBRARY: ${{ github.workspace }}/target/debug/libhide_ffi.so
+        working-directory: sdk/node
+        run: |
+          npm ci
+          npm run build
+          node --test dist/index.test.js
+
+      - name: Go
+        run: |
+          set -euo pipefail
+          mkdir -p sdk/go/include sdk/go/lib
+          cp crates/hide-ffi/include/hide.h sdk/go/include/
+          cp target/debug/libhide_ffi.a sdk/go/lib/
+          cd sdk/go && CGO_ENABLED=1 go test ./...
+
+      - name: Java
+        run: |
+          set -euo pipefail
+          mkdir -p target/java-classes
+          javac -d target/java-classes $(find sdk/java/src -name '*.java')
+          java --enable-native-access=ALL-UNNAMED \
+               -Dhide.library="$PWD/target/debug/libhide_ffi.so" \
+               -cp target/java-classes org.hideprotocol.HideTest
+
+      - name: C ABI
+        run: cargo test -p hide-ffi --test c_abi -- --nocapture | tee c-abi.log
+
+      - name: The C ABI test must not have skipped itself
+        run: |
+          if grep -q 'skipping: no C compiler' c-abi.log; then
+            echo "::error::the C ABI test skipped itself" >&2
+            exit 1
+          fi
+
+      # Every surface must agree on the format, or one of them has drifted.
+      - name: Cross-surface interoperability
+        run: |
+          set -euo pipefail
+          cargo install wasm-bindgen-cli --version 0.2.128 --locked
+          cargo build --release -p hide-wasm --target wasm32-unknown-unknown
+          wasm-bindgen target/wasm32-unknown-unknown/release/hide_wasm.wasm \
+            --out-dir conformance/cross-surface/wasm --target web
+          node conformance/cross-surface/verify.mjs
+
   # Proves the wire format is implementable from the spec alone.
   interoperability:
     needs: lint

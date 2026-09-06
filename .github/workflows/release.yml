@@ -24,10 +24,22 @@ jobs:
         include:
           - os: ubuntu-24.04
             target: x86_64-unknown-linux-gnu
+          - os: ubuntu-24.04
+            target: aarch64-unknown-linux-gnu
+            cross: true
+          # Statically linked, so it runs on Alpine and in scratch containers
+          # where the glibc build cannot.
+          - os: ubuntu-24.04
+            target: x86_64-unknown-linux-musl
+            cross: true
           - os: windows-2025
             target: x86_64-pc-windows-msvc
+          - os: windows-11-arm
+            target: aarch64-pc-windows-msvc
           - os: macos-15
             target: aarch64-apple-darwin
+          - os: macos-15
+            target: x86_64-apple-darwin
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v7
@@ -38,8 +50,26 @@ jobs:
         with:
           key: release-${{ matrix.target }}
 
+      # Cross-compiled targets need a linker for the foreign architecture.
+      - name: Install a cross linker
+        if: matrix.cross
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          case "${{ matrix.target }}" in
+            aarch64-unknown-linux-gnu)
+              sudo apt-get install -y --no-install-recommends gcc-aarch64-linux-gnu
+              echo 'CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER=aarch64-linux-gnu-gcc' >> "$GITHUB_ENV"
+              ;;
+            x86_64-unknown-linux-musl)
+              sudo apt-get install -y --no-install-recommends musl-tools
+              ;;
+          esac
+
       # A release binary that cannot decrypt the frozen vectors is not shippable.
+      # Cross-compiled binaries cannot run here, so the check is host-native.
       - run: cargo test -p hide-object --test vectors --release
+        if: '!matrix.cross'
       - run: cargo build --release --locked -p hide-cli --target ${{ matrix.target }}
 
       - name: Package
@@ -201,6 +231,21 @@ jobs:
             printf '%s  %s\n' "$(cat "$file")" "${file%.sha256}" >> SHA256SUMS
           done
           cat SHA256SUMS
+
+      # Package-manager manifests are generated from the checksums that were
+      # just computed, so a manifest can never quote a stale hash.
+      - name: Generate package manager manifests
+        run: |
+          set -euo pipefail
+          version="${GITHUB_REF_NAME#v}"
+          bash packaging/generate.sh "$version" dist
+          ls -la dist/packaging
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: packaging-manifests
+          path: dist/packaging/**
+          retention-days: 30
 
       - uses: softprops/action-gh-release@v3
         with:

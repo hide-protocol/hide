@@ -76,7 +76,6 @@ _SIGNATURES = {
     "hide_version": ([], ctypes.c_char_p),
     "hide_buffer_empty": ([], Buffer),
     "hide_buffer_free": ([ctypes.POINTER(Buffer)], None),
-    "hide_string_free": ([ctypes.c_void_p], None),
     "hide_keypair_generate": (
         [ctypes.POINTER(ctypes.c_void_p), ctypes.POINTER(Buffer)],
         ctypes.c_int32,

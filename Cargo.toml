@@ -10,6 +10,13 @@ version = "0.2.1"
 edition = "2024"
 rust-version = "1.85"
 license = "Apache-2.0"
+repository = "https://github.com/hide-protocol/hide"
+homepage = "https://github.com/hide-protocol/hide"
+keywords = ["encryption", "cryptography", "post-quantum", "hpke", "ml-kem"]
+categories = ["cryptography"]
+# Publishing is deliberate, not automatic: the publish-sdks workflow is started
+# by hand. `hide` is taken on crates.io by an unrelated crate, so the binary
+# crate publishes as `hide-protocol-cli`.
 publish = false
 
 [workspace.dependencies]
