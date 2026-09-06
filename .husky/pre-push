@@ -1,0 +1,34 @@
+#!/bin/sh
+# Full gate (~20 s warm): the whole test suite plus a release build, so CI is
+# not the first place a failure shows up.
+# Set HIDE_SKIP_PUSH_CHECKS=1 to bypass when pushing docs from a slow machine.
+
+if [ "${HIDE_SKIP_PUSH_CHECKS:-0}" = "1" ]; then
+  echo "pre-push: skipped by HIDE_SKIP_PUSH_CHECKS"
+  exit 0
+fi
+
+start=$(date +%s)
+
+if ! cargo test --workspace --all-features; then
+  echo ""
+  echo "pre-push: tests failed. Push blocked."
+  exit 1
+fi
+
+# The vectors are a frozen wire-format artifact; a diff here means the format
+# changed, which must be deliberate and documented in the spec.
+if ! git diff --quiet -- conformance/vectors; then
+  echo ""
+  echo "pre-push: conformance/vectors has uncommitted changes."
+  echo "A wire-format change must be committed together with the spec update."
+  exit 1
+fi
+
+if ! cargo build --release -p hide-cli; then
+  echo ""
+  echo "pre-push: release build failed. Push blocked."
+  exit 1
+fi
+
+echo "pre-push: tests + release build clean in $(( $(date +%s) - start ))s"

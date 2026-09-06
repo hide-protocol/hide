@@ -1,0 +1,17 @@
+{
+  "name": "hide-protocol-tooling",
+  "private": true,
+  "version": "0.1.0",
+  "description": "Git hooks for the HIDE workspace; the protocol itself is Rust and needs no Node.",
+  "license": "Apache-2.0",
+  "type": "module",
+  "engines": { "node": ">=22" },
+  "scripts": {
+    "prepare": "husky",
+    "check": "cargo fmt --all --check && cargo clippy --workspace --all-targets --all-features -- -D warnings",
+    "verify": "cargo test --workspace --all-features && cargo build --release -p hide-cli"
+  },
+  "devDependencies": {
+    "husky": "9.1.7"
+  }
+}

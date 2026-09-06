@@ -1,0 +1,26 @@
+#!/bin/sh
+# Fast gate (~3 s warm): formatting and lint only. Tests run on pre-push.
+# Skips entirely when no Rust or manifest file is staged.
+
+staged=$(git diff --cached --name-only --diff-filter=ACMR)
+
+case "$staged" in
+  *.rs|*Cargo.toml|*Cargo.lock|*rust-toolchain.toml) ;;
+  *) echo "pre-commit: no Rust changes staged, skipping"; exit 0 ;;
+esac
+
+start=$(date +%s)
+
+if ! cargo fmt --all --check; then
+  echo ""
+  echo "pre-commit: formatting differs. Run 'cargo fmt --all' and stage the result."
+  exit 1
+fi
+
+if ! cargo clippy --workspace --all-targets --all-features -- -D warnings; then
+  echo ""
+  echo "pre-commit: clippy reported problems. Fix them, or justify an explicit #[allow]."
+  exit 1
+fi
+
+echo "pre-commit: fmt + clippy clean in $(( $(date +%s) - start ))s"
