@@ -1,0 +1,11 @@
+target/
+node_modules/
+.copilot-tmp/
+*.test-secret
+*.hide
+!conformance/vectors/*.hide
+
+# The published test vectors are fixtures, not credentials: the "secret" is the
+# fixed all-0x55 seed from generate_vectors.rs and protects nothing.
+!conformance/vectors/*.test-secret
+.pnpm-cache/

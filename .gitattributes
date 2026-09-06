@@ -1,0 +1,11 @@
+# Normalize to LF in the repository so Windows and Linux produce identical
+# checkouts; the vectors are byte-exact fixtures and must never be rewritten.
+* text=auto eol=lf
+
+*.hide binary
+*.test-secret binary
+*.test-public binary
+conformance/vectors/*.txt binary
+
+Cargo.lock linguist-generated
+conformance/node/pnpm-lock.yaml linguist-generated

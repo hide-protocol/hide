@@ -1,0 +1,15 @@
+{
+  "name": "hide-independent-conformance",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "license": "Apache-2.0",
+  "engines": { "node": ">=22" },
+  "scripts": { "check": "node verify.mjs" },
+  "dependencies": {
+    "@hpke/core": "1.9.0",
+    "@hpke/chacha20poly1305": "1.8.0",
+    "@hpke/hybridkem-x-wing": "0.7.0",
+    "cbor": "10.0.12"
+  }
+}

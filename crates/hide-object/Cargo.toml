@@ -1,0 +1,26 @@
+[package]
+name = "hide-object"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[features]
+test-vectors = ["hide-crypto/test-vectors"]
+
+[[example]]
+name = "generate_vectors"
+required-features = ["test-vectors"]
+
+[dependencies]
+hide-format = { path = "../hide-format" }
+hide-crypto = { path = "../hide-crypto" }
+thiserror.workspace = true
+zeroize.workspace = true
+
+[dev-dependencies]
+proptest.workspace = true
+
+[lints]
+workspace = true

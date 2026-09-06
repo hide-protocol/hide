@@ -1,0 +1,24 @@
+[package]
+name = "hide-crypto"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[features]
+test-vectors = []
+
+[dependencies]
+hpke.workspace = true
+chacha20poly1305.workspace = true
+hkdf.workspace = true
+hmac.workspace = true
+sha2.workspace = true
+zeroize.workspace = true
+getrandom.workspace = true
+thiserror.workspace = true
+rand = { version = "=0.10.2", default-features = false, features = ["std_rng"] }
+
+[lints]
+workspace = true
