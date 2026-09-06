@@ -4,12 +4,16 @@
  * instead of being discovered by a user.
  *
  * Covered: the WASM browser build, the Node SDK (which goes through the C
- * FFI), and the CLI. The Python SDK uses the same C FFI as Node, and is
- * covered by its own suite.
+ * FFI), and the CLI — these three are always required. The Ruby, PHP and .NET
+ * SDKs are driven through the small adapters in ./adapters, and are exercised
+ * when their runtime is present. Set HIDE_CROSS_REQUIRE=ruby,php,dotnet to
+ * turn an absent runtime into a failure (CI does this). The Python SDK uses
+ * the same C FFI as Node, and is covered by its own suite.
  *
  * Run after: cargo build -p hide-cli -p hide-ffi
  *            cargo build -p hide-wasm --target wasm32-unknown-unknown --release
  *            wasm-bindgen ... --target web --out-dir conformance/cross-surface/wasm
+ *            dotnet build conformance/cross-surface/adapters/dotnet   (for .NET)
  */
 import { execFileSync } from "node:child_process";
 import { webcrypto } from "node:crypto";
@@ -71,6 +75,74 @@ const cli = (args, options = {}) =>
 
 const results = [];
 const check = (name, condition) => results.push([name, Boolean(condition)]);
+
+// Adapters expose one interface: `<runtime> <adapter> <encrypt|decrypt> key in out`.
+// A language is exercised when its runtime is on PATH; naming it in
+// HIDE_CROSS_REQUIRE turns absence into a failure instead of a silent gap.
+const adapters = join(here, "adapters");
+const dotnetBinary = binaryIn(join(adapters, "dotnet", "bin"), "HideAdapter");
+const languages = [
+  {
+    name: "ruby",
+    command: "ruby",
+    args: ["-I", join(root, "sdk", "ruby", "lib"), join(adapters, "ruby_adapter.rb")],
+    probe: ["--version"],
+  },
+  {
+    name: "php",
+    command: "php",
+    // Ubuntu ships ffi.enable=preload, which refuses FFI from a plain script.
+    args: ["-d", "ffi.enable=1", join(adapters, "php_adapter.php")],
+    probe: ["-d", "ffi.enable=1", "--version"],
+  },
+  {
+    name: "dotnet",
+    command: dotnetBinary ?? "HideAdapter",
+    args: [],
+    // The adapter itself is the probe: with no arguments it exits 2 on purpose.
+    probe: null,
+    available: Boolean(dotnetBinary),
+  },
+];
+
+function binaryIn(dir, stem) {
+  for (const name of [`${stem}.exe`, stem]) {
+    for (const profile of ["Debug", "Release"]) {
+      const path = join(dir, profile, "net8.0", name);
+      if (existsSync(path)) return path;
+    }
+  }
+  return null;
+}
+
+const required = (process.env.HIDE_CROSS_REQUIRE ?? "")
+  .split(",")
+  .map((name) => name.trim().toLowerCase())
+  .filter(Boolean);
+
+for (const language of languages) {
+  if (language.available !== undefined) continue;
+  try {
+    execFileSync(language.command, language.probe, { stdio: "ignore" });
+    language.available = true;
+  } catch {
+    language.available = false;
+  }
+}
+
+const unknown = required.filter((name) => !languages.some((l) => l.name === name));
+if (unknown.length > 0) {
+  console.error(`HIDE_CROSS_REQUIRE names unknown surface(s): ${unknown.join(", ")}`);
+  process.exit(1);
+}
+const absentButRequired = languages.filter((l) => required.includes(l.name) && !l.available);
+if (absentButRequired.length > 0) {
+  console.error(
+    `HIDE_CROSS_REQUIRE demands ${absentButRequired.map((l) => l.name).join(", ")}, ` +
+      "but the runtime (or, for dotnet, the built adapter) is absent",
+  );
+  process.exit(1);
+}
 
 try {
   cli(["keygen", "--secret", "k.key", "--public", "k.pub", "--insecure-plaintext"]);
@@ -140,6 +212,55 @@ try {
   }
   check("tampering refused by node", nodeRefused);
   check("tampering refused by wasm", wasmRefused);
+
+  // Each adapter language against the CLI, the frozen vectors, and damage.
+  const run = (language, args) =>
+    execFileSync(language.command, [...language.args, ...args], {
+      cwd: work,
+      stdio: ["ignore", "pipe", "pipe"],
+      env: { ...process.env, HIDE_LIBRARY: ffiPath },
+    });
+
+  for (const language of languages.filter((l) => l.available)) {
+    const tag = language.name;
+    const message = `from ${tag}`;
+    try {
+      await writeFile(join(work, `${tag}.txt`), message);
+      run(language, ["encrypt", "k.pub", `${tag}.txt`, `${tag}.hide`]);
+      cli(["open", `${tag}.hide`, "--secret", "k.key", "--output", `${tag}.out`]);
+      check(`${tag} -> cli`, (await readFile(join(work, `${tag}.out`))).toString() === message);
+
+      run(language, ["decrypt", "k.key", "c.hide", `${tag}.cli.out`]);
+      check(
+        `cli -> ${tag}`,
+        (await readFile(join(work, `${tag}.cli.out`))).toString() === "from cli",
+      );
+
+      run(language, [
+        "decrypt",
+        join(vectors, "recipient.test-secret"),
+        join(vectors, "hello.hide"),
+        `${tag}.vector.out`,
+      ]);
+      check(
+        `frozen vectors -> ${tag}`,
+        (await readFile(join(work, `${tag}.vector.out`))).equals(expected),
+      );
+
+      await writeFile(join(work, `${tag}.damaged.hide`), Buffer.from(damaged));
+      let refused = false;
+      try {
+        run(language, ["decrypt", "k.key", `${tag}.damaged.hide`, `${tag}.damaged.out`]);
+      } catch {
+        refused = true;
+      }
+      check(`tampering refused by ${tag}`, refused);
+    } catch (error) {
+      // A present runtime that cannot round-trip is a failure, not an absence.
+      console.error(`${tag} adapter failed: ${error.stderr?.toString() || error.message}`);
+      check(`${tag} adapter runs`, false);
+    }
+  }
 } finally {
   await rm(work, { recursive: true, force: true });
 }
@@ -147,6 +268,14 @@ try {
 for (const [name, ok] of results) {
   console.log(`${ok ? "PASS" : "FAIL"} ${name}`);
 }
+
+// Print the truth about coverage: a reader of CI output must be able to see
+// which surfaces actually ran, not infer it from the absence of failures.
+const exercised = ["wasm", "node", "cli", ...languages.filter((l) => l.available).map((l) => l.name)];
+const absent = languages.filter((l) => !l.available).map((l) => l.name);
+console.log(`exercised: ${exercised.join(", ")}`);
+console.log(absent.length > 0 ? `absent: ${absent.join(", ")}` : "absent: none");
+
 const failures = results.filter(([, ok]) => !ok);
 if (failures.length > 0) {
   console.error(`${failures.length} surface(s) disagree about the format`);

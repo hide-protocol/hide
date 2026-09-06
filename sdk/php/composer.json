@@ -1,0 +1,22 @@
+{
+  "name": "hide-protocol/hide",
+  "description": "PHP binding for the HIDE encrypted-file protocol. Experimental and unaudited.",
+  "type": "library",
+  "license": "Apache-2.0",
+  "keywords": ["encryption", "cryptography", "hide", "ffi"],
+  "require": {
+    "php": ">=8.1",
+    "ext-ffi": "*"
+  },
+  "autoload": {
+    "psr-4": {
+      "HideProtocol\\": "src/"
+    }
+  },
+  "scripts": {
+    "test": "php tests/run.php"
+  },
+  "config": {
+    "sort-packages": true
+  }
+}
