@@ -7,8 +7,10 @@
  *
  * Ownership rules, which every binding must follow:
  *
- *   - Buffers and strings returned by this library are freed with
- *     hide_buffer_free / hide_string_free. Never libc free() them.
+ *   - Buffers returned by this library are freed with hide_buffer_free.
+ *     Never libc free() them. Everything the library returns is a
+ *     length-prefixed buffer, including text: nothing relies on a caller
+ *     scanning attacker-controlled bytes for a terminator.
  *   - Initialise a HideBuffer with hide_buffer_empty() before passing its
  *     address; free() reads the pointer it is given.
  *   - A HideSecretKey is opaque. There is deliberately no function that
@@ -60,7 +62,6 @@ const char *hide_version(void);
 
 HideBuffer hide_buffer_empty(void);
 void hide_buffer_free(HideBuffer *buffer);
-void hide_string_free(char *text);
 
 /* Keys. */
 int32_t hide_keypair_generate(HideSecretKey **out_secret, HideBuffer *out_public);

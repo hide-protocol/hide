@@ -13,7 +13,7 @@
 //!   is undefined behaviour, so every entry point catches it.
 
 use std::{
-    ffi::{CStr, CString, c_char},
+    ffi::{CStr, c_char},
     panic::{AssertUnwindSafe, catch_unwind},
     ptr, slice,
 };
@@ -496,20 +496,10 @@ pub unsafe extern "C" fn hide_public_key_dearmor(text: *const c_char, out: *mut 
     })
 }
 
-/// Frees a string produced by this library.
-///
-/// # Safety
-/// `text` must come from this library and must not be freed twice.
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn hide_string_free(text: *mut c_char) {
-    if text.is_null() {
-        return;
-    }
-    drop(unsafe { CString::from_raw(text) });
-}
-
 #[cfg(test)]
 mod tests {
+    use std::ffi::CString;
+
     use super::*;
 
     /// Drives the API exactly as a C caller would, pointers and all.
@@ -730,7 +720,6 @@ mod tests {
             );
             // Freeing null is a no-op, not a crash.
             hide_buffer_free(ptr::null_mut());
-            hide_string_free(ptr::null_mut());
             hide_secret_key_free(ptr::null_mut());
         }
     }
