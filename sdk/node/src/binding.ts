@@ -1,0 +1,102 @@
+import { existsSync } from "node:fs";
+import { createRequire } from "node:module";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
+
+/**
+ * Loads the HIDE C core. The same shared library serves every binding, so
+ * there is exactly one implementation of the cryptography to review.
+ */
+
+const require = createRequire(import.meta.url);
+// koffi ships prebuilt binaries, so installing this package needs no compiler.
+const koffi = require("koffi");
+
+function libraryName(): string {
+  if (process.platform === "win32") return "hide_ffi.dll";
+  if (process.platform === "darwin") return "libhide_ffi.dylib";
+  return "libhide_ffi.so";
+}
+
+function locate(): string {
+  const here = dirname(fileURLToPath(import.meta.url));
+  const candidates = [
+    // Set by developers running against a cargo build tree.
+    process.env.HIDE_LIBRARY,
+    join(here, libraryName()),
+    join(here, "..", libraryName()),
+    join(here, "..", "native", libraryName()),
+  ].filter((path): path is string => Boolean(path));
+
+  for (const candidate of candidates) {
+    if (existsSync(candidate)) return candidate;
+  }
+  throw new Error(
+    `the HIDE native library (${libraryName()}) was not found. Install a ` +
+      "platform package, or set HIDE_LIBRARY to the path produced by " +
+      "`cargo build -p hide-ffi`.",
+  );
+}
+
+const lib = koffi.load(locate());
+
+export const Buffer_ = koffi.struct("HideBuffer", {
+  data: "uint8_t *",
+  len: "size_t",
+  capacity: "size_t",
+});
+
+const OpaqueKey = koffi.opaque("HideSecretKey");
+export const KeyPtr = koffi.pointer(OpaqueKey);
+
+export const OK = 0;
+export const ERR_INVALID_ARGUMENT = 1;
+export const ERR_WRONG_PASSPHRASE = 2;
+export const ERR_NOT_A_KEY = 3;
+export const ERR_AUTHENTICATION = 4;
+export const ERR_NO_MATCHING_RECIPIENT = 5;
+export const ERR_MALFORMED = 6;
+export const ERR_TOO_LARGE = 7;
+
+export const KEY_PROTECTED = 1;
+export const PUBLIC_KEY_LEN = 1216;
+export const MIN_PASSPHRASE_LEN = 8;
+
+export const fns = {
+  version: lib.func("const char *hide_version()"),
+  errorMessage: lib.func("const char *hide_error_message(int32_t code)"),
+  bufferFree: lib.func("void hide_buffer_free(_Inout_ HideBuffer *buffer)"),
+
+  keypairGenerate: lib.func(
+    "int32_t hide_keypair_generate(_Out_ void **secret, _Out_ HideBuffer *public)",
+  ),
+  inspectKey: lib.func(
+    "int32_t hide_inspect_key(const uint8_t *data, size_t len, _Out_ int32_t *kind)",
+  ),
+  secretKeyOpen: lib.func(
+    "int32_t hide_secret_key_open(const uint8_t *data, size_t len, const char *passphrase, _Out_ void **secret)",
+  ),
+  secretKeyProtect: lib.func(
+    "int32_t hide_secret_key_protect(void *secret, const char *passphrase, _Out_ HideBuffer *out)",
+  ),
+  secretKeyPublic: lib.func(
+    "int32_t hide_secret_key_public(void *secret, _Out_ HideBuffer *out)",
+  ),
+  secretKeyFree: lib.func("void hide_secret_key_free(void *secret)"),
+
+  publicKeyArmor: lib.func(
+    "int32_t hide_public_key_armor(const uint8_t *data, size_t len, _Out_ HideBuffer *out)",
+  ),
+  publicKeyDearmor: lib.func(
+    "int32_t hide_public_key_dearmor(const char *text, _Out_ HideBuffer *out)",
+  ),
+
+  encrypt: lib.func(
+    "int32_t hide_encrypt(const uint8_t *plaintext, size_t plaintext_len, const uint8_t *recipients, size_t recipient_count, const char *filename, const char *media_type, _Out_ HideBuffer *out)",
+  ),
+  decrypt: lib.func(
+    "int32_t hide_decrypt(const uint8_t *container, size_t container_len, void *secret, _Out_ HideBuffer *out, _Out_ HideBuffer *filename, _Out_ HideBuffer *media_type)",
+  ),
+};
+
+export { koffi };

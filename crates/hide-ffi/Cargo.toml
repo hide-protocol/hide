@@ -1,0 +1,25 @@
+[package]
+name = "hide-ffi"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+description = "C ABI for the HIDE protocol; the single core every language binding calls"
+
+[lib]
+name = "hide_ffi"
+crate-type = ["cdylib", "staticlib", "rlib"]
+
+[dependencies]
+hide-crypto = { path = "../hide-crypto" }
+hide-keyring = { path = "../hide-keyring" }
+hide-object = { path = "../hide-object" }
+zeroize.workspace = true
+
+[lints.rust]
+# This crate IS the unsafe boundary; every other crate still forbids it.
+unsafe_code = "allow"
+
+[lints.clippy]
+all = "warn"

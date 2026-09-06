@@ -1,0 +1,49 @@
+{
+  "name": "hide-protocol",
+  "version": "0.2.1",
+  "description": "Experimental hybrid post-quantum file and message encryption (X25519 + ML-KEM-768). Unaudited.",
+  "type": "module",
+  "license": "Apache-2.0",
+  "engines": {
+    "node": ">=22"
+  },
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist",
+    "native",
+    "README.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "build": "tsc",
+    "test": "node --test dist/*.test.js",
+    "prepack": "npm run build"
+  },
+  "dependencies": {
+    "koffi": "3.2.1"
+  },
+  "devDependencies": {
+    "@types/node": "26.4.1",
+    "typescript": "7.0.2"
+  },
+  "keywords": [
+    "encryption",
+    "post-quantum",
+    "cryptography",
+    "hpke",
+    "ml-kem"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/hide-protocol/hide.git",
+    "directory": "sdk/node"
+  },
+  "homepage": "https://github.com/hide-protocol/hide"
+}

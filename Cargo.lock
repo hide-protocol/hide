@@ -387,6 +387,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "hide-ffi"
+version = "0.2.1"
+dependencies = [
+ "hide-crypto",
+ "hide-keyring",
+ "hide-object",
+ "zeroize",
+]
+
+[[package]]
 name = "hide-format"
 version = "0.2.1"
 dependencies = [
