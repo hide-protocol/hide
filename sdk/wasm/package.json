@@ -1,6 +1,6 @@
 {
   "name": "@hide-protocol/wasm",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "description": "HIDE for the browser via WebAssembly. Experimental and unaudited.",
   "type": "module",
   "license": "Apache-2.0",

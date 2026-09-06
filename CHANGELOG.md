@@ -3,6 +3,41 @@
 This project is pre-1.0. The wire format may change while the version is 0.x,
 and a format change is always called out here explicitly.
 
+## 0.4.0
+
+The container format is **unchanged**: 0.1.0 containers still open, and the
+frozen vectors still pass byte for byte in every language.
+
+### Added
+
+- **Ruby, PHP and .NET SDKs**, bringing the total to eight surfaces on one C
+  core. Ruby binds through stdlib `fiddle`, PHP through `ext-ffi` and .NET
+  through source-generated `LibraryImport`, so none of them needs a native
+  build step or a hand-written shim.
+- **Publishing to RubyGems and NuGet**, and a second manual workflow that
+  pushes the generated Homebrew and Scoop manifests to a tap. Both default to
+  a dry run, and the manifests are regenerated from the checksums of the
+  published release and verified against the real assets before any push.
+- **`packaging/PUBLISHING.md`** records what a human must do: the credential
+  each registry needs, why PyPI should use Trusted Publishing rather than a
+  token, and that `hide` on crates.io belongs to an unrelated project.
+
+### Changed
+
+- The cross-surface conformance test covers all eight surfaces and gained a
+  `HIDE_CROSS_REQUIRE` gate. Without it a missing runtime would quietly shrink
+  the matrix, and a skipped interop check is indistinguishable from a passing
+  one. CI names every runtime, so an absent one now fails.
+- `hide_encrypt` refuses a filename or media type containing a NUL rather than
+  silently truncating it. Those cross the ABI as C strings, so the shortened
+  value would have been sealed into the container without the caller knowing.
+
+### Fixed
+
+- Cross-compiled release builds could not link. A cross `gcc` alone is not
+  enough — `Scrt1.o` and `crti.o` come from the target C library, which
+  `--no-install-recommends` had dropped, so the Linux ARM64 binary never built.
+
 ## 0.3.0
 
 The container format is **unchanged**: 0.1.0 containers still open, and the
