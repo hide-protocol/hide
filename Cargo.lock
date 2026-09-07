@@ -531,6 +531,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "hide-identity"
+version = "0.5.0"
+dependencies = [
+ "hide-sign",
+ "minicbor",
+ "proptest",
+ "sha2",
+ "thiserror",
+ "zeroize",
+]
+
+[[package]]
 name = "hide-keyring"
 version = "0.5.0"
 dependencies = [
