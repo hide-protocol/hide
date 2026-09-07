@@ -1,4 +1,5 @@
 target/
+target-portable/
 node_modules/
 .copilot-tmp/
 *.test-secret

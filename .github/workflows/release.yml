@@ -135,11 +135,12 @@ jobs:
           workspaces: |
             . -> target
             apps/hide-desktop/src-tauri -> target
+            apps/hide-desktop/src-tauri -> target-portable
           key: desktop-${{ matrix.target }}
       - uses: pnpm/action-setup@v4
         with:
           version: 10
-      - uses: actions/setup-node@v6
+      - uses: actions/setup-node@v7
         with:
           node-version: 22
           cache: pnpm
@@ -156,8 +157,12 @@ jobs:
 
       - run: pnpm install --frozen-lockfile --ignore-workspace
 
-      # The desktop app must agree with the CLI about the format.
+      # The desktop app must agree with the CLI about the format. CI proves
+      # this on every commit; here it runs once, on Linux, against the release
+      # profile. Repeating it on Windows and macOS compiles the whole root
+      # workspace again on each for a result the same commit already produced.
       - name: Verify the two surfaces interoperate
+        if: runner.os == 'Linux'
         run: |
           cargo build --release -p hide-cli
           cargo test --release --manifest-path apps/hide-desktop/src-tauri/Cargo.toml
@@ -166,8 +171,14 @@ jobs:
       - name: Build the installer
         run: pnpm tauri build
 
+      # --features portable makes cargo consider every artifact from the
+      # unfeatured installer build stale, and vice versa, so sharing one target
+      # directory means each release recompiles the desktop app twice from
+      # cold. Separate directories keep both warm in the cache.
       - name: Build the portable executable
         run: pnpm build:portable
+        env:
+          CARGO_TARGET_DIR: ${{ github.workspace }}/apps/hide-desktop/src-tauri/target-portable
 
       - name: Package
         shell: bash
@@ -184,11 +195,12 @@ jobs:
 
           # The portable build is a single self-contained executable.
           portable="hide-portable-${GITHUB_REF_NAME}-${{ matrix.target }}"
+          portable_release="src-tauri/target-portable/release"
           mkdir -p "$out/$portable"
-          if [ -f "$release/hide-desktop.exe" ]; then
-            cp "$release/hide-desktop.exe" "$out/$portable/HIDE-Portable.exe"
+          if [ -f "$portable_release/hide-desktop.exe" ]; then
+            cp "$portable_release/hide-desktop.exe" "$out/$portable/HIDE-Portable.exe"
           else
-            cp "$release/hide-desktop" "$out/$portable/HIDE-Portable"
+            cp "$portable_release/hide-desktop" "$out/$portable/HIDE-Portable"
           fi
           cp ../../README.md ../../LICENSE ../../SECURITY.md "$out/$portable/"
 
@@ -221,6 +233,10 @@ jobs:
 
   publish:
     needs: [build, desktop]
+    # workflow_dispatch is how the build matrix gets exercised without cutting
+    # a release. Without this guard that dispatch would publish a release named
+    # after whatever branch it ran on.
+    if: startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v7
