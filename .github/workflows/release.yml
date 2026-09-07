@@ -130,7 +130,11 @@ jobs:
           targets: ${{ matrix.target }}
       - uses: Swatinem/rust-cache@v2
         with:
-          workspaces: apps/hide-desktop/src-tauri
+          # Both workspaces: the interop step builds the CLI from the root one,
+          # and leaving it uncached cost ~8 minutes of cold release compilation.
+          workspaces: |
+            . -> target
+            apps/hide-desktop/src-tauri -> target
           key: desktop-${{ matrix.target }}
       - uses: pnpm/action-setup@v4
         with:

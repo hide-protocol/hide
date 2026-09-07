@@ -49,4 +49,4 @@ P6.10,6,task,Cross-surface: every surface verifies every other's signature,done,
 P6.11,6,bug,"Raw key files meant different things to the CLI and the SDKs",done,P6.10,crates/hide-keyring,file pub == node pub: true; 25/25 conformance,A P3 regression that no Rust test could see
 P7.1,7,task,README and SECURITY state the SSH limitation plainly,done,P6.10,docs,"README ""SSH cannot carry the post-quantum half""; SECURITY lists the agent as a signing oracle",No claim of post-quantum SSH
 P7.2,7,task,CHANGELOG and version bump across every surface,done,P7.1,repo,hide --version reports 0.5.0; 13 manifests bumped,
-P7.3,7,task,Tag v0.5.0 and verify the published artifacts,not-started,P7.2,release,,Download, checksum, run
+P7.3,7,task,Tag v0.5.0 and verify the published artifacts,in-progress,P7.2,release,CI run 34090070883 green on all 9 jobs before tagging,"Download, checksum, run"

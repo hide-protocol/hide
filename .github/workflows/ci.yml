@@ -3,8 +3,11 @@ name: CI
 on:
   push:
     branches: [main]
-    tags: ["v*"]
   pull_request:
+
+# Tags are not built here. A tag always points at a commit already pushed to
+# main, so running the whole matrix again duplicates ~190 job-minutes and
+# proves nothing new; Release verifies the artifacts it actually ships.
 
 permissions:
   contents: read
@@ -230,6 +233,9 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v7
-      - uses: rustsec/audit-check@v2.0.0
+      # rustsec/audit-check compiles cargo-audit from source on every run,
+      # which was 189s of the 190s job. This installs a prebuilt binary.
+      - uses: taiki-e/install-action@v2
         with:
-          token: ${{ secrets.GITHUB_TOKEN }}
+          tool: cargo-audit
+      - run: cargo audit --deny warnings
