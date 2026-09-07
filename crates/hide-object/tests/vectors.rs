@@ -20,10 +20,52 @@ fn frozen_vectors_decrypt_and_match_recorded_bytes() -> Result<(), Box<dyn Error
             verified.metadata,
             Metadata {
                 filename: Some(format!("{name}.txt")),
-                media_type: Some("text/plain".into())
+                media_type: Some("text/plain".into()),
+                signature: None
             }
         );
         assert_eq!(verified.plaintext_len, plaintext.len() as u64);
+    }
+    Ok(())
+}
+
+/// The v0.1 containers predate signatures entirely. That they still open, and
+/// report no signer, is the compatibility guarantee for every existing file.
+#[test]
+fn frozen_unsigned_vectors_still_report_no_signer() -> Result<(), Box<dyn Error>> {
+    let directory = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../conformance/vectors");
+    let secret = RecipientSecret::from_bytes(&fs::read(directory.join("recipient.test-secret"))?)?;
+    for name in ["hello", "empty"] {
+        let container = fs::read(directory.join(format!("{name}.hide")))?;
+        // Byte 9 is the preamble minor version; v0.1 containers must stay at 1.
+        assert_eq!(container[9], 1, "{name} is no longer a v0.1 container");
+        let mut plaintext = Vec::new();
+        let verified = decrypt_to_staging(&mut container.as_slice(), &mut plaintext, &secret)?;
+        assert!(verified.signer.is_none());
+    }
+    Ok(())
+}
+
+#[test]
+fn frozen_signed_vectors_verify_against_the_recorded_signer() -> Result<(), Box<dyn Error>> {
+    let directory = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../conformance/vectors");
+    let secret = RecipientSecret::from_bytes(&fs::read(directory.join("recipient.test-secret"))?)?;
+    let expected = fs::read(directory.join("signed.test-public"))?;
+
+    for name in ["signed-public", "signed-confidential"] {
+        let container = fs::read(directory.join(format!("{name}.hide")))?;
+        assert_eq!(container[9], 2, "{name} must advertise minor 2");
+        let mut plaintext = Vec::new();
+        let verified = decrypt_to_staging(&mut container.as_slice(), &mut plaintext, &secret)?;
+        assert_eq!(plaintext, fs::read(directory.join(format!("{name}.txt")))?);
+        let signer = verified.signer.expect("signed vector reports a signer");
+        assert_eq!(signer.to_bytes()[..], expected[..]);
+
+        // The confidential placement must not expose the signer in the file.
+        let exposed = container
+            .windows(expected.len())
+            .any(|window| window == expected);
+        assert_eq!(exposed, name == "signed-public", "{name} visibility");
     }
     Ok(())
 }

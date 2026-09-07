@@ -1,7 +1,10 @@
 use thiserror::Error;
 
 mod codec;
-pub use codec::{Metadata, ProtectedHeader, RecipientStanza, decode_header, encode_header};
+pub use codec::{
+    Metadata, ProtectedHeader, RecipientStanza, SIGNATURE_LEN, SignatureStanza, VERIFYING_KEY_LEN,
+    decode_header, encode_header,
+};
 
 pub const MAGIC: [u8; 8] = *b"HIDE\r\n\x1a\n";
 pub const PREAMBLE_LEN: usize = 16;
@@ -9,6 +12,7 @@ pub const MAX_HEADER_LEN: usize = 1024 * 1024;
 pub const CHUNK_LEN: usize = 65_536;
 pub const SUITE: u16 = 1;
 pub const MAX_RECIPIENTS: usize = 64;
+pub const MAX_SIGNATURES: usize = 8;
 pub const MAX_METADATA_LEN: usize = 262_144;
 pub const TAG_LEN: usize = 16;
 
@@ -47,15 +51,23 @@ impl From<minicbor::encode::Error<core::convert::Infallible>> for FormatError {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Preamble {
     header_len: u32,
+    signed: bool,
 }
 
 impl Preamble {
     pub fn new(header_len: usize) -> Result<Self, FormatError> {
+        Self::with_signed(header_len, false)
+    }
+
+    /// Signed containers advertise minor 2, so a v0.1 reader refuses them rather
+    /// than opening them with the signature silently ignored.
+    pub fn with_signed(header_len: usize, signed: bool) -> Result<Self, FormatError> {
         if header_len == 0 || header_len > MAX_HEADER_LEN {
             return Err(FormatError::HeaderTooLarge);
         }
         Ok(Self {
             header_len: header_len as u32,
+            signed,
         })
     }
 
@@ -63,10 +75,14 @@ impl Preamble {
         self.header_len as usize
     }
 
+    pub fn is_signed(self) -> bool {
+        self.signed
+    }
+
     pub fn encode(self) -> [u8; PREAMBLE_LEN] {
         let mut bytes = [0; PREAMBLE_LEN];
         bytes[..8].copy_from_slice(&MAGIC);
-        bytes[9] = 1;
+        bytes[9] = if self.signed { 2 } else { 1 };
         bytes[10] = 1;
         bytes[12..].copy_from_slice(&self.header_len.to_be_bytes());
         bytes
@@ -76,14 +92,14 @@ impl Preamble {
         if bytes.len() != PREAMBLE_LEN || bytes[..8] != MAGIC {
             return Err(FormatError::InvalidContainer);
         }
-        if bytes[8..10] != [0, 1] {
+        if bytes[8] != 0 || !matches!(bytes[9], 1 | 2) {
             return Err(FormatError::UnsupportedVersion);
         }
         if bytes[10] != 1 || bytes[11] != 0 {
             return Err(FormatError::UnsupportedFeature);
         }
         let length = u32::from_be_bytes([bytes[12], bytes[13], bytes[14], bytes[15]]);
-        Self::new(length as usize)
+        Self::with_signed(length as usize, bytes[9] == 2)
     }
 }
 

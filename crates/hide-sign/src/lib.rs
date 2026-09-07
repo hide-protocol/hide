@@ -160,10 +160,37 @@ impl SigningIdentity {
 }
 
 /// The public half of an identity: shareable, and safe to print.
-#[derive(Clone, PartialEq)]
+#[derive(Clone)]
 pub struct VerifyingIdentity {
     ed25519: EdVerifyingKey,
     ml_dsa: MlVerifyingKey<MlDsa65>,
+}
+
+// Hand-written because ml_dsa::VerifyingKey implements PartialEq but not Eq.
+// Equality over the encoded bytes is reflexive, so Eq is sound here.
+impl PartialEq for VerifyingIdentity {
+    fn eq(&self, other: &Self) -> bool {
+        self.to_bytes() == other.to_bytes()
+    }
+}
+
+impl Eq for VerifyingIdentity {}
+
+impl core::fmt::Debug for VerifyingIdentity {
+    fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        // Public material, but printing 1984 bytes helps nobody.
+        formatter
+            .debug_struct("VerifyingIdentity")
+            .field("ed25519", &hex_prefix(&self.ed25519_bytes()))
+            .finish_non_exhaustive()
+    }
+}
+
+fn hex_prefix(bytes: &[u8]) -> String {
+    bytes[..8]
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect()
 }
 
 impl VerifyingIdentity {

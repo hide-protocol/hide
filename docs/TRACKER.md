@@ -44,6 +44,9 @@ raise it if you disagree.
 | D2 | SSH integration | **Agent first**, export as an escape hatch | See the constraint below | The agent offers only the Ed25519 half |
 | D3 | Scope | **The whole chain**, through all eight SDKs | Shipping the core without the bindings is the incomplete-ripple failure this repo has avoided so far | Touches nearly every file |
 | D4 | Identity derivation | Signing key is **separate** from the encryption key, both derived from one seed | Compromise of one must not imply the other, and the seed keeps a single thing to back up | One extra key to carry in the file format |
+| D5 | What a signature covers | A **transcript** binding suite, object id, recipient set, metadata and `SHA-256(plaintext)` | Signing the header alone is forgeable: every recipient holds the CEK and the payload salt is public, so a recipient can re-encrypt different content under an unchanged header and the signature still verifies | Signing buffers the payload, so it is no longer one-pass |
+| D6 | Signature placement | **Both**, chosen per container: public in the header, or confidential inside the encrypted metadata | Public attestation and private mail are genuinely different needs; a header signature is visible to storage providers and network observers | Two code paths and two spec sections for every SDK |
+| D7 | Version signalling | Signed containers advertise preamble minor **2** | A v0.1 reader refuses a signed container instead of opening it and silently ignoring the signature | Signed files are unreadable by older readers, deliberately |
 
 ### The constraint that shapes D2
 
@@ -145,6 +148,48 @@ assumed, so `hide-sign` needs no `test-vectors` feature — the one that was
 scaffolded has been removed rather than left as dead configuration. And the
 vector test asserts the signature both verifies *and* reproduces exactly: if
 verification alone passed, the scheme would have silently become randomised.
+
+---
+
+### P2 — signatures in the wire format
+
+105 workspace tests, clippy clean, 10/10 mutations detected, and the
+independent Node verifier agrees on both placements.
+
+**The forgery that shaped the design.** The plan said "sign the header hash,
+which is already chained into every chunk's AAD, so it binds the payload." That
+is true only against someone who cannot compute AEAD tags. A *recipient* holds
+the CEK, and the payload salt is written in the clear, so a recipient can keep
+a signed header byte-for-byte, re-encrypt entirely different plaintext, and
+ship a container in which every tag is valid and the original signature still
+verifies. Multi-recipient makes it worse: any one recipient can forge to all
+the others. The signature now covers `SHA-256(plaintext)`, which is what makes
+it mean *this signer produced this content* rather than *this signer addressed
+these recipients*. `forge_payload_for_test` mounts exactly this attack, and
+`a_recipient_cannot_swap_the_payload_and_keep_the_signature` proves it fails.
+
+**Compatibility.** Key 5 of the protected header was an empty array in v0.1 and
+now carries public signatures. An unsigned header still encodes `05 80`, so
+`hello.hide` and `empty.hide` regenerate byte-identically — verified through
+git, not by inspection. Metadata gained an optional key 3 for the confidential
+placement.
+
+**Two testing lessons.** First, the signing tests were initially *vacuous*:
+signer and verifier call the same `transcript` function, so weakening it
+weakens both symmetrically and every round-trip still passed. Seven of ten
+mutations survived. Only mounting the real attack made them meaningful — a
+round-trip test structurally cannot catch a weakened binding. Second, two
+tamper tests asserted the wrong layer: the header MAC covers the preamble and
+the protected header, so editing a version byte or a signature stanza is caught
+as `NoMatchingRecipient` long before signature verification runs. Reaching the
+stripped-signature check at all required building a container that is signed
+and then has its stanza removed, which is what
+`encrypt_stripped_signature_for_test` exists for.
+
+**A Node trap worth remembering.** `cbor.encodeCanonical` returns a *single
+byte* for a `Map` — it truncates. The existing verifier already had a probe
+guarding against this for its own encoder; the signature path had to use the
+same async encoder.
 
 ---
 

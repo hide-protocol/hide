@@ -304,6 +304,7 @@ fn encrypt_file(input: &Path, recipients: &[PathBuf], output: &Path) -> Result<(
     let metadata = Metadata {
         filename: Some(filename.into()),
         media_type: None,
+        signature: None,
     };
     let mut buffered = BufWriter::with_capacity(IO_BUFFER, staging);
     let written = hide_object::encrypt(&mut source, &mut buffered, &recipients, &metadata)?;
@@ -350,6 +351,7 @@ fn seal_message(
     let metadata = Metadata {
         filename: None,
         media_type: Some("text/plain".into()),
+        signature: None,
     };
     hide_object::encrypt(
         &mut plaintext.as_bytes(),

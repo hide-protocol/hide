@@ -1,6 +1,7 @@
 use hide_format::{
     FormatError, MAX_HEADER_LEN, MAX_METADATA_LEN, MAX_RECIPIENTS, Metadata, PREAMBLE_LEN,
-    Preamble, ProtectedHeader, RecipientStanza, decode_header, encode_header,
+    Preamble, ProtectedHeader, RecipientStanza, SIGNATURE_LEN, SignatureStanza, VERIFYING_KEY_LEN,
+    decode_header, encode_header,
 };
 use proptest::prelude::*;
 
@@ -16,12 +17,23 @@ fn header() -> impl Strategy<Value = ProtectedHeader> {
         any::<[u8; 32]>(),
         prop::collection::vec(stanza(), 1..=4),
         16usize..600,
+        prop::collection::vec(signature_stanza(), 0..=2),
     )
-        .prop_map(|(object_id, recipients, metadata_len)| ProtectedHeader {
-            object_id,
-            recipients,
-            encrypted_metadata: vec![0x2b; metadata_len],
-        })
+        .prop_map(
+            |(object_id, recipients, metadata_len, signatures)| ProtectedHeader {
+                object_id,
+                recipients,
+                encrypted_metadata: vec![0x2b; metadata_len],
+                signatures,
+            },
+        )
+}
+
+fn signature_stanza() -> impl Strategy<Value = SignatureStanza> {
+    (any::<u8>(), any::<u8>()).prop_map(|(key, signature)| SignatureStanza {
+        verifying_key: vec![key; VERIFYING_KEY_LEN],
+        signature: vec![signature; SIGNATURE_LEN],
+    })
 }
 
 proptest! {
@@ -78,6 +90,7 @@ proptest! {
         let metadata = Metadata {
             filename: Some(filename),
             media_type: Some(media_type),
+            signature: None,
         };
         match metadata.encode() {
             Ok(encoded) => {
@@ -95,9 +108,9 @@ proptest! {
     #[test]
     fn oversized_structures_are_refused(count in (MAX_RECIPIENTS + 1)..=(MAX_RECIPIENTS + 8), metadata_len in (MAX_METADATA_LEN + 17)..(MAX_METADATA_LEN + 64)) {
         let base = RecipientStanza { encapsulation: vec![1; 1120], wrapped_cek: vec![2; 48] };
-        let too_many = ProtectedHeader { object_id: [0; 32], recipients: vec![base.clone(); count], encrypted_metadata: vec![0; 32] };
+        let too_many = ProtectedHeader { object_id: [0; 32], recipients: vec![base.clone(); count], encrypted_metadata: vec![0; 32], signatures: Vec::new() };
         prop_assert!(too_many.encode().is_err());
-        let too_large = ProtectedHeader { object_id: [0; 32], recipients: vec![base], encrypted_metadata: vec![0; metadata_len] };
+        let too_large = ProtectedHeader { object_id: [0; 32], recipients: vec![base], encrypted_metadata: vec![0; metadata_len], signatures: Vec::new() };
         prop_assert!(too_large.encode().is_err());
     }
 }

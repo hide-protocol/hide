@@ -1,9 +1,10 @@
 import assert from "node:assert/strict";
-import { createCipheriv, createDecipheriv, createHash, createHmac, hkdfSync, randomBytes, timingSafeEqual } from "node:crypto";
+import { createCipheriv, createDecipheriv, createHash, createHmac, createPublicKey, hkdfSync, randomBytes, timingSafeEqual, verify as nodeVerify } from "node:crypto";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { CipherSuite, HkdfSha256 } from "@hpke/core";
 import { Chacha20Poly1305 } from "@hpke/chacha20poly1305";
 import { XWing } from "@hpke/hybridkem-x-wing";
+import { ml_dsa65 } from "@noble/post-quantum/ml-dsa.js";
 import cbor from "cbor";
 
 const root = new URL("../../", import.meta.url);
@@ -17,6 +18,45 @@ const concat = (...parts) => Buffer.concat(parts.map((part) => Buffer.from(part)
 const label = (value) => Buffer.from(`HIDE/0.1 ${value}`, "ascii");
 const hash = (value) => createHash("sha256").update(value).digest();
 const derive = (cek, salt, info) => Buffer.from(hkdfSync("sha256", cek, salt, info, 32));
+
+const VERIFYING_KEY_LEN = 1984;
+const SIGNATURE_LEN = 3373;
+const SIGNING_CONTEXT = Buffer.from("HIDE/0.5 container", "ascii");
+
+// Ed25519 SPKI prefix, so a raw 32-byte key can be handed to node:crypto.
+const ED25519_SPKI = Buffer.from("302a300506032b6570032100", "hex");
+
+function verifyHybrid(verifyingKey, signature, message) {
+  assert.equal(verifyingKey.length, VERIFYING_KEY_LEN);
+  assert.equal(signature.length, SIGNATURE_LEN);
+  const key = createPublicKey({ key: concat(ED25519_SPKI, verifyingKey.subarray(0, 32)), format: "der", type: "spki" });
+  const classical = nodeVerify(null, message, key, signature.subarray(0, 64));
+  const quantum = ml_dsa65.verify(signature.subarray(64), message, verifyingKey.subarray(32));
+  // Both halves must hold; neither alone is sufficient.
+  assert.ok(classical, "Ed25519 half did not verify");
+  assert.ok(quantum, "ML-DSA-65 half did not verify");
+  return classical && quantum;
+}
+
+function bindContext(message) {
+  return concat(uint64(SIGNING_CONTEXT.length), SIGNING_CONTEXT, message);
+}
+
+/// Rebuilds exactly what the Rust signer committed to.
+function transcript(objectId, stanzas, metadataBase, plaintext) {
+  const recipients = stanzas.flatMap((stanza) => [stanza[1], stanza[2]]);
+  return concat(
+    Buffer.from("HIDE/0.5 transcript", "ascii"),
+    suiteBytes,
+    objectId,
+    uint64(stanzas.length),
+    ...recipients,
+    uint64(metadataBase.length),
+    metadataBase,
+    hash(plaintext),
+    uint64(plaintext.length),
+  );
+}
 
 async function decode(bytes) {
   const values = cbor.decodeAllSync(bytes, { preferMap: true, preventDuplicateKeys: true, max_depth: 16 });
@@ -63,7 +103,10 @@ async function decrypt(container, privateSeed) {
   assert.ok(container.length >= 16 && container.length <= 2 * 1024 * 1024);
   const preamble = container.subarray(0, 16);
   assert.deepEqual(preamble.subarray(0, 8), magic);
-  assert.deepEqual(preamble.subarray(8, 12), Buffer.from([0, 1, 1, 0]));
+  assert.equal(preamble[8], 0);
+  assert.ok(preamble[9] === 1 || preamble[9] === 2, "unsupported minor version");
+  assert.deepEqual(preamble.subarray(10, 12), Buffer.from([1, 0]));
+  const preambleSaysSigned = preamble[9] === 2;
   const headerLength = preamble.readUInt32BE(12);
   assert.ok(headerLength > 0 && headerLength <= 1024 * 1024);
   const headerEnd = 16 + headerLength;
@@ -77,7 +120,8 @@ async function decrypt(container, privateSeed) {
   assert.equal(header.get(1), 1);
   const objectId = header.get(2);
   assert.equal(objectId.length, 32);
-  assert.deepEqual(header.get(5), []);
+  const publicSignatures = header.get(5);
+  assert.ok(Array.isArray(publicSignatures) && publicSignatures.length <= 8);
   const stanzas = header.get(3);
   assert.ok(stanzas.length > 0 && stanzas.length <= 64);
   const secret = await kem.deserializePrivateKey(privateSeed);
@@ -119,10 +163,35 @@ async function decrypt(container, privateSeed) {
     offset += 5 + length;
     if (kind === 2) {
       assert.equal(offset, container.length, "trailing bytes");
-      return { plaintext: concat(...plaintext), metadata };
+      const joined = concat(...plaintext);
+      const signer = await verifySignature(metadata, publicSignatures, preambleSaysSigned, objectId, stanzas, joined);
+      return { plaintext: joined, metadata, signer };
     }
   }
   throw new Error("object too large");
+}
+
+/// Mirrors the Rust verifier: refuse the object rather than report an
+/// unverified signature, and reject a stripped or unexpected one.
+async function verifySignature(metadata, publicSignatures, preambleSaysSigned, objectId, stanzas, plaintext) {
+  const confidential = metadata.get(3);
+  assert.ok(!(publicSignatures.length > 0 && confidential), "signatures in both places");
+  const stanza = publicSignatures[0] ?? confidential;
+  if (!stanza) {
+    assert.ok(!preambleSaysSigned, "preamble claims signed but no signature is present");
+    return null;
+  }
+  assert.ok(preambleSaysSigned, "signature present but preamble says unsigned");
+  assert.equal(stanza.length, 3);
+  assert.equal(stanza[0], 1);
+
+    // The signing base is the metadata without key 3. Uses the same encoder as
+    // the rest of this file: cbor.encodeCanonical truncates Maps to one byte.
+    const base = new Map([...metadata].filter(([key]) => key !== 3));
+    const metadataBase = await encode(base);
+  const message = bindContext(transcript(objectId, stanzas, metadataBase, plaintext));
+  assert.ok(verifyHybrid(stanza[1], stanza[2], message), "signature did not verify");
+  return stanza[1];
 }
 
 async function encrypt(publicBytes, plaintext) {
@@ -176,3 +245,29 @@ assert.deepEqual((await decrypt(container, secret)).plaintext, plaintext);
 await writeFile(new URL("node-interop.hide", scratch), container);
 await writeFile(new URL("node-interop.txt", scratch), plaintext);
 console.log("PASS independent Node encoder; cross-check artifact: .copilot-tmp/node-interop.hide");
+
+// Signed containers, verified with an independent Ed25519 (node:crypto) and an
+// independent ML-DSA-65 (@noble/post-quantum) implementation.
+const signerKey = await readFile(new URL("signed.test-public", vectors));
+for (const name of ["signed-public", "signed-confidential"]) {
+  const ciphertext = await readFile(new URL(`${name}.hide`, vectors));
+  const expected = await readFile(new URL(`${name}.txt`, vectors));
+  const result = await decrypt(ciphertext, secret);
+  assert.deepEqual(result.plaintext, expected);
+  assert.ok(result.signer, `${name} reported no signer`);
+  assert.deepEqual(Buffer.from(result.signer), signerKey, `${name} signer mismatch`);
+
+  // The public placement must expose the signer; the confidential one must not.
+  const exposed = ciphertext.includes(signerKey);
+  assert.equal(exposed, name === "signed-public", `${name} signer visibility is wrong`);
+
+  // A flipped payload bit must be refused, and the preamble must not be
+  // downgradable to minor 1 to shed the signature.
+  const corrupt = Buffer.from(ciphertext);
+  corrupt[corrupt.length - 1] ^= 1;
+  await assert.rejects(decrypt(corrupt, secret));
+  const downgraded = Buffer.from(ciphertext);
+  downgraded[9] = 1;
+  await assert.rejects(decrypt(downgraded, secret));
+  console.log(`PASS Rust -> independent Node signature: ${name}; tamper/downgrade rejected`);
+}

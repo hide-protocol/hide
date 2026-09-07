@@ -13,11 +13,12 @@ P1.3,1,task,Derive both halves from one 32-byte seed,done,P1.2,crates/hide-sign,
 P1.4,1,task,sign and verify; reject when either half fails,done,P1.3,crates/hide-sign,cargo test -p hide-sign (15 passed) + .copilot-tmp/mutate-sign.ps1 (7/7 mutations DETECTED),The central invariant of the hybrid
 P1.5,1,task,Known-answer tests against RFC 8032 and FIPS-204,done,P1.4,crates/hide-sign,cargo test -p hide-sign (RFC 8032 TEST 3 + NIST ACVP ML-DSA-65 tcId 26 + ed25519-speccheck case 1),Proves both crates match the standards rather than only themselves
 P1.6,1,task,Frozen signature vectors,done,P1.4,conformance/vectors,cargo test -p hide-sign --test vectors (3 passed); regeneration verified byte-identical,"Seed 0x55; signing is deterministic, so no test-vectors feature is needed"
-P2.1,2,task,Signature stanza in the CBOR wire format,not-started,P1.4,crates/hide-format,,Canonical bounded parsing as everywhere else
-P2.2,2,task,Sign the header hash and bind it to the object id,not-started,P2.1,crates/hide-object,,Prevents transplanting a signature onto another container
-P2.3,2,task,Verify before any plaintext is published,not-started,P2.2,crates/hide-object,,
-P2.4,2,task,An unsigned container still opens,not-started,P2.3,crates/hide-object,,0.4.0 containers must keep working
-P2.5,2,task,spec/hide-0.1.md documents the signature stanza,not-started,P2.4,spec,,
+P2.1,2,task,Signature stanza in the CBOR wire format,done,P1.4,crates/hide-format,cargo test -p hide-format (21 passed),Uses the slot reserved as an empty array in v0.1; an unsigned header is byte-identical to before
+P2.2,2,task,Sign a transcript binding the recipients metadata and plaintext,done,P2.1,crates/hide-object,cargo test -p hide-object --features test-vectors --test signing (9 passed),"Header-hash-only signing was forgeable by any recipient; see D5"
+P2.3,2,task,Verify before any plaintext is published,done,P2.2,crates/hide-object,cargo test -p hide-object --test signing a_recipient_cannot_swap_the_payload_and_keep_the_signature,Verification gates the Ok return; the caller still commits only on Ok
+P2.4,2,task,An unsigned container still opens,done,P2.3,crates/hide-object,cargo test -p hide-object --test vectors (4 passed); hello.hide and empty.hide unchanged in git,v0.1 vectors regenerate byte-identically
+P2.5,2,task,spec/hide-0.1.md documents the signature stanza,done,P2.4,spec,spec/hide-0.1.md sections 7 7.1 7.2,Documents why the plaintext hash is mandatory
+P2.6,2,task,Independent Node verifier checks signatures,done,P2.5,conformance/node,node verify.mjs (5 PASS lines),Independent Ed25519 via node:crypto and ML-DSA-65 via @noble/post-quantum
 P3.1,3,task,hide keygen also produces a signing identity,not-started,P2.4,apps/hide-cli,,
 P3.2,3,task,hide sign and hide verify for detached signatures,not-started,P3.1,apps/hide-cli,,
 P3.3,3,task,hide encrypt --sign,not-started,P3.1,apps/hide-cli,,

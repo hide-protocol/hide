@@ -1,6 +1,8 @@
 use minicbor::{Decoder, Encoder};
 
-use crate::{FormatError, MAX_HEADER_LEN, MAX_METADATA_LEN, MAX_RECIPIENTS, SUITE, TAG_LEN};
+use crate::{
+    FormatError, MAX_HEADER_LEN, MAX_METADATA_LEN, MAX_RECIPIENTS, MAX_SIGNATURES, SUITE, TAG_LEN,
+};
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct RecipientStanza {
@@ -8,20 +10,47 @@ pub struct RecipientStanza {
     pub wrapped_cek: Vec<u8>,
 }
 
+/// A public signature over the container, readable by anyone holding the file.
+/// Confidential signatures live inside the encrypted metadata instead.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct SignatureStanza {
+    pub verifying_key: Vec<u8>,
+    pub signature: Vec<u8>,
+}
+
+pub const VERIFYING_KEY_LEN: usize = 1984;
+pub const SIGNATURE_LEN: usize = 3373;
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ProtectedHeader {
     pub object_id: [u8; 32],
     pub recipients: Vec<RecipientStanza>,
     pub encrypted_metadata: Vec<u8>,
+    /// Occupies the slot reserved as an empty array in v0.1. Empty here encodes
+    /// byte-for-byte as a v0.1 header, which is what keeps old files readable.
+    pub signatures: Vec<SignatureStanza>,
 }
 
 impl ProtectedHeader {
     pub fn encode(&self) -> Result<Vec<u8>, FormatError> {
+        self.encode_with_signatures(true)
+    }
+
+    /// The exact bytes a signature covers: the header with the signature slot
+    /// empty. Signing the slot that holds the signature would be circular.
+    pub fn signing_base(&self) -> Result<Vec<u8>, FormatError> {
+        self.encode_with_signatures(false)
+    }
+
+    fn encode_with_signatures(&self, include: bool) -> Result<Vec<u8>, FormatError> {
         if self.recipients.is_empty() || self.recipients.len() > MAX_RECIPIENTS {
             return Err(FormatError::MalformedHeader);
         }
         if !(TAG_LEN..=MAX_METADATA_LEN + TAG_LEN).contains(&self.encrypted_metadata.len()) {
             return Err(FormatError::InvalidMetadata);
+        }
+        if self.signatures.len() > MAX_SIGNATURES {
+            return Err(FormatError::MalformedHeader);
         }
         let mut encoder = Encoder::new(Vec::new());
         encoder
@@ -41,11 +70,21 @@ impl ProtectedHeader {
                 .bytes(&stanza.encapsulation)?
                 .bytes(&stanza.wrapped_cek)?;
         }
-        encoder
-            .u8(4)?
-            .bytes(&self.encrypted_metadata)?
-            .u8(5)?
-            .array(0)?;
+        encoder.u8(4)?.bytes(&self.encrypted_metadata)?.u8(5)?;
+        let signatures: &[SignatureStanza] = if include { &self.signatures } else { &[] };
+        encoder.array(signatures.len() as u64)?;
+        for stanza in signatures {
+            if stanza.verifying_key.len() != VERIFYING_KEY_LEN
+                || stanza.signature.len() != SIGNATURE_LEN
+            {
+                return Err(FormatError::MalformedHeader);
+            }
+            encoder
+                .array(3)?
+                .u8(1)?
+                .bytes(&stanza.verifying_key)?
+                .bytes(&stanza.signature)?;
+        }
         let bytes = encoder.into_writer();
         check_header_len(bytes.len())?;
         Ok(bytes)
@@ -81,13 +120,19 @@ impl ProtectedHeader {
             return Err(FormatError::InvalidMetadata);
         }
         key(&mut decoder, 5)?;
-        if decoder.array()? != Some(0) {
-            return Err(FormatError::UnsupportedFeature);
+        let signature_count = decoder.array()?.ok_or(FormatError::MalformedHeader)?;
+        if signature_count > MAX_SIGNATURES as u64 {
+            return Err(FormatError::MalformedHeader);
+        }
+        let mut signatures = Vec::with_capacity(signature_count as usize);
+        for _ in 0..signature_count {
+            signatures.push(decode_signature(&mut decoder)?);
         }
         let header = Self {
             object_id,
             recipients,
             encrypted_metadata: metadata.to_vec(),
+            signatures,
         };
         canonical(bytes, decoder.position(), &header.encode()?)?;
         Ok(header)
@@ -106,6 +151,21 @@ fn decode_stanza(decoder: &mut Decoder<'_>) -> Result<RecipientStanza, FormatErr
     Ok(RecipientStanza {
         encapsulation: encapsulation.to_vec(),
         wrapped_cek: wrapped_cek.to_vec(),
+    })
+}
+
+fn decode_signature(decoder: &mut Decoder<'_>) -> Result<SignatureStanza, FormatError> {
+    if decoder.array()? != Some(3) || decoder.u8()? != 1 {
+        return Err(FormatError::UnsupportedFeature);
+    }
+    let verifying_key = decoder.bytes()?;
+    let signature = decoder.bytes()?;
+    if verifying_key.len() != VERIFYING_KEY_LEN || signature.len() != SIGNATURE_LEN {
+        return Err(FormatError::MalformedHeader);
+    }
+    Ok(SignatureStanza {
+        verifying_key: verifying_key.to_vec(),
+        signature: signature.to_vec(),
     })
 }
 
@@ -137,12 +197,33 @@ pub fn decode_header(bytes: &[u8]) -> Result<(Vec<u8>, [u8; 32]), FormatError> {
 pub struct Metadata {
     pub filename: Option<String>,
     pub media_type: Option<String>,
+    /// A signature visible only to recipients. Excluded from the signing base,
+    /// because it cannot cover itself.
+    pub signature: Option<SignatureStanza>,
 }
 
 impl Metadata {
     pub fn encode(&self) -> Result<Vec<u8>, FormatError> {
+        self.encode_with_signature(true)
+    }
+
+    /// The metadata as it looked before a signature was attached.
+    pub fn signing_base(&self) -> Result<Vec<u8>, FormatError> {
+        self.encode_with_signature(false)
+    }
+
+    fn encode_with_signature(&self, include: bool) -> Result<Vec<u8>, FormatError> {
+        let signature = if include {
+            self.signature.as_ref()
+        } else {
+            None
+        };
         let mut encoder = Encoder::new(Vec::new());
-        encoder.map(u64::from(self.filename.is_some()) + u64::from(self.media_type.is_some()))?;
+        encoder.map(
+            u64::from(self.filename.is_some())
+                + u64::from(self.media_type.is_some())
+                + u64::from(signature.is_some()),
+        )?;
         if let Some(filename) = &self.filename {
             validate_filename(filename)?;
             encoder.u8(1)?.str(filename)?;
@@ -156,6 +237,19 @@ impl Metadata {
             }
             encoder.u8(2)?.str(media_type)?;
         }
+        if let Some(stanza) = signature {
+            if stanza.verifying_key.len() != VERIFYING_KEY_LEN
+                || stanza.signature.len() != SIGNATURE_LEN
+            {
+                return Err(FormatError::InvalidMetadata);
+            }
+            encoder
+                .u8(3)?
+                .array(3)?
+                .u8(1)?
+                .bytes(&stanza.verifying_key)?
+                .bytes(&stanza.signature)?;
+        }
         Ok(encoder.into_writer())
     }
 
@@ -165,17 +259,22 @@ impl Metadata {
         }
         let mut decoder = Decoder::new(bytes);
         let count = decoder.map()?.ok_or(FormatError::InvalidMetadata)?;
-        if count > 2 {
+        if count > 3 {
             return Err(FormatError::InvalidMetadata);
         }
         let mut metadata = Self::default();
         let mut previous = 0;
         for _ in 0..count {
             let field = decoder.u8()?;
-            if field <= previous || field > 2 {
+            if field <= previous || field > 3 {
                 return Err(FormatError::InvalidMetadata);
             }
             previous = field;
+            if field == 3 {
+                metadata.signature =
+                    Some(decode_signature(&mut decoder).map_err(|_| FormatError::InvalidMetadata)?);
+                continue;
+            }
             let text = decoder.str()?;
             if text.len() > 255 {
                 return Err(FormatError::InvalidMetadata);
@@ -248,6 +347,7 @@ mod tests {
                 wrapped_cek: vec![3; 48],
             }],
             encrypted_metadata: vec![4; 17],
+            signatures: Vec::new(),
         }
     }
 
@@ -262,11 +362,80 @@ mod tests {
         Ok(())
     }
 
+    fn signed_header() -> ProtectedHeader {
+        ProtectedHeader {
+            signatures: vec![SignatureStanza {
+                verifying_key: vec![6; VERIFYING_KEY_LEN],
+                signature: vec![7; SIGNATURE_LEN],
+            }],
+            ..header()
+        }
+    }
+
+    /// The compatibility invariant: an unsigned header must be byte-identical to
+    /// what v0.1 wrote, or every existing container stops opening.
+    #[test]
+    fn an_unsigned_header_still_ends_with_the_v0_1_empty_slot() -> Result<(), FormatError> {
+        let encoded = header().encode()?;
+        // 0x05 = key 5, 0x80 = CBOR array of length 0.
+        assert_eq!(&encoded[encoded.len() - 2..], &[0x05, 0x80]);
+        assert_eq!(header().signing_base()?, encoded);
+        Ok(())
+    }
+
+    #[test]
+    fn a_signed_header_survives_encoding() -> Result<(), FormatError> {
+        let encoded = signed_header().encode()?;
+        assert_eq!(ProtectedHeader::decode(&encoded)?, signed_header());
+        Ok(())
+    }
+
+    /// The signature covers the header with the slot empty, so adding a
+    /// signature must not disturb what earlier signers committed to.
+    #[test]
+    fn the_signing_base_excludes_the_signatures() -> Result<(), FormatError> {
+        assert_eq!(signed_header().signing_base()?, header().encode()?);
+        Ok(())
+    }
+
+    #[test]
+    fn a_malformed_signature_stanza_is_refused() {
+        for (key_len, sig_len) in [
+            (VERIFYING_KEY_LEN - 1, SIGNATURE_LEN),
+            (VERIFYING_KEY_LEN, SIGNATURE_LEN + 1),
+        ] {
+            let header = ProtectedHeader {
+                signatures: vec![SignatureStanza {
+                    verifying_key: vec![6; key_len],
+                    signature: vec![7; sig_len],
+                }],
+                ..header()
+            };
+            assert_eq!(header.encode(), Err(FormatError::MalformedHeader));
+        }
+    }
+
+    #[test]
+    fn too_many_signatures_are_refused() {
+        let header = ProtectedHeader {
+            signatures: vec![
+                SignatureStanza {
+                    verifying_key: vec![6; VERIFYING_KEY_LEN],
+                    signature: vec![7; SIGNATURE_LEN],
+                };
+                MAX_SIGNATURES + 1
+            ],
+            ..header()
+        };
+        assert_eq!(header.encode(), Err(FormatError::MalformedHeader));
+    }
+
     #[test]
     fn metadata_has_exact_encoding() -> Result<(), FormatError> {
         let metadata = Metadata {
             filename: Some("hello.txt".into()),
             media_type: None,
+            signature: None,
         };
         assert_eq!(metadata.encode()?, b"\xa1\x01\x69hello.txt");
         assert_eq!(Metadata::decode(b"\xa1\x01\x69hello.txt")?, metadata);
@@ -335,7 +504,8 @@ mod tests {
             assert!(
                 Metadata {
                     filename: Some(filename.into()),
-                    media_type: None
+                    media_type: None,
+                    signature: None
                 }
                 .encode()
                 .is_err(),

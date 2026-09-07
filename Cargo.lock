@@ -525,6 +525,7 @@ version = "0.4.0"
 dependencies = [
  "hide-crypto",
  "hide-format",
+ "hide-sign",
  "proptest",
  "thiserror",
  "zeroize",

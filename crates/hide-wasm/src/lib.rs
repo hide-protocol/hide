@@ -112,6 +112,7 @@ pub fn encrypt(
     let metadata = Metadata {
         filename,
         media_type,
+        signature: None,
     };
     let mut container = Vec::new();
     hide_object::encrypt(&mut &*plaintext, &mut container, &keys, &metadata).map_err(error)?;

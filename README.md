@@ -43,16 +43,21 @@ Being explicit here matters more than the feature list.
 
 - **No identity, directory or key transparency.** Recipients are raw test key files that you must
   exchange over a channel you already trust. Nothing proves a key belongs to a particular person.
-- **No sender authentication.** A successful decryption proves the container was not altered; it does
-  **not** prove who created it.
+- **Sender authentication only when the container is signed.** For an unsigned container, a successful
+  decryption proves it was not altered; it does **not** prove who created it. A signed container binds
+  a signing key to the recipient set, the metadata and the exact plaintext — but it attests to a *key*,
+  and nothing yet proves that key belongs to a particular person.
 - **No forward secrecy** for stored objects: anyone who later obtains the recipient secret can decrypt
   previously captured containers. Device revocation cannot retroactively protect data an attacker already holds.
 - **No hardware protection.** Secret keys are sealed with a passphrase (Argon2id + ChaCha20-Poly1305),
   but there is no Keychain, TPM, Secure Enclave or Keystore integration, and `--insecure-plaintext`
   still writes an unencrypted key on request.
 - **Recipient privacy is limited.** Stanzas carry no identifiers, but the recipient *count* and the
-  ciphertext size are visible, and metadata is encrypted rather than hidden.
-- Not yet built: identity state, device enrollment, recovery, revocation, signatures, MLS messaging.
+  ciphertext size are visible, and metadata is encrypted rather than hidden. A *public* signature also
+  reveals the signer's key to anyone holding the file; the confidential placement avoids this.
+- **Signing is not streaming.** A signature commits to the plaintext, so signing buffers the payload.
+- Not yet built: identity state, device enrollment, recovery, revocation, key transparency,
+  SSH authentication, MLS messaging.
 
 ## Download
 

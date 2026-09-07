@@ -383,6 +383,24 @@ pub fn hash(parts: &[&[u8]]) -> [u8; 32] {
     state.finalize().into()
 }
 
+/// Incremental form of [`hash`], for data that arrives in pieces.
+#[derive(Default)]
+pub struct Hasher(Sha256);
+
+impl Hasher {
+    pub fn new() -> Self {
+        Self(Sha256::new())
+    }
+
+    pub fn update(&mut self, bytes: &[u8]) {
+        self.0.update(bytes);
+    }
+
+    pub fn finish(self) -> [u8; 32] {
+        self.0.finalize().into()
+    }
+}
+
 #[cfg(feature = "test-vectors")]
 pub fn wrap_cek_for_vector(
     recipient: &RecipientPublic,
