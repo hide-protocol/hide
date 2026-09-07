@@ -1,7 +1,8 @@
-# HIDE Protocol — Interop Zero (0.1, experimental)
+# HIDE Protocol — 0.5, experimental
 
 *Human-friendly Identity & Data Encryption.* The goal is to encrypt to a person, not to a key.
-This repository currently implements the **file format engine only**, and the CLI is a test harness for it.
+This repository implements the **file format engine** and a **hybrid signature scheme** on top of it:
+one identity can encrypt, sign a file, prove possession to a live verifier, and act as an ssh-agent.
 
 > **Do not use this for sensitive data.** The protocol is a draft, the code is unaudited, no
 > external security review has happened, and the hybrid KEM tracks a moving IETF draft.
@@ -22,6 +23,14 @@ Every claim below was produced by a command in this repository, on Rust 1.97.1.
   classical half of the hybrid, so all seven such points are rejected before use.
 - Property tests (`proptest`) assert the parser never panics on arbitrary input, that any single-byte
   mutation of a container fails to decrypt, and that truncation or appended bytes always fail.
+- **Hybrid signatures**: Ed25519 + ML-DSA-65, concatenated; a signature verifies only if **both**
+  halves do, so neither a quantum nor a classical break of one is enough.
+- **Signatures cross surfaces**: a signature made in WASM verifies in Node and vice versa, and every
+  SDK returns the same verdict on the same bytes (`node conformance/cross-surface/verify.mjs`).
+- **OpenSSH accepts our agent**: `ssh-add -l` lists the key, `ssh-keygen -Y sign` obtains a signature
+  through it, and `ssh-keygen -Y verify` reports it good — verified by OpenSSH's own tools, not ours.
+- **Replay is refused**: a challenge answer is accepted once; presenting the identical valid signature
+  again is rejected, as is one given for a different audience or after its expiry.
 
 ## Measured performance
 

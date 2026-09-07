@@ -3,10 +3,10 @@ D1,0,decision,Signature scheme: hybrid Ed25519 + ML-DSA-65,decided,,design,docs/
 D2,0,decision,SSH via an agent offering the Ed25519 half,decided,D1,design,docs/TRACKER.md,OpenSSH user auth has no post-quantum signature type
 D3,0,decision,Scope covers all eight SDKs,decided,,design,docs/TRACKER.md,Avoids shipping a core the bindings cannot reach
 D4,0,decision,Signing key separate from the encryption key,decided,,design,docs/TRACKER.md,One seed derives both; compromise of one does not imply the other
-S1,0,story,Sign a container so the recipient learns who sent it,not-started,P2,cli,,
-S2,0,story,git push authenticated by a key never in plaintext on disk,not-started,P4,agent,,
-S3,0,story,Challenge-response login with no shared secret,not-started,P5,sdk,,
-S4,0,story,Every SDK returns a byte-identical verdict,not-started,P6,sdk,,
+S1,0,story,Sign a container so the recipient learns who sent it,done,P3.4,apps/hide-cli,"open reports ""Signed by key be0bab44ce6db157"" matching alice.pub.sign, not bob's",
+S2,0,story,git push authenticated by a key never in plaintext on disk,done,P4.5,apps/hide-cli,"ssh-keygen -Y sign -n git through the agent, then -Y verify: Good ""git"" signature; no private key file on disk",
+S3,0,story,Challenge-response login with no shared secret,done,P5.3,crates/hide-sign,"Server holds only the public key: accepted once, replay refused, answer worthless at another audience",
+S4,0,story,Every SDK returns a byte-identical verdict,done,P6.10,sdk,"Python/Node/WASM/Ruby all: genuine=accept tampered=reject on identical bytes",
 P1.1,1,task,hide-sign crate scaffold and dependency pinning,done,D1,crates/hide-sign,cargo clippy --workspace --all-targets --all-features -- -D warnings (exit 0),ed25519-dalek 3.0.0 and ml-dsa 0.1.1; an earlier note said 0.2.0 which does not exist
 P1.2,1,task,SigningSecret / VerifyingPublic with zeroize and no Debug,done,P1.1,crates/hide-sign,cargo test -p hide-sign --doc (2 compile_fail doctests assert no Debug/Clone),VerifyingIdentity derives PartialEq only; ml_dsa::VerifyingKey has no Eq
 P1.3,1,task,Derive both halves from one 32-byte seed,done,P1.2,crates/hide-sign,cargo test -p hide-sign the_derived_halves_match_frozen_bytes,Domain-separated HKDF per half; both halves pinned to frozen bytes
@@ -47,6 +47,6 @@ P6.8,6,task,.NET binding,done,P6.1,sdk/dotnet,Passed! 25 tests,
 P6.9,6,task,WASM binding,done,P1.4,crates/hide-wasm,8 passed (cargo test --target wasm32-unknown-unknown),Binds the crates directly; cannot use the C FFI
 P6.10,6,task,Cross-surface: every surface verifies every other's signature,done,P6.9,conformance/cross-surface,all 25 cross-surface checks passed,Now also runs in the pre-push hook
 P6.11,6,bug,"Raw key files meant different things to the CLI and the SDKs",done,P6.10,crates/hide-keyring,file pub == node pub: true; 25/25 conformance,A P3 regression that no Rust test could see
-P7.1,7,task,README and SECURITY state the SSH limitation plainly,not-started,P6.10,docs,,No claim of post-quantum SSH
-P7.2,7,task,CHANGELOG and version bump across every surface,not-started,P7.1,repo,,
+P7.1,7,task,README and SECURITY state the SSH limitation plainly,done,P6.10,docs,"README ""SSH cannot carry the post-quantum half""; SECURITY lists the agent as a signing oracle",No claim of post-quantum SSH
+P7.2,7,task,CHANGELOG and version bump across every surface,done,P7.1,repo,hide --version reports 0.5.0; 13 manifests bumped,
 P7.3,7,task,Tag v0.5.0 and verify the published artifacts,not-started,P7.2,release,,Download, checksum, run

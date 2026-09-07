@@ -3,7 +3,7 @@
 This project is pre-1.0. The wire format may change while the version is 0.x,
 and a format change is always called out here explicitly.
 
-## Unreleased
+## 0.5.0
 
 **The container format gains signatures.** Unsigned containers are unchanged
 byte for byte, and the frozen 0.1.0 vectors still pass. Signed containers

@@ -15,11 +15,16 @@ Shipped through **v0.4.0**: a file-format engine (X-Wing = X25519 + ML-KEM-768,
 ChaCha20-Poly1305, 64 KiB authenticated streaming), a CLI on seven targets, a
 desktop app, and eight language SDKs over one C ABI.
 
-**The gap this milestone closes.** Every one of those surfaces can prove a
-container was *not altered*. None can prove *who made it*. There is no
-signature primitive anywhere in the codebase, which is why SSH authentication,
-signed containers and any challenge-response login are all currently
-impossible.
+**The gap this milestone closed.** Every one of those surfaces could prove a
+container was *not altered*; none could prove *who made it*. There was no
+signature primitive anywhere, which is why signed containers, SSH
+authentication and challenge-response login were all impossible.
+
+**v0.5.0 closes it.** Hybrid Ed25519 + ML-DSA-65 signatures, signed containers
+and detached signatures, `hide agent` speaking the ssh-agent protocol,
+challenge-response with replay refusal, and all of it through the C ABI into
+every one of the eight SDKs. The four acceptance stories (S1–S4) are verified
+by command, not by inspection.
 
 ---
 

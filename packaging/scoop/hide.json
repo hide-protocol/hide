@@ -1,5 +1,5 @@
 {
-    "version": "0.4.0",
+    "version": "0.5.0",
     "description": "Experimental hybrid post-quantum file and message encryption. UNAUDITED: do not protect data you cannot afford to lose or expose.",
     "homepage": "https://github.com/hide-protocol/hide",
     "license": "Apache-2.0",
@@ -10,14 +10,14 @@
     ],
     "architecture": {
         "64bit": {
-            "url": "https://github.com/hide-protocol/hide/releases/download/v0.4.0/hide-v0.4.0-x86_64-pc-windows-msvc.zip",
+            "url": "https://github.com/hide-protocol/hide/releases/download/v0.5.0/hide-v0.5.0-x86_64-pc-windows-msvc.zip",
             "hash": "PLACEHOLDER_WINDOWS_X86_64",
-            "extract_dir": "hide-v0.4.0-x86_64-pc-windows-msvc"
+            "extract_dir": "hide-v0.5.0-x86_64-pc-windows-msvc"
         },
         "arm64": {
-            "url": "https://github.com/hide-protocol/hide/releases/download/v0.4.0/hide-v0.4.0-aarch64-pc-windows-msvc.zip",
+            "url": "https://github.com/hide-protocol/hide/releases/download/v0.5.0/hide-v0.5.0-aarch64-pc-windows-msvc.zip",
             "hash": "PLACEHOLDER_WINDOWS_ARM64",
-            "extract_dir": "hide-v0.4.0-aarch64-pc-windows-msvc"
+            "extract_dir": "hide-v0.5.0-aarch64-pc-windows-msvc"
         }
     },
     "bin": "hide.exe",

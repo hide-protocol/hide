@@ -34,7 +34,7 @@ const DETACHED_CONTEXT: &[u8] = b"HIDE/0.5 detached";
 #[command(
     name = "hide",
     version,
-    about = "HIDE Interop Zero: experimental file and message encryption, not for sensitive data"
+    about = "HIDE: experimental file encryption, signing and identity; not for sensitive data"
 )]
 struct Arguments {
     #[arg(
@@ -191,11 +191,11 @@ fn main() -> ExitCode {
 
 fn run(arguments: Arguments) -> Result<()> {
     if !arguments.experimental {
-        return Err("pass --experimental; HIDE/0.1 is unaudited and not for sensitive data".into());
+        return Err("pass --experimental; HIDE/0.5 is unaudited and not for sensitive data".into());
     }
     if !arguments.quiet {
         eprintln!(
-            "WARNING: experimental, unaudited HIDE/0.1. No identity verification or sender authentication."
+            "WARNING: experimental, unaudited HIDE/0.5. A signature attests to a key, not to a person."
         );
     }
     match arguments.command {

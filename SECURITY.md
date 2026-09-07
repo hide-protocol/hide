@@ -1,6 +1,6 @@
 # Security Policy
 
-## HIDE/0.1 is experimental — do not protect real data with it
+## HIDE/0.5 is experimental — do not protect real data with it
 
 The protocol is a draft, the implementation is unaudited, and no external
 security review has taken place. The hybrid KEM follows IETF drafts that are
@@ -12,8 +12,10 @@ The CLI requires `--experimental` for this reason.
 
 Reporting these is welcome, but they are known and documented, not new findings:
 
-- **No sender authentication.** A successful decryption proves the container was
-  not altered. It does not prove who produced it.
+- **No sender authentication unless the container is signed.** A successful
+  decryption proves the container was not altered; for an unsigned container it
+  does not prove who produced it. A signature attests to a *key*, and nothing
+  binds that key to a person.
 - **No identity binding.** Recipient keys are raw files. Nothing links a key to a
   person; there is no directory and no key transparency.
 - **No forward secrecy.** Anyone who later obtains a recipient secret can decrypt
@@ -27,6 +29,17 @@ Reporting these is welcome, but they are known and documented, not new findings:
   backdoor. Losing it destroys access to everything encrypted to that key.
 - **Metadata is encrypted, not hidden.** Ciphertext size and recipient count
   remain observable.
+- **SSH authentication is not post-quantum.** `hide agent` offers the Ed25519
+  half of an identity only: OpenSSH accepts just `ssh-ed25519`, `sk-*` and RSA
+  for user authentication, and post-quantum algorithms exist there solely in key
+  exchange. It avoids a plaintext private key on disk; it does not make an SSH
+  login quantum-resistant.
+- **An agent is a signing oracle.** Anything that can reach the endpoint can
+  request a signature, which is why confirmation is the default and
+  `--no-confirm` must be asked for. On Unix the socket is created mode `0600`.
+- **Replay is only detectable by the verifier.** A replayed challenge answer is
+  a genuine signature; nothing about it is invalid in isolation. A verifier that
+  does not keep the record of spent nonces gains nothing over a plain signature.
 
 ## Reporting a vulnerability
 
