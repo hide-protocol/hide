@@ -29,6 +29,11 @@ rather than opening them with the signature silently ignored.
   unless `--no-confirm` is passed.
 - **`hide ssh-key`** prints the OpenSSH public line for `authorized_keys` or
   GitHub.
+- **Challenge–response** (`hide-sign`): a verifier issues a random nonce bound
+  to an audience and an expiry, and the prover signs it. Unlike a detached
+  signature, an answer cannot be replayed to another service or reused later.
+  `SpentNonces` records what has been answered and forgets entries once expiry
+  alone would refuse them.
 
 ### Changed
 

@@ -33,9 +33,9 @@ P4.5,4,task,OpenSSH signs and verifies through the agent,done,P4.3,apps/hide-cli
 P4.6,4,task,Confirmation is required by default,done,P4.3,apps/hide-cli,Refusing yields "agent refused operation" and no signature,--no-confirm opts out
 P4.7,4,task,Agent invariants survive mutation testing,done,P4.5,apps/hide-cli,6/6 mutations detected,Two survivors were real gaps and were fixed
 P4.8,4,task,Verified against GitHub with a real account,blocked,P4.5,apps/hide-cli,,Needs the user to add the key at github.com/settings/keys
-P5.1,5,task,"Challenge: random nonce, audience, expiry",not-started,P1.4,crates/hide-sign,,
-P5.2,5,task,Domain separation so a challenge cannot be replayed as a container signature,not-started,P5.1,crates/hide-sign,,
-P5.3,5,task,Reject a stale or reused challenge,not-started,P5.2,crates/hide-sign,,
+P5.1,5,task,"Challenge: random nonce, audience, expiry",done,P1.4,crates/hide-sign,cargo test -p hide-sign (15 challenge tests),32-byte nonce; every field length-prefixed
+P5.2,5,task,Domain separation so a challenge cannot be replayed as a container signature,done,P1.4,crates/hide-sign,Tested both ways: detached sig is not an answer and an answer is not a detached sig,
+P5.3,5,task,Reject a stale or reused challenge,done,P1.4,crates/hide-sign,9/9 mutations detected,An expired answer must not spend the nonce
 P6.1,6,task,"C ABI: sign, verify, identity handles",not-started,P5.3,crates/hide-ffi,,Panic-safe boundary as with the rest
 P6.2,6,task,Python binding,not-started,P6.1,sdk/python,,
 P6.3,6,task,Node binding,not-started,P6.1,sdk/node,,

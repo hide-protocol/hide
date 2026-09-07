@@ -262,6 +262,32 @@ prefix was caught later by the key comparison, and an absurd framed length was
 caught by end-of-file rather than by the bound. Naming the cause in the
 assertion, and testing the reader directly, killed both.
 
+### P5 — challenge–response
+
+148 workspace tests, clippy clean, 9/9 mutations detected on the first run.
+
+**What a plain signature cannot do.** A detached signature proves possession at
+*some* point, to *nobody in particular*. Captured, it logs an attacker in
+anywhere the same key is accepted. A challenge fixes the three missing facts: a
+random nonce, so the answer cannot predate the question; an audience, so an
+answer given to one service is worthless at another; and an expiry, so an old
+answer dies. All three are signed, and every field is length-prefixed so no two
+challenges can produce the same bytes by shifting a boundary.
+
+**Only the verifier can detect a replay.** The nonce makes a repeat visible,
+but nothing about a replayed answer is invalid on its own — the signature is
+genuine. `SpentNonces` is therefore the load-bearing part, and it is kept by the
+verifier because a prover has no reason to co-operate. Entries are dropped once
+expiry alone would refuse them, so a long-lived verifier does not grow forever.
+
+**Order matters: check expiry before spending the nonce.** Otherwise a hostile
+party could send expired answers to burn nonces belonging to live challenges.
+A mutation that reorders exactly this is in the suite.
+
+Domain separation is tested in *both* directions: a detached signature must not
+authenticate a login, and answering a challenge must not hand out something
+that verifies over a file.
+
 ---
 
 ## Rules that apply to this milestone

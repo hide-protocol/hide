@@ -26,6 +26,9 @@ use sha2::Sha256;
 use thiserror::Error;
 use zeroize::Zeroizing;
 
+mod challenge;
+pub use challenge::{Challenge, ChallengeError, NONCE_LENGTH, SpentNonces};
+
 /// The seed an identity is stored and backed up as.
 pub const SEED_LENGTH: usize = 32;
 
@@ -59,6 +62,8 @@ pub enum SignError {
     },
     #[error("verifying key is malformed")]
     MalformedKey,
+    #[error("challenge is malformed")]
+    MalformedChallenge,
     #[error("operating-system randomness failed")]
     Random,
 }
