@@ -1,0 +1,23 @@
+[package]
+name = "hide-transparency"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+keywords.workspace = true
+categories.workspace = true
+publish.workspace = true
+description = "Append-only transparency log with inclusion and consistency proofs for HIDE"
+
+[dependencies]
+sha2.workspace = true
+thiserror.workspace = true
+minicbor.workspace = true
+
+[dev-dependencies]
+proptest.workspace = true
+
+[lints]
+workspace = true

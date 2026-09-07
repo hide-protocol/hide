@@ -586,6 +586,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "hide-transparency"
+version = "0.5.0"
+dependencies = [
+ "minicbor",
+ "proptest",
+ "sha2",
+ "thiserror",
+]
+
+[[package]]
 name = "hide-wasm"
 version = "0.5.0"
 dependencies = [
