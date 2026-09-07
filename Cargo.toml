@@ -37,6 +37,11 @@ base64 = "=0.23.1"
 ed25519-dalek = { version = "=3.0.0", default-features = false, features = ["alloc", "fast", "zeroize"] }
 ml-dsa = { version = "=0.1.1", default-features = false, features = ["alloc"] }
 interprocess = "=2.4.4"
+# RFC 9420 group messaging. No third-party audit yet, which is stated in the
+# README; HIDE adds no cryptography of its own on top.
+mls-rs = "=0.56.0"
+mls-rs-core = "=0.27.0"
+mls-rs-crypto-rustcrypto = "=0.22.1"
 
 [workspace.lints.rust]
 unsafe_code = "forbid"

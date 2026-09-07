@@ -1,0 +1,23 @@
+[package]
+name = "hide-mls"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+keywords.workspace = true
+categories.workspace = true
+publish.workspace = true
+description = "Group messaging for HIDE identities over MLS (RFC 9420)"
+
+[dependencies]
+hide-identity = { path = "../hide-identity", version = "0.5.0" }
+hide-sign = { path = "../hide-sign", version = "0.5.0" }
+mls-rs.workspace = true
+mls-rs-core.workspace = true
+mls-rs-crypto-rustcrypto.workspace = true
+thiserror.workspace = true
+
+[lints]
+workspace = true
