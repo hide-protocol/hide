@@ -430,6 +430,29 @@ exists on the registry, so `hide-sign` onward can only be proved by the real
 sequential publish. `hide-format` and `hide-crypto`, which depend on nothing
 internal, both package cleanly.
 
+### P8.5 — the first real publish
+
+**PyPI carries 0.5.0 with three genuinely distinct wheels** —
+`manylinux_2_28_x86_64`, `win_amd64` and `macosx_11_0_arm64`, of three
+different sizes. Without the retag they would have shared one filename and one
+platform's binary would have been served to everyone; this is the fix proved in
+production rather than in a dry run. NuGet published in the same run.
+
+Three jobs failed, for three unrelated reasons, none of them a fault in the
+packages themselves:
+
+**crates.io permits one new crate per ten minutes.** Five of seven published,
+then a 429. A dry run cannot surface this, because a dry run uploads nothing.
+The loop now waits the limit out and retries, and skips any crate whose version
+is already on the registry — a half-published set cannot be undone, so a rerun
+must be able to continue rather than start again.
+
+**`npm publish --provenance` needs `id-token: write`.** The job had no
+`permissions` block, so it packed successfully and then refused to upload.
+
+**RubyGems requires the owner to have MFA enabled** before a new version can be
+pushed. Nothing in the repository can fix that.
+
 ---
 
 ## Rules that apply to this milestone

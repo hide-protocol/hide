@@ -94,8 +94,23 @@ jobs:
               else
                 echo "$out"
               fi
+            elif cargo search "$crate" --limit 1 | grep -q "^$crate = \"${{ inputs.version }}\""; then
+              echo "::notice::$crate ${{ inputs.version }} is already on crates.io, skipping"
             else
-              cargo publish $flags -p "$crate"
+              # crates.io permits one NEW crate per 10 minutes. A set this size
+              # cannot be published in one pass without waiting it out, and a
+              # half-published set cannot be undone.
+              for attempt in 1 2 3 4 5 6 7; do
+                if out=$(cargo publish $flags -p "$crate" 2>&1); then
+                  echo "$out"; break
+                fi
+                echo "$out"
+                echo "$out" | grep -q '429 Too Many Requests' \
+                  || { echo "::error::$crate failed for a reason other than the rate limit"; exit 1; }
+                echo "::notice::rate limited on $crate, waiting 10 minutes (attempt $attempt)"
+                [ "$attempt" = 7 ] && { echo "::error::still rate limited after 7 attempts"; exit 1; }
+                sleep 620
+              done
               # crates.io needs a moment before a dependent crate can resolve it.
               sleep 30
             fi
@@ -202,6 +217,10 @@ jobs:
     if: inputs.npm
     runs-on: ubuntu-24.04
     environment: npm
+    # --provenance signs the package with an OIDC token from this run.
+    permissions:
+      id-token: write
+      contents: read
     steps:
       - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
