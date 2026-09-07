@@ -35,6 +35,8 @@ proptest = "=1.11.0"
 argon2 = { version = "=0.6.0", features = ["alloc"] }
 rpassword = "=7.5.4"
 base64 = "=0.23.1"
+ed25519-dalek = { version = "=3.0.0", default-features = false, features = ["alloc", "fast", "zeroize"] }
+ml-dsa = { version = "=0.1.1", default-features = false, features = ["alloc"] }
 
 [workspace.lints.rust]
 unsafe_code = "forbid"

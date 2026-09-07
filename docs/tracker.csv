@@ -1,0 +1,45 @@
+id,phase,type,title,status,depends_on,surface,evidence,notes
+D1,0,decision,Signature scheme: hybrid Ed25519 + ML-DSA-65,decided,,design,docs/TRACKER.md,Both halves must verify; consistent with the hybrid KEM
+D2,0,decision,SSH via an agent offering the Ed25519 half,decided,D1,design,docs/TRACKER.md,OpenSSH user auth has no post-quantum signature type
+D3,0,decision,Scope covers all eight SDKs,decided,,design,docs/TRACKER.md,Avoids shipping a core the bindings cannot reach
+D4,0,decision,Signing key separate from the encryption key,decided,,design,docs/TRACKER.md,One seed derives both; compromise of one does not imply the other
+S1,0,story,Sign a container so the recipient learns who sent it,not-started,P2,cli,,
+S2,0,story,git push authenticated by a key never in plaintext on disk,not-started,P4,agent,,
+S3,0,story,Challenge-response login with no shared secret,not-started,P5,sdk,,
+S4,0,story,Every SDK returns a byte-identical verdict,not-started,P6,sdk,,
+P1.1,1,task,hide-sign crate scaffold and dependency pinning,done,D1,crates/hide-sign,cargo clippy --workspace --all-targets --all-features -- -D warnings (exit 0),ed25519-dalek 3.0.0 and ml-dsa 0.1.1; an earlier note said 0.2.0 which does not exist
+P1.2,1,task,SigningSecret / VerifyingPublic with zeroize and no Debug,done,P1.1,crates/hide-sign,cargo test -p hide-sign --doc (2 compile_fail doctests assert no Debug/Clone),VerifyingIdentity derives PartialEq only; ml_dsa::VerifyingKey has no Eq
+P1.3,1,task,Derive both halves from one 32-byte seed,done,P1.2,crates/hide-sign,cargo test -p hide-sign the_derived_halves_match_frozen_bytes,Domain-separated HKDF per half; both halves pinned to frozen bytes
+P1.4,1,task,sign and verify; reject when either half fails,done,P1.3,crates/hide-sign,cargo test -p hide-sign (15 passed) + .copilot-tmp/mutate-sign.ps1 (7/7 mutations DETECTED),The central invariant of the hybrid
+P1.5,1,task,Known-answer tests against RFC 8032 and FIPS-204,in-progress,P1.4,crates/hide-sign,cargo test -p hide-sign a_small_order_ed25519_key_is_rejected,ed25519-speccheck case 1 pinned; FIPS-204 ML-DSA KATs still to add
+P1.6,1,task,Frozen signature vectors,not-started,P1.4,conformance/vectors,,Deterministic seed; a change here is a format change
+P2.1,2,task,Signature stanza in the CBOR wire format,not-started,P1.4,crates/hide-format,,Canonical bounded parsing as everywhere else
+P2.2,2,task,Sign the header hash and bind it to the object id,not-started,P2.1,crates/hide-object,,Prevents transplanting a signature onto another container
+P2.3,2,task,Verify before any plaintext is published,not-started,P2.2,crates/hide-object,,
+P2.4,2,task,An unsigned container still opens,not-started,P2.3,crates/hide-object,,0.4.0 containers must keep working
+P2.5,2,task,spec/hide-0.1.md documents the signature stanza,not-started,P2.4,spec,,
+P3.1,3,task,hide keygen also produces a signing identity,not-started,P2.4,apps/hide-cli,,
+P3.2,3,task,hide sign and hide verify for detached signatures,not-started,P3.1,apps/hide-cli,,
+P3.3,3,task,hide encrypt --sign,not-started,P3.1,apps/hide-cli,,
+P3.4,3,task,hide open reports the signer,not-started,P3.3,apps/hide-cli,,Must not imply identity binding
+P4.1,4,task,ssh-agent protocol: request and response framing,not-started,P1.4,apps/hide-cli,,ssh-encoding 0.3.0
+P4.2,4,task,REQUEST_IDENTITIES and SIGN_REQUEST over Ed25519,not-started,P4.1,apps/hide-cli,,
+P4.3,4,task,Unix socket and Windows named pipe transport,not-started,P4.2,apps/hide-cli,,
+P4.4,4,task,hide ssh-key exports an OpenSSH public key,not-started,P1.4,apps/hide-cli,,
+P4.5,4,task,Verified against a real sshd and against GitHub,not-started,P4.3,apps/hide-cli,,Empirical or it does not count
+P5.1,5,task,Challenge: random nonce, audience, expiry,not-started,P1.4,crates/hide-sign,,
+P5.2,5,task,Domain separation so a challenge cannot be replayed as a container signature,not-started,P5.1,crates/hide-sign,,
+P5.3,5,task,Reject a stale or reused challenge,not-started,P5.2,crates/hide-sign,,
+P6.1,6,task,C ABI: sign, verify, identity handles,not-started,P5.3,crates/hide-ffi,,Panic-safe boundary as with the rest
+P6.2,6,task,Python binding,not-started,P6.1,sdk/python,,
+P6.3,6,task,Node binding,not-started,P6.1,sdk/node,,
+P6.4,6,task,Go binding,not-started,P6.1,sdk/go,,
+P6.5,6,task,Java binding,not-started,P6.1,sdk/java,,
+P6.6,6,task,Ruby binding,not-started,P6.1,sdk/ruby,,
+P6.7,6,task,PHP binding,not-started,P6.1,sdk/php,,
+P6.8,6,task,.NET binding,not-started,P6.1,sdk/dotnet,,
+P6.9,6,task,WASM binding,not-started,P1.4,crates/hide-wasm,,Binds the crates directly; cannot use the C FFI
+P6.10,6,task,Cross-surface: every surface verifies every other's signature,not-started,P6.9,conformance/cross-surface,,Must fail rather than skip
+P7.1,7,task,README and SECURITY state the SSH limitation plainly,not-started,P6.10,docs,,No claim of post-quantum SSH
+P7.2,7,task,CHANGELOG and version bump across every surface,not-started,P7.1,repo,,
+P7.3,7,task,Tag v0.5.0 and verify the published artifacts,not-started,P7.2,release,,Download, checksum, run

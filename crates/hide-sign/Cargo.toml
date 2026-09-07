@@ -1,0 +1,32 @@
+[package]
+name = "hide-sign"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+keywords.workspace = true
+categories.workspace = true
+publish.workspace = true
+description = "Hybrid Ed25519 + ML-DSA-65 signatures for the HIDE protocol"
+
+[dependencies]
+hide-crypto = { path = "../hide-crypto" }
+ed25519-dalek.workspace = true
+ml-dsa.workspace = true
+hkdf.workspace = true
+sha2.workspace = true
+thiserror.workspace = true
+zeroize.workspace = true
+getrandom.workspace = true
+
+[dev-dependencies]
+proptest.workspace = true
+
+[features]
+# Deterministic construction from a fixed seed, for generating frozen vectors.
+test-vectors = []
+
+[lints]
+workspace = true
