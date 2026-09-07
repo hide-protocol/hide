@@ -2,12 +2,13 @@
 # Fast gate (~3 s warm): formatting and lint only. Tests run on pre-push.
 # Skips entirely when no Rust or manifest file is staged.
 
-staged=$(git diff --cached --name-only --diff-filter=ACMR)
-
-case "$staged" in
-  *.rs|*Cargo.toml|*Cargo.lock|*rust-toolchain.toml) ;;
-  *) echo "pre-commit: no Rust changes staged, skipping"; exit 0 ;;
-esac
+# Match per line. A `case` on the whole multi-line list only ever tests the
+# last path, so staging a .rs file followed by a .md file skipped the gate.
+if ! git diff --cached --name-only --diff-filter=ACMR \
+  | grep -qE '(\.rs|Cargo\.toml|Cargo\.lock|rust-toolchain\.toml)$'; then
+  echo "pre-commit: no Rust changes staged, skipping"
+  exit 0
+fi
 
 start=$(date +%s)
 
