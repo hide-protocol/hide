@@ -506,6 +506,47 @@ mod tests {
         );
     }
 
+    /// RFC 8032 section 7.1, TEST 3. Proves ed25519-dalek is wired to the
+    /// standard, not merely self-consistent.
+    #[test]
+    fn the_classical_half_matches_rfc_8032() {
+        let secret = hex("c5aa8df43f9f837bedb7442f31dcb7b166d38535076f094b85ce3a2e0b4458f7");
+        let message = hex("af82");
+        let expected = hex(
+            "6291d657deec24024827e69c3abe01a30ce548a284743a445e3680d7db5ac3ac\
+             18ff9b538d16f290ae67f760984dc6594a7c15e9716ed28dc027beceea1ec40a",
+        );
+
+        let signing = EdSigningKey::from_bytes(&secret.try_into().expect("32-byte seed"));
+        assert_eq!(
+            signing.sign(&message).to_bytes()[..],
+            expected[..],
+            "Ed25519 does not match RFC 8032"
+        );
+    }
+
+    /// NIST ACVP ML-DSA keyGen, ML-DSA-65, tcId 26. Proves the ml-dsa crate
+    /// implements FIPS-204 with the parameter set this code selects; a silent
+    /// swap to ML-DSA-44 or -87 would change these bytes.
+    #[test]
+    fn the_quantum_half_matches_fips_204() {
+        let seed = hex("A991FD42B071D49C48AE3E75C647459E0DAAD1E1BA356A04801912D3294BCFF8");
+        let seed: [u8; 32] = seed.try_into().expect("32 bytes");
+        let signing = MlSigningKey::<MlDsa65>::new((&seed).into());
+        let public = signing.verifying_key().encode();
+
+        assert_eq!(
+            public.len(),
+            ML_DSA_PUBLIC_LEN,
+            "wrong ML-DSA parameter set"
+        );
+        assert_eq!(
+            &public[..32],
+            &hex("36DB0B5DCE98BD190CB139E80B71B49C7D7040B71C5A1F3412C46BDE939192B1")[..],
+            "ML-DSA-65 does not match the NIST vector"
+        );
+    }
+
     #[test]
     fn a_context_change_alone_invalidates() {
         let signing = identity();

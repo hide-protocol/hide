@@ -11,8 +11,8 @@ P1.1,1,task,hide-sign crate scaffold and dependency pinning,done,D1,crates/hide-
 P1.2,1,task,SigningSecret / VerifyingPublic with zeroize and no Debug,done,P1.1,crates/hide-sign,cargo test -p hide-sign --doc (2 compile_fail doctests assert no Debug/Clone),VerifyingIdentity derives PartialEq only; ml_dsa::VerifyingKey has no Eq
 P1.3,1,task,Derive both halves from one 32-byte seed,done,P1.2,crates/hide-sign,cargo test -p hide-sign the_derived_halves_match_frozen_bytes,Domain-separated HKDF per half; both halves pinned to frozen bytes
 P1.4,1,task,sign and verify; reject when either half fails,done,P1.3,crates/hide-sign,cargo test -p hide-sign (15 passed) + .copilot-tmp/mutate-sign.ps1 (7/7 mutations DETECTED),The central invariant of the hybrid
-P1.5,1,task,Known-answer tests against RFC 8032 and FIPS-204,in-progress,P1.4,crates/hide-sign,cargo test -p hide-sign a_small_order_ed25519_key_is_rejected,ed25519-speccheck case 1 pinned; FIPS-204 ML-DSA KATs still to add
-P1.6,1,task,Frozen signature vectors,not-started,P1.4,conformance/vectors,,Deterministic seed; a change here is a format change
+P1.5,1,task,Known-answer tests against RFC 8032 and FIPS-204,done,P1.4,crates/hide-sign,cargo test -p hide-sign (RFC 8032 TEST 3 + NIST ACVP ML-DSA-65 tcId 26 + ed25519-speccheck case 1),Proves both crates match the standards rather than only themselves
+P1.6,1,task,Frozen signature vectors,done,P1.4,conformance/vectors,cargo test -p hide-sign --test vectors (3 passed); regeneration verified byte-identical,"Seed 0x55; signing is deterministic, so no test-vectors feature is needed"
 P2.1,2,task,Signature stanza in the CBOR wire format,not-started,P1.4,crates/hide-format,,Canonical bounded parsing as everywhere else
 P2.2,2,task,Sign the header hash and bind it to the object id,not-started,P2.1,crates/hide-object,,Prevents transplanting a signature onto another container
 P2.3,2,task,Verify before any plaintext is published,not-started,P2.2,crates/hide-object,,

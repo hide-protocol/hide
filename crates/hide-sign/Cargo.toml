@@ -24,9 +24,5 @@ getrandom.workspace = true
 [dev-dependencies]
 proptest.workspace = true
 
-[features]
-# Deterministic construction from a fixed seed, for generating frozen vectors.
-test-vectors = []
-
 [lints]
 workspace = true
