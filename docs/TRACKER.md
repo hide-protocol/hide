@@ -261,6 +261,13 @@ agent stopped, because this machine authorises no key for this account. That is
 the environment, not the agent, and it is why the evidence above uses OpenSSH's
 own signing tools, which exercise the identical code path.
 
+Later confirmed against **GitHub** with a real account: `ssh -T git@github.com`
+returns *"Hi dragoscv! You've successfully authenticated"*, with no private key
+file on disk. That run also found a usability trap worth fixing: OpenSSH for
+Windows 9.5p2 **ignores `-o IdentityAgent`** — the key is simply never offered,
+and the failure looks like a rejection rather than a missing option. Only
+`SSH_AUTH_SOCK` works, so the agent now prints that on both platforms.
+
 **Two mutation survivors that WERE gaps.** Unlike P3, both were real. The tests
 asserted the right outcome through the wrong code path: an over-long string
 prefix was caught later by the key comparison, and an absurd framed length was

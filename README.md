@@ -185,8 +185,10 @@ cargo run -p hide-cli -- --experimental ssh-key --secret alice.hide-key
 cargo run -p hide-cli -- --experimental agent --secret alice.hide-key
 ```
 
-Then point SSH at it — `export SSH_AUTH_SOCK=/tmp/hide-agent.sock` on Unix, or
-`ssh -o IdentityAgent=\\.\pipe\hide-agent` on Windows.
+Then point SSH at it with `SSH_AUTH_SOCK` — the socket path on Unix, the pipe
+path on Windows (`$env:SSH_AUTH_SOCK = '\\.\pipe\hide-agent'`). OpenSSH for
+Windows 9.5p2 ignores `-o IdentityAgent`, so use the environment variable on
+both platforms.
 
 This offers the Ed25519 half of the identity only. SSH cannot carry the post-quantum half, so an SSH
 login is not post-quantum; what it avoids is a plaintext private key on disk. Treat the endpoint as

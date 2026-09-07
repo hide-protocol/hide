@@ -8,8 +8,10 @@ use crate::agent::{Agent, Approver, serve};
 
 /// What a client must be told to reach this agent.
 pub fn advice(endpoint: &str) -> String {
+    // OpenSSH for Windows 9.5p2 ignores -o IdentityAgent, so both platforms
+    // are told to use the environment variable.
     if cfg!(windows) {
-        format!("ssh -o IdentityAgent={endpoint} ...")
+        format!("set SSH_AUTH_SOCK to {endpoint} (PowerShell: $env:SSH_AUTH_SOCK = '{endpoint}')")
     } else {
         format!("export SSH_AUTH_SOCK={endpoint}")
     }
