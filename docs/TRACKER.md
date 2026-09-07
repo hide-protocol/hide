@@ -345,6 +345,30 @@ The header is hand-written, so a Rust test now reads `hide.h` and asserts every
 constant against the Rust definition. The C round-trip only covers constants it
 happens to exercise, and is skipped where no C compiler exists.
 
+### P8 — making the pipeline cheap
+
+Per-job medians said the Windows desktop release job took 833s and suggested
+nothing actionable. Per-step timings said one step took 481s. `gh run view --json
+jobs` carries `steps[]` with timestamps; drilling in is what turned a vague
+"CI is slow" into three specific causes.
+
+**A feature flag was costing a full cold rebuild, twice per release.** The
+portable executable differs from the installer only by `--features portable`,
+and cargo treats a feature change as invalidating every artifact of the other
+build. Sharing one target directory meant each one forced the other to compile
+from scratch, every time. They now use separate target directories, both
+cached: an installer rebuild after a portable build fell from 72s to 1s. The
+two binaries are still distinct, and only the portable one carries the portable
+window title — worth checking, because a path mistake here would ship an
+installer build labelled "portable".
+
+**The release was re-proving what CI already proved**, on three platforms.
+CLI/desktop interoperability now runs once, on Linux, in the release profile.
+
+**`workflow_dispatch` could have published a release.** Dispatching Release is
+how the build matrix gets exercised without cutting a tag; without a guard on
+the publish job, that test would have created a release named after the branch.
+
 ---
 
 ## Rules that apply to this milestone

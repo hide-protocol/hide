@@ -51,3 +51,4 @@ P7.1,7,task,README and SECURITY state the SSH limitation plainly,done,P6.10,docs
 P7.2,7,task,CHANGELOG and version bump across every surface,done,P7.1,repo,hide --version reports 0.5.0; 13 manifests bumped,
 P7.3,7,task,Tag v0.5.0 and verify the published artifacts,done,P7.2,release,"15 assets, 14/14 checksums match, published hide 0.5.0 signs and verifies and OpenSSH reads its exported key","CI green on all 9 jobs before tagging"
 P8.1,8,task,Measure CI and cut the waste the numbers point at,done,P7.3,.github/workflows,"supply-chain 190s -> 13s measured on run 34092236157","Tags no longer duplicate CI; release desktop caches both workspaces"
+P8.2,8,task,Cut the release desktop job: portable build no longer thrashes the cargo cache,done,P8.1,.github/workflows,"installer rebuild after a portable build 72s -> 1s measured locally; binaries verified distinct",481s of the 833s Windows job was one duplicated step
