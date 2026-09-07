@@ -99,6 +99,7 @@ jobs:
               # size cannot go out in one pass. A half-published set cannot be
               # undone, so a rerun must skip what is already up rather than
               # start over: cargo's own error is the authority on that.
+              published=yes
               for attempt in 1 2 3 4 5 6 7; do
                 if out=$(cargo publish $flags -p "$crate" 2>&1); then
                   echo "$out"; break
@@ -107,7 +108,7 @@ jobs:
                 case "$out" in
                   *"already exists on crates.io index"*)
                     echo "::notice::$crate ${{ inputs.version }} is already published, skipping"
-                    break ;;
+                    published=no; break ;;
                   *"429 Too Many Requests"*) ;;
                   *) echo "::error::$crate failed for a reason other than the rate limit"; exit 1 ;;
                 esac
@@ -116,7 +117,7 @@ jobs:
                 sleep 620
               done
               # crates.io needs a moment before a dependent crate can resolve it.
-              sleep 30
+              if [ "$published" = yes ]; then sleep 30; fi
             fi
             echo "::endgroup::"
           done
