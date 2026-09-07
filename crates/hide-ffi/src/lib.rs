@@ -840,6 +840,303 @@ pub unsafe extern "C" fn hide_challenge_accept(
     })
 }
 
+// ---------------------------------------------------------------------------
+// Identity logs
+// ---------------------------------------------------------------------------
+
+/// A log or chain is public and can be large; this only stops a hostile length
+/// from exhausting memory.
+const MAX_LOG_BYTES: usize = 16 * 1024 * 1024;
+
+/// Replays an identity log and reports how many devices it trusts now.
+///
+/// Returns `HIDE_ERR_MALFORMED` for a log that does not decode, and
+/// `HIDE_ERR_AUTHENTICATION` for one that decodes but does not verify — the
+/// distinction a caller needs to tell corruption from forgery.
+///
+/// # Safety
+/// All pointers must be valid for the stated lengths.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn hide_identity_verify(
+    log: *const u8,
+    log_len: usize,
+    recovery: *const u8,
+    recovery_len: usize,
+    out_devices: *mut usize,
+) -> i32 {
+    guard(|| {
+        if out_devices.is_null() {
+            return HIDE_ERR_INVALID_ARGUMENT;
+        }
+        let Some(log_bytes) = (unsafe { borrow(log, log_len, MAX_LOG_BYTES) }) else {
+            return HIDE_ERR_INVALID_ARGUMENT;
+        };
+        let Some(recovery_bytes) = (unsafe { borrow(recovery, recovery_len, MAX_KEY_FILE) }) else {
+            return HIDE_ERR_INVALID_ARGUMENT;
+        };
+        let Ok(recovery_key) = hide_sign::VerifyingIdentity::from_bytes(recovery_bytes) else {
+            return HIDE_ERR_NOT_A_KEY;
+        };
+        let Ok(entries) = hide_identity::decode(log_bytes) else {
+            return HIDE_ERR_MALFORMED;
+        };
+        let Ok(membership) = hide_identity::IdentityLog::verify(&entries, &recovery_key) else {
+            return HIDE_ERR_AUTHENTICATION;
+        };
+        unsafe { *out_devices = membership.len() };
+        HIDE_OK
+    })
+}
+
+/// Whether a log trusts a device right now. `out_trusted` is set to 1 or 0.
+///
+/// # Safety
+/// All pointers must be valid for the stated lengths.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn hide_identity_trusts_device(
+    log: *const u8,
+    log_len: usize,
+    recovery: *const u8,
+    recovery_len: usize,
+    device_public: *const u8,
+    device_public_len: usize,
+    out_trusted: *mut i32,
+) -> i32 {
+    guard(|| {
+        if out_trusted.is_null() {
+            return HIDE_ERR_INVALID_ARGUMENT;
+        }
+        let Some(log_bytes) = (unsafe { borrow(log, log_len, MAX_LOG_BYTES) }) else {
+            return HIDE_ERR_INVALID_ARGUMENT;
+        };
+        let Some(recovery_bytes) = (unsafe { borrow(recovery, recovery_len, MAX_KEY_FILE) }) else {
+            return HIDE_ERR_INVALID_ARGUMENT;
+        };
+        let Some(device_bytes) =
+            (unsafe { borrow(device_public, device_public_len, MAX_KEY_FILE) })
+        else {
+            return HIDE_ERR_INVALID_ARGUMENT;
+        };
+        let (Ok(recovery_key), Ok(device)) = (
+            hide_sign::VerifyingIdentity::from_bytes(recovery_bytes),
+            hide_sign::VerifyingIdentity::from_bytes(device_bytes),
+        ) else {
+            return HIDE_ERR_NOT_A_KEY;
+        };
+        let Ok(entries) = hide_identity::decode(log_bytes) else {
+            return HIDE_ERR_MALFORMED;
+        };
+        let Ok(membership) = hide_identity::IdentityLog::verify(&entries, &recovery_key) else {
+            return HIDE_ERR_AUTHENTICATION;
+        };
+        let trusted = membership.contains(&hide_identity::device_id(&device));
+        unsafe { *out_trusted = i32::from(trusted) };
+        HIDE_OK
+    })
+}
+
+/// The head of an identity log: one 32-byte value naming this exact history.
+///
+/// # Safety
+/// All pointers must be valid for the stated lengths.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn hide_identity_head(
+    log: *const u8,
+    log_len: usize,
+    recovery: *const u8,
+    recovery_len: usize,
+    out: *mut HideBuffer,
+) -> i32 {
+    guard(|| {
+        if out.is_null() {
+            return HIDE_ERR_INVALID_ARGUMENT;
+        }
+        let Some(log_bytes) = (unsafe { borrow(log, log_len, MAX_LOG_BYTES) }) else {
+            return HIDE_ERR_INVALID_ARGUMENT;
+        };
+        let Some(recovery_bytes) = (unsafe { borrow(recovery, recovery_len, MAX_KEY_FILE) }) else {
+            return HIDE_ERR_INVALID_ARGUMENT;
+        };
+        let Ok(recovery_key) = hide_sign::VerifyingIdentity::from_bytes(recovery_bytes) else {
+            return HIDE_ERR_NOT_A_KEY;
+        };
+        let Ok(entries) = hide_identity::decode(log_bytes) else {
+            return HIDE_ERR_MALFORMED;
+        };
+        let Ok(log) = hide_identity::IdentityLog::from_entries(entries, recovery_key) else {
+            return HIDE_ERR_AUTHENTICATION;
+        };
+        unsafe { *out = HideBuffer::from_vec(log.head().to_vec()) };
+        HIDE_OK
+    })
+}
+
+// ---------------------------------------------------------------------------
+// Epoch chains
+// ---------------------------------------------------------------------------
+
+/// Verifies a published epoch history and reports how many epochs it holds.
+///
+/// # Safety
+/// All pointers must be valid for the stated lengths.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn hide_epoch_verify(
+    chain: *const u8,
+    chain_len: usize,
+    out_epochs: *mut usize,
+) -> i32 {
+    guard(|| {
+        if out_epochs.is_null() {
+            return HIDE_ERR_INVALID_ARGUMENT;
+        }
+        let Some(bytes) = (unsafe { borrow(chain, chain_len, MAX_LOG_BYTES) }) else {
+            return HIDE_ERR_INVALID_ARGUMENT;
+        };
+        let Ok(records) = hide_epoch::decode_records(bytes) else {
+            return HIDE_ERR_MALFORMED;
+        };
+        if hide_epoch::EpochChain::verify(&records).is_err() {
+            return HIDE_ERR_AUTHENTICATION;
+        }
+        unsafe { *out_epochs = records.len() };
+        HIDE_OK
+    })
+}
+
+/// The public key a sender should encrypt to for a given epoch.
+///
+/// # Safety
+/// All pointers must be valid for the stated lengths.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn hide_epoch_public_key(
+    chain: *const u8,
+    chain_len: usize,
+    epoch: u64,
+    out: *mut HideBuffer,
+) -> i32 {
+    guard(|| {
+        if out.is_null() {
+            return HIDE_ERR_INVALID_ARGUMENT;
+        }
+        let Some(bytes) = (unsafe { borrow(chain, chain_len, MAX_LOG_BYTES) }) else {
+            return HIDE_ERR_INVALID_ARGUMENT;
+        };
+        let Ok(records) = hide_epoch::decode_records(bytes) else {
+            return HIDE_ERR_MALFORMED;
+        };
+        if hide_epoch::EpochChain::verify(&records).is_err() {
+            return HIDE_ERR_AUTHENTICATION;
+        }
+        let Some(record) = records.get(epoch as usize) else {
+            return HIDE_ERR_INVALID_ARGUMENT;
+        };
+        unsafe { *out = HideBuffer::from_vec(record.public_key.clone()) };
+        HIDE_OK
+    })
+}
+
+// ---------------------------------------------------------------------------
+// Transparency proofs
+// ---------------------------------------------------------------------------
+
+/// Checks an inclusion proof. `path` is the concatenated 32-byte hashes.
+///
+/// # Safety
+/// All pointers must be valid for the stated lengths.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn hide_transparency_verify_inclusion(
+    leaf: *const u8,
+    leaf_len: usize,
+    index: u64,
+    size: u64,
+    path: *const u8,
+    path_len: usize,
+    root: *const u8,
+    root_len: usize,
+) -> i32 {
+    guard(|| {
+        let (Some(leaf), Some(path_bytes), Some(root)) = (
+            unsafe { borrow(leaf, leaf_len, 32) },
+            unsafe { borrow(path, path_len, 64 * 32) },
+            unsafe { borrow(root, root_len, 32) },
+        ) else {
+            return HIDE_ERR_INVALID_ARGUMENT;
+        };
+        if leaf.len() != 32 || root.len() != 32 || path_bytes.len() % 32 != 0 {
+            return HIDE_ERR_INVALID_ARGUMENT;
+        }
+        let proof = hide_transparency::InclusionProof {
+            index,
+            size,
+            path: path_bytes
+                .chunks_exact(32)
+                .map(|chunk| {
+                    let mut hash = [0u8; 32];
+                    hash.copy_from_slice(chunk);
+                    hash
+                })
+                .collect(),
+        };
+        let (mut leaf_hash, mut root_hash) = ([0u8; 32], [0u8; 32]);
+        leaf_hash.copy_from_slice(leaf);
+        root_hash.copy_from_slice(root);
+
+        match hide_transparency::verify_inclusion(&proof, &leaf_hash, &root_hash) {
+            Ok(()) => HIDE_OK,
+            Err(_) => HIDE_ERR_AUTHENTICATION,
+        }
+    })
+}
+
+/// Checks a consistency proof: that `old_root` is the root the log had before
+/// it grew to `new_root`.
+///
+/// # Safety
+/// All pointers must be valid for the stated lengths.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn hide_transparency_verify_consistency(
+    old_size: u64,
+    new_size: u64,
+    path: *const u8,
+    path_len: usize,
+    old_root: *const u8,
+    old_root_len: usize,
+    new_root: *const u8,
+    new_root_len: usize,
+) -> i32 {
+    guard(|| {
+        let (Some(path_bytes), Some(old), Some(new)) = (
+            unsafe { borrow(path, path_len, 64 * 32) },
+            unsafe { borrow(old_root, old_root_len, 32) },
+            unsafe { borrow(new_root, new_root_len, 32) },
+        ) else {
+            return HIDE_ERR_INVALID_ARGUMENT;
+        };
+        if old.len() != 32 || new.len() != 32 || path_bytes.len() % 32 != 0 {
+            return HIDE_ERR_INVALID_ARGUMENT;
+        }
+        let proof = hide_transparency::ConsistencyProof {
+            old_size,
+            new_size,
+            path: path_bytes
+                .chunks_exact(32)
+                .map(|chunk| {
+                    let mut hash = [0u8; 32];
+                    hash.copy_from_slice(chunk);
+                    hash
+                })
+                .collect(),
+        };
+        let (mut old_hash, mut new_hash) = ([0u8; 32], [0u8; 32]);
+        old_hash.copy_from_slice(old);
+        new_hash.copy_from_slice(new);
+
+        match hide_transparency::verify_consistency(&proof, &old_hash, &new_hash) {
+            Ok(()) => HIDE_OK,
+            Err(_) => HIDE_ERR_AUTHENTICATION,
+        }
+    })
+}
 #[cfg(test)]
 mod tests {
     use std::ffi::CString;

@@ -169,6 +169,44 @@ int32_t hide_challenge_accept(HideSpentNonces *spent,
                               const uint8_t *public_key, size_t public_key_len,
                               uint64_t now);
 
+/* An identity is a signed, hash-linked log of device events. Replaying it
+ * yields the devices trusted now; a log that decodes but does not verify
+ * returns HIDE_ERR_AUTHENTICATION, distinct from HIDE_ERR_MALFORMED. */
+int32_t hide_identity_verify(const uint8_t *log, size_t log_len,
+                             const uint8_t *recovery, size_t recovery_len,
+                             size_t *out_devices);
+int32_t hide_identity_trusts_device(const uint8_t *log, size_t log_len,
+                                    const uint8_t *recovery, size_t recovery_len,
+                                    const uint8_t *device_public,
+                                    size_t device_public_len,
+                                    int32_t *out_trusted);
+/* 32 bytes naming this exact history. */
+int32_t hide_identity_head(const uint8_t *log, size_t log_len,
+                           const uint8_t *recovery, size_t recovery_len,
+                           HideBuffer *out);
+
+/* Epoch chains give forward security by erasure: a container written to an
+ * epoch becomes unreadable once that epoch's secret is destroyed. Only the
+ * public history is ever encodable. */
+int32_t hide_epoch_verify(const uint8_t *chain, size_t chain_len,
+                          size_t *out_epochs);
+int32_t hide_epoch_public_key(const uint8_t *chain, size_t chain_len,
+                              uint64_t epoch, HideBuffer *out);
+
+/* Transparency proofs. `path` is the concatenated 32-byte hashes. Consistency
+ * is the one that matters: it is what shows a published history was not
+ * rewritten. */
+int32_t hide_transparency_verify_inclusion(const uint8_t *leaf, size_t leaf_len,
+                                           uint64_t index, uint64_t size,
+                                           const uint8_t *path, size_t path_len,
+                                           const uint8_t *root, size_t root_len);
+int32_t hide_transparency_verify_consistency(uint64_t old_size, uint64_t new_size,
+                                             const uint8_t *path, size_t path_len,
+                                             const uint8_t *old_root,
+                                             size_t old_root_len,
+                                             const uint8_t *new_root,
+                                             size_t new_root_len);
+
 #ifdef __cplusplus
 } /* extern "C" */
 #endif

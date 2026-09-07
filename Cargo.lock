@@ -940,9 +940,12 @@ name = "hide-ffi"
 version = "0.5.0"
 dependencies = [
  "hide-crypto",
+ "hide-epoch",
+ "hide-identity",
  "hide-keyring",
  "hide-object",
  "hide-sign",
+ "hide-transparency",
  "zeroize",
 ]
 
