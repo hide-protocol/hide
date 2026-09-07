@@ -16,6 +16,22 @@ if ! cargo test --workspace --all-features; then
   exit 1
 fi
 
+# The desktop crate is deliberately outside the workspace, so the run above
+# cannot see it. It broke for three phases without anyone noticing locally,
+# and CI was the first to say so.
+if ! cargo clippy --manifest-path apps/hide-desktop/src-tauri/Cargo.toml \
+     --all-targets --all-features -- -D warnings; then
+  echo ""
+  echo "pre-push: the desktop crate does not lint. Push blocked."
+  exit 1
+fi
+
+if ! cargo test --manifest-path apps/hide-desktop/src-tauri/Cargo.toml; then
+  echo ""
+  echo "pre-push: desktop tests failed (CLI interoperability lives here)."
+  exit 1
+fi
+
 # The vectors are a frozen wire-format artifact; a diff here means the format
 # changed, which must be deliberate and documented in the spec.
 if ! git diff --quiet -- conformance/vectors; then

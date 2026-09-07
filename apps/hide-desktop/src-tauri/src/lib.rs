@@ -98,15 +98,12 @@ fn load_public(path: &Path) -> Result<RecipientPublic> {
 
 fn load_secret(path: &Path, passphrase: Option<&str>) -> Result<RecipientSecret> {
     let bytes = read_bounded(path, MAX_KEY_FILE)?;
-    match (hide_keyring::inspect(&bytes), passphrase) {
-        (KeyFormat::Raw, _) => {
-            RecipientSecret::from_bytes(&bytes).map_err(|error| fail("secret key", error))
-        }
-        (KeyFormat::Protected, Some(passphrase)) => {
-            hide_keyring::unprotect(&bytes, passphrase).map_err(|error| error.to_string())
-        }
-        (KeyFormat::Protected, None) => Err("this key is protected; enter its passphrase".into()),
+    if matches!(hide_keyring::inspect(&bytes), KeyFormat::Protected) && passphrase.is_none() {
+        return Err("this key is protected; enter its passphrase".into());
     }
+    // Goes through keyring::open so a key file means the same here as it does
+    // to the CLI and to every SDK: an unprotected file is a master seed.
+    hide_keyring::open(&bytes, passphrase).map_err(|error| error.to_string())
 }
 
 #[derive(Serialize)]
@@ -134,17 +131,22 @@ fn generate_keys(directory: String, name: String, passphrase: Option<String>) ->
     let secret_path = directory.join(format!("{name}.hide-key"));
     let public_path = directory.join(format!("{name}.hide-pub"));
 
-    let secret = RecipientSecret::generate().map_err(|error| fail("key generation", error))?;
-    let public = secret
+    // An identity, not a bare recipient key: one seed backs both encryption and
+    // signing, and every surface reads a key file this way.
+    let identity = hide_keyring::Identity::generate().map_err(|error| error.to_string())?;
+    let public = identity
+        .recipient_secret()
+        .map_err(|error| error.to_string())?
         .public_key()
         .map_err(|error| fail("key generation", error))?
         .to_bytes();
 
     let sealed = match passphrase.as_deref() {
         Some(passphrase) => {
-            hide_keyring::protect(&secret, passphrase).map_err(|error| error.to_string())?
+            hide_keyring::protect_identity(identity.expose_seed_for_sealing(), passphrase)
+                .map_err(|error| error.to_string())?
         }
-        None => secret.expose_seed_for_sealing().to_vec(),
+        None => identity.expose_seed_for_sealing().to_vec(),
     };
 
     // Write the public key first: if the secret cannot be written we abandon
@@ -186,6 +188,7 @@ fn encrypt_file(input: String, recipients: Vec<String>, output: String) -> Resul
     let metadata = Metadata {
         filename: Some(filename.into()),
         media_type: None,
+        signature: None,
     };
 
     let source = File::open(&input).map_err(|error| fail("could not open the input", error))?;
@@ -271,6 +274,7 @@ fn seal_message(message: String, recipients: Vec<String>) -> Result<String> {
     let metadata = Metadata {
         filename: None,
         media_type: Some("text/plain".into()),
+        signature: None,
     };
     let mut container = Vec::new();
     hide_object::encrypt(
