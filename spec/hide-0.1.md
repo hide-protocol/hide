@@ -136,3 +136,72 @@ published until verification succeeds as well.
 
 A signature attests to a key. Binding that key to a person needs a directory or transparency log,
 which HIDE does not yet provide.
+
+## 8. Identity logs (HIDE/0.6)
+
+An identity is not a key but an ordered log of events. Entry *n* is:
+
+```
+signed  = previous(32) || sequence(u32be) || tag(1) || signer(32)
+          || len(field, u64be) || field ...
+link    = SHA-256("HIDE/0.6 identity link"
+                  || len(signed, u64be)    || signed
+                  || len(signature, u64be) || signature)
+```
+
+The signature itself is over `signed` with the context label `"HIDE/0.6 identity entry"`.
+
+`previous` is the predecessor's `link`, and zero for entry 0. It is inside the signed bytes, so an
+entry cannot be transplanted into another log or reordered within its own: doing either changes the
+message that was signed.
+
+A device id is the full 32-byte `SHA-256("HIDE/0.6 device id" || verifying_key)`.
+
+Events are `Create`, `Enrol`, `Revoke` and `Recover`. Every field of variable length is preceded by its
+length, so no two distinct event sequences can serialise identically.
+
+**Authority is evaluated at the entry's position in the log, never against the final state.** A
+verifier replays from entry 0 and asks whether the signer was trusted *at that point*. This is what
+gives revocation meaning: a revoked device cannot re-enrol itself, cannot revoke the device that
+removed it, and cannot author anything that appears after its removal.
+
+Revocation is **not retroactive**. Entries signed before it remain valid, because invalidating them
+would invalidate every message the device ever sent. Only the offline recovery key may sign `Recover`,
+which replaces the entire device set.
+
+The log is public: verifying it requires no secret.
+
+## 9. Epoch chains (HIDE/0.6)
+
+Keys are grouped into epochs. Each record is:
+
+```
+link = SHA-256("HIDE/0.6 epoch chain" || previous(32) || number(u64be)
+               || len(public_key, u64be) || public_key)
+```
+
+`previous` is the preceding epoch's `link`, and zero for epoch 0.
+
+An epoch's secret is an **independent random key**, not derived from any master seed. This is the
+whole point: if epoch keys were derived, anyone who later obtained the seed could reconstruct the
+epochs that were supposedly erased, and there would be no forward security at all.
+
+Destroying an epoch's secret makes every container written to that epoch permanently unreadable — by
+everyone, including the intended recipient. The published chain still proves the epoch existed and
+where it sat in the order, which is what lets a reader distinguish "erased" from "never existed".
+
+## 10. Transparency (HIDE/0.6)
+
+Merkle hashing follows RFC 6962 exactly: leaves are prefixed `0x00` and interior nodes `0x01`, so a
+leaf can never be reinterpreted as a node. A subtree of *n* leaves splits at the largest power of two
+strictly below *n*, which makes a tree's shape a function of its size alone.
+
+A checkpoint is `size(u64be) || root(32)`. A root without its size commits to nothing checkable.
+
+Two proofs are defined. **Inclusion** shows an entry is in the log at a given size. **Consistency**
+shows the log of size *m* is a prefix of the log of size *n* — this is the one that matters, because
+it is what makes a rewritten history detectable rather than merely impolite.
+
+Neither proof detects a **split view**: two divergent logs are each internally consistent. Catching
+that requires independent witnesses who gossip roots and refuse to sign two roots for one size. No
+witnessing is specified here, and a log without it is a promise, not a proof.

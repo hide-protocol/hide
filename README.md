@@ -1,8 +1,9 @@
-# HIDE Protocol — 0.5, experimental
+# HIDE Protocol — 0.6, experimental
 
 *Human-friendly Identity & Data Encryption.* The goal is to encrypt to a person, not to a key.
-This repository implements the **file format engine** and a **hybrid signature scheme** on top of it:
-one identity can encrypt, sign a file, prove possession to a live verifier, and act as an ssh-agent.
+This repository implements the **file format engine**, a **hybrid signature scheme**, and the
+machinery an identity needs to outlive a single key: device enrollment and revocation, forward
+security by erasure, an auditable history, and group messaging over MLS.
 
 > **Do not use this for sensitive data.** The protocol is a draft, the code is unaudited, no
 > external security review has happened, and the hybrid KEM tracks a moving IETF draft.
@@ -31,6 +32,20 @@ Every claim below was produced by a command in this repository, on Rust 1.97.1.
   through it, and `ssh-keygen -Y verify` reports it good — verified by OpenSSH's own tools, not ours.
 - **Replay is refused**: a challenge answer is accepted once; presenting the identical valid signature
   again is rejected, as is one given for a different audience or after its expiry.
+- **Revocation means something**: an identity is a hash-linked log of device events, and authority is
+  evaluated at the point in the log where an entry appears rather than against the final state. A
+  revoked device cannot re-enrol itself, cannot revoke the device that removed it, and cannot rewrite
+  anything after its removal. Only an offline recovery key can replace the device set.
+- **Forward security by erasure**: keys are grouped into epochs, and destroying an epoch's secret makes
+  every container written to it unreadable — including by the intended recipient. Epoch secrets are
+  independent random keys, not derived from a master seed, because a derived chain would let anyone
+  holding the seed reconstruct what was supposedly erased.
+- **A rewritten history is detectable**: the transparency log answers RFC 6962 inclusion and consistency
+  proofs, swept over every size from 1 to 33 and every index. A log that alters or drops an entry it
+  already published cannot produce a consistency proof against the root it published before.
+- **Group messages survive revocation**: MLS proves a message came from a group member, but not that
+  the member's device is still trusted. `accept_from_trusted` refuses a message from a device the
+  identity revoked, even though MLS itself considers it a valid member.
 
 ## Measured performance
 
@@ -71,8 +86,22 @@ Being explicit here matters more than the feature list.
   instead of a plaintext private key sitting in `~/.ssh`, not quantum resistance.
 - **An agent is a signing oracle.** Anything that can reach the endpoint can ask for a signature.
   That is why confirmation is the default and `--no-confirm` must be asked for.
-- Not yet built: identity state, device enrollment, recovery, revocation, key transparency,
-  MLS messaging.
+- **Group messaging is not post-quantum.** `hide-mls` uses X25519, because MLS's post-quantum
+  ciphersuites are still an Internet-Draft and no Rust provider implements them. Object encryption
+  *is* hybrid post-quantum, so a group message and a sealed file are protected differently. The API
+  states this in `PQ_STATUS` rather than letting the file format imply uniform protection.
+- **`mls-rs` is unaudited too**, like everything else here.
+- **A transparency log cannot detect a split view by itself.** Two divergent logs are each internally
+  consistent; catching that needs independent witnesses who gossip roots and refuse to sign two roots
+  for one size. No witnessing is implemented, so the log is a promise rather than a proof.
+- **Epoch secrets are not persisted.** `hide epoch-init` publishes a history, but the secret exists
+  only in the process that made it. A durable epoch store is not built, so erasure is demonstrable
+  but not yet operationally useful.
+- **Revocation is deliberately not retroactive.** Entries signed before a device was revoked stay
+  valid, because invalidating them would invalidate every message that device ever sent. Revoking a
+  device also does not evict it from MLS groups automatically; that is a separate, explicit call.
+- **An identity still is not a person.** The log proves which devices an identity trusts over time. It
+  does not prove that identity belongs to a particular human, and there is no directory to ask.
 
 ## Download
 
@@ -169,8 +198,40 @@ for encryption and `alice.hide-pub.sign` for checking signatures. Both derive fr
 there is a single thing to back up, and neither can be computed from the other. A key file created
 before signatures existed still decrypts; signing with it fails and says so.
 
-A signature proves possession of a key. HIDE has no directory or transparency log, so nothing ties that
-key to a person — compare a signer's key against one you already trust.
+A signature proves possession of a key. HIDE has no directory, so nothing ties that key to a person —
+compare a signer's key against one you already trust.
+
+### An identity with more than one device
+
+A key is a thing you lose. An identity is a log of device events, each signed by a device the log
+already trusted, so it can survive losing one.
+
+```powershell
+# The founding device, plus an offline recovery key kept somewhere else entirely.
+cargo run -p hide-cli -- --experimental identity-create --secret laptop.hide-key `
+  --recovery recovery.hide-pub.sign --label laptop --output alice.hide-log
+
+# Add a phone. Signed by the laptop, because only a trusted device may enrol another.
+cargo run -p hide-cli -- --experimental identity-enrol --log alice.hide-log `
+  --secret laptop.hide-key --device phone.hide-pub.sign --label phone `
+  --recovery recovery.hide-pub.sign
+
+# The phone is stolen.
+cargo run -p hide-cli -- --experimental identity-revoke --log alice.hide-log `
+  --secret laptop.hide-key --device phone.hide-pub.sign --recovery recovery.hide-pub.sign
+
+# Anyone can replay the log and see who is trusted now. No secret required.
+cargo run -p hide-cli -- --experimental identity-show --log alice.hide-log `
+  --recovery recovery.hide-pub.sign
+```
+
+The log is public and append-only: verifying it needs no secret, which is what lets someone else check
+which devices you trust. Revocation applies from the point it appears — the revoked phone cannot
+re-enrol itself or revoke the laptop, but containers it already holds stay readable to it, and
+signatures it made while trusted stay valid. Nothing can reach back and change that.
+
+If every device is lost, the offline recovery key replaces the whole device set. It is the only key
+that can, which is why it belongs somewhere that is not a computer.
 
 ### Logging in over SSH
 

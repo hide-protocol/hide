@@ -127,6 +127,15 @@ pub struct Entry {
     pub signature: Vec<u8>,
 }
 
+impl Entry {
+    /// The exact bytes this entry's signature covers, laid out as in
+    /// `spec/hide-0.1.md` §8. Public so a second implementation can be checked
+    /// against this one instead of against prose.
+    pub fn signed_bytes(&self, previous: &[u8; 32]) -> Vec<u8> {
+        signed_bytes(previous, self.sequence, &self.event, &self.signer)
+    }
+}
+
 /// The bytes that are signed and linked. Every field is length-prefixed, so no
 /// combination of a long label and a short key can be re-parsed as another.
 fn signed_bytes(
