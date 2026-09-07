@@ -3,6 +3,62 @@
 This project is pre-1.0. The wire format may change while the version is 0.x,
 and a format change is always called out here explicitly.
 
+## 0.6.0
+
+**An identity stops being a single key.** The container format is unchanged:
+every 0.5.0 container still opens, and the frozen 0.1.0 vectors still pass. What
+is new sits alongside the format rather than inside it — device history, key
+rotation, an auditable log, and group messaging.
+
+### Added
+
+- **`hide-identity`**: an identity is a hash-linked log of device events, each
+  signed by a device the log already trusted. Authority is evaluated at the
+  point in the log where an entry appears, never against the final state, which
+  is what makes revocation mean something: a revoked device cannot re-enrol
+  itself, revoke the device that removed it, or author anything after its
+  removal. Only an offline recovery key may replace the device set.
+- **`hide-epoch`**: forward security by erasure. Destroying an epoch's secret
+  makes every container written to it unreadable, including by the intended
+  recipient. Epoch secrets are independent random keys rather than derived from
+  a seed — a derived chain would let anyone holding the seed reconstruct what
+  was supposedly erased.
+- **`hide-transparency`**: RFC 6962 inclusion and consistency proofs. A log that
+  alters or drops an entry it already published cannot produce a consistency
+  proof against the root it published before.
+- **`hide-mls`**: group messaging over MLS (RFC 9420) via `mls-rs`, joined to
+  HIDE identities so a message from a revoked device is refused even though MLS
+  itself considers it a valid member.
+- **CLI**: `identity-create`, `identity-enrol`, `identity-revoke`,
+  `identity-show`, `epoch-init`, `epoch-show`.
+- **All eight SDKs** expose identity, epoch and transparency verification, over
+  the same C ABI and against the same published test vectors.
+- **`scripts/set-version.ps1`**, because the version lives in 22 files across
+  seven ecosystems and every release so far moved them by hand.
+
+### Limits worth knowing before you use any of this
+
+- **Group messaging is not post-quantum.** MLS's PQ ciphersuites are still an
+  Internet-Draft and no Rust provider implements them, so `hide-mls` uses
+  X25519. Object encryption *is* hybrid PQ, so the two are protected
+  differently; `hide_mls::PQ_STATUS` says so in the API.
+- **A transparency log cannot detect a split view alone.** Two divergent logs
+  are each internally consistent. Catching that needs witnesses, and no
+  witnessing is implemented.
+- **Epoch secrets are not persisted.** `epoch-init` publishes a history, but the
+  secret lives only in that process, so erasure is demonstrable and not yet
+  operationally useful.
+- **Revocation is not retroactive**, deliberately: entries signed before it stay
+  valid, because invalidating them would invalidate every message that device
+  ever sent. Revoking a device also does not evict it from MLS groups
+  automatically.
+- **`mls-rs` is unaudited**, like everything else here.
+
+### Fixed
+
+- The CLI wrote logs through the container path, which refuses to overwrite, so
+  an append-only log could never grow past its first entry.
+
 ## 0.5.0
 
 **The container format gains signatures.** Unsigned containers are unchanged

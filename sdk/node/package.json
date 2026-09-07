@@ -1,6 +1,6 @@
 {
   "name": "hide-protocol",
-  "version": "0.5.0",
+  "version": "0.6.0",
   "description": "Experimental hybrid post-quantum file and message encryption (X25519 + ML-KEM-768). Unaudited.",
   "type": "module",
   "license": "Apache-2.0",
