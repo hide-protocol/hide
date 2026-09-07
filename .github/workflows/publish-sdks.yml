@@ -240,7 +240,8 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - uses: actions/setup-node@v7
         with:
-          node-version: 22
+          # Trusted publishing needs npm >= 11.5.1; Node 22 still bundles 10.x.
+          node-version: 24
           registry-url: https://registry.npmjs.org
 
       - name: Build the WASM package
@@ -268,17 +269,18 @@ jobs:
           npm run build
           HIDE_LIBRARY=$PWD/native/libhide_ffi.so node --test dist/index.test.js
 
+      # No NODE_AUTH_TOKEN and no --provenance: the CLI detects OIDC, and
+      # provenance is generated automatically under trusted publishing.
       - name: Publish
         if: '!inputs.dry_run'
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
         run: |
           set -euo pipefail
-          npm publish --provenance --access public ./sdk/wasm
+          npm --version
+          npm publish --access public ./sdk/wasm
           # The Node package needs a native library per platform, which npm
           # cannot express in one tarball; published as source with a clear
           # error when the library is missing.
-          npm publish --provenance --access public ./sdk/node
+          npm publish --access public ./sdk/node
 
   rubygems:
     needs: verify
