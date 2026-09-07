@@ -65,15 +65,21 @@ jobs:
     if: inputs.crates
     runs-on: ubuntu-24.04
     environment: crates-io
+    # Trusted publishing: crates.io mints a short-lived token from this run's
+    # OIDC identity, so no CARGO_REGISTRY_TOKEN secret is needed.
+    permissions:
+      id-token: write
     steps:
       - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
+      - uses: rust-lang/crates-io-auth-action@v1
+        id: auth
 
       # Order matters: a crate cannot be published before its dependencies.
       - name: Publish crates in dependency order
         env:
-          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+          CARGO_REGISTRY_TOKEN: ${{ steps.auth.outputs.token }}
         run: |
           set -euo pipefail
           flags="--locked"
@@ -279,6 +285,9 @@ jobs:
     if: inputs.rubygems
     runs-on: ubuntu-24.04
     environment: rubygems
+    # Trusted publishing: no GEM_HOST_API_KEY secret.
+    permissions:
+      id-token: write
     steps:
       - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
@@ -304,11 +313,14 @@ jobs:
         working-directory: sdk/ruby
         run: gem build hide-protocol.gemspec
 
+      # Exchanges the run's OIDC identity for a short-lived RubyGems credential
+      # and writes it where `gem push` looks. rubygems/release-gem does not fit:
+      # it drives `rake release`, and this gem is built with `gem build`.
+      - uses: rubygems/configure-rubygems-credentials@v2.1.0
+        if: '!inputs.dry_run'
       - name: Publish
         if: '!inputs.dry_run'
         working-directory: sdk/ruby
-        env:
-          GEM_HOST_API_KEY: ${{ secrets.RUBYGEMS_API_KEY }}
         run: gem push hide-protocol-${{ inputs.version }}.gem
 
   nuget:
@@ -316,6 +328,9 @@ jobs:
     if: inputs.nuget
     runs-on: ubuntu-24.04
     environment: nuget
+    # Trusted publishing: NuGet/login exchanges OIDC for a 1-hour API key.
+    permissions:
+      id-token: write
     steps:
       - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
@@ -335,10 +350,16 @@ jobs:
       - name: Pack
         run: dotnet pack sdk/dotnet/HideProtocol/HideProtocol.csproj -c Release -o nupkg
 
+      - name: NuGet login (OIDC -> short-lived key)
+        if: '!inputs.dry_run'
+        uses: NuGet/login@v1
+        id: nuget-login
+        with:
+          user: ${{ secrets.NUGET_USER }}
       - name: Publish
         if: '!inputs.dry_run'
         env:
-          NUGET_API_KEY: ${{ secrets.NUGET_API_KEY }}
+          NUGET_API_KEY: ${{ steps.nuget-login.outputs.NUGET_API_KEY }}
         run: |
           set -euo pipefail
           dotnet nuget push 'nupkg/*.nupkg' --api-key "$NUGET_API_KEY" \
