@@ -131,6 +131,30 @@ export const fns = {
   challengeAccept: lib.func(
     "int32_t hide_challenge_accept(void *spent, const uint8_t *challenge, size_t challenge_len, const uint8_t *signature, size_t signature_len, const uint8_t *public_key, size_t public_key_len, uint64_t now)",
   ),
+
+  identityVerify: lib.func(
+    "int32_t hide_identity_verify(const uint8_t *log, size_t log_len, const uint8_t *recovery, size_t recovery_len, _Out_ size_t *devices)",
+  ),
+  identityTrustsDevice: lib.func(
+    "int32_t hide_identity_trusts_device(const uint8_t *log, size_t log_len, const uint8_t *recovery, size_t recovery_len, const uint8_t *device_public, size_t device_public_len, _Out_ int32_t *trusted)",
+  ),
+  identityHead: lib.func(
+    "int32_t hide_identity_head(const uint8_t *log, size_t log_len, const uint8_t *recovery, size_t recovery_len, _Out_ HideBuffer *out)",
+  ),
+
+  epochVerify: lib.func(
+    "int32_t hide_epoch_verify(const uint8_t *chain, size_t chain_len, _Out_ size_t *epochs)",
+  ),
+  epochPublicKey: lib.func(
+    "int32_t hide_epoch_public_key(const uint8_t *chain, size_t chain_len, uint64_t epoch, _Out_ HideBuffer *out)",
+  ),
+
+  transparencyVerifyInclusion: lib.func(
+    "int32_t hide_transparency_verify_inclusion(const uint8_t *leaf, size_t leaf_len, uint64_t index, uint64_t size, const uint8_t *path, size_t path_len, const uint8_t *root, size_t root_len)",
+  ),
+  transparencyVerifyConsistency: lib.func(
+    "int32_t hide_transparency_verify_consistency(uint64_t old_size, uint64_t new_size, const uint8_t *path, size_t path_len, const uint8_t *old_root, size_t old_root_len, const uint8_t *new_root, size_t new_root_len)",
+  ),
 };
 
 export { koffi };

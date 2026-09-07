@@ -33,19 +33,28 @@ const MinPassphraseLen = C.HIDE_MIN_PASSPHRASE_LEN
 
 // Errors callers are expected to handle distinctly.
 var (
-	ErrAuthentication     = errors.New("hide: authentication failed; the data was altered")
-	ErrWrongPassphrase    = errors.New("hide: incorrect passphrase, or the key file was modified")
+	ErrAuthentication = errors.New("hide: authentication failed; the data was altered")
+	// ErrMalformed wraps ErrAuthentication, so code that only cares that
+	// something failed is unaffected, while a caller that must tell corruption
+	// from forgery can test for this one specifically.
+	ErrMalformed           = fmt.Errorf("%w: the bytes did not decode at all", ErrAuthentication)
+	ErrInvalidArgument     = errors.New("hide: an argument was rejected before it reached the core")
+	ErrWrongPassphrase     = errors.New("hide: incorrect passphrase, or the key file was modified")
 	ErrNoMatchingRecipient = errors.New("hide: no matching recipient for this key")
-	ErrNotAKey            = errors.New("hide: not a HIDE key file")
-	ErrClosed             = errors.New("hide: this key has been closed")
+	ErrNotAKey             = errors.New("hide: not a HIDE key file")
+	ErrClosed              = errors.New("hide: this key has been closed")
 )
 
 func status(code C.int32_t) error {
 	switch code {
 	case C.HIDE_OK:
 		return nil
-	case C.HIDE_ERR_AUTHENTICATION, C.HIDE_ERR_MALFORMED:
+	case C.HIDE_ERR_AUTHENTICATION:
 		return ErrAuthentication
+	case C.HIDE_ERR_MALFORMED:
+		return ErrMalformed
+	case C.HIDE_ERR_INVALID_ARGUMENT:
+		return fmt.Errorf("%w: %s", ErrInvalidArgument, C.GoString(C.hide_error_message(code)))
 	case C.HIDE_ERR_WRONG_PASSPHRASE:
 		return ErrWrongPassphrase
 	case C.HIDE_ERR_NO_MATCHING_RECIPIENT:

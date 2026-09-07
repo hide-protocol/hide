@@ -23,6 +23,7 @@ from ._binding import MIN_PASSPHRASE_LEN, PUBLIC_KEY_LEN
 __all__ = [
     "HideError",
     "AuthenticationError",
+    "Malformed",
     "WrongPassphrase",
     "NoMatchingRecipient",
     "NotAKeyFile",
@@ -34,6 +35,13 @@ __all__ = [
     "sign",
     "verify",
     "new_challenge",
+    "verify_identity",
+    "identity_trusts_device",
+    "identity_head",
+    "verify_epoch_chain",
+    "epoch_public_key",
+    "verify_inclusion",
+    "verify_consistency",
     "Decrypted",
     "encrypt",
     "decrypt",
@@ -56,6 +64,15 @@ class HideError(Exception):
 
 class AuthenticationError(HideError):
     """The data was altered, or is not a HIDE container."""
+
+
+class Malformed(AuthenticationError):
+    """The bytes did not decode at all.
+
+    A subclass of :class:`AuthenticationError` so that code which only cares
+    that something failed is unaffected, while a caller that must tell
+    corruption from forgery can catch this specifically.
+    """
 
 
 class WrongPassphrase(HideError):
@@ -84,7 +101,7 @@ _ERRORS = {
     _b.ERR_NOT_A_KEY: NotAKeyFile,
     _b.ERR_AUTHENTICATION: AuthenticationError,
     _b.ERR_NO_MATCHING_RECIPIENT: NoMatchingRecipient,
-    _b.ERR_MALFORMED: AuthenticationError,
+    _b.ERR_MALFORMED: Malformed,
     _b.ERR_TOO_LARGE: ValueError,
     _b.ERR_CHALLENGE_EXPIRED: ChallengeExpired,
     _b.ERR_CHALLENGE_REPLAYED: ChallengeReplayed,
@@ -472,3 +489,113 @@ class SpentNonces:
 
     def __del__(self) -> None:
         self.close()
+
+
+def verify_identity(log: bytes, recovery_key: bytes) -> int:
+    """Replays an identity log and returns how many devices it trusts now.
+
+    Raises :class:`Malformed` for a log that does not decode and
+    :class:`AuthenticationError` for one that decodes but does not verify —
+    the distinction that tells corruption from forgery. Returns a count rather
+    than ``True``: a caller that forgets to check a boolean would treat every
+    failure as a pass.
+    """
+    devices = ctypes.c_size_t(0)
+    _check(
+        _b.lib.hide_identity_verify(
+            log, len(log), recovery_key, len(recovery_key), ctypes.byref(devices)
+        )
+    )
+    return devices.value
+
+
+def identity_trusts_device(
+    log: bytes, recovery_key: bytes, device_public_key: bytes
+) -> bool:
+    """Whether the log trusts this device right now.
+
+    A boolean is right here — this is a membership query, not a cryptographic
+    check. The log is still verified first, so a false answer means "not a
+    member", never "did not verify".
+    """
+    trusted = ctypes.c_int32(0)
+    _check(
+        _b.lib.hide_identity_trusts_device(
+            log,
+            len(log),
+            recovery_key,
+            len(recovery_key),
+            device_public_key,
+            len(device_public_key),
+            ctypes.byref(trusted),
+        )
+    )
+    return trusted.value != 0
+
+
+def identity_head(log: bytes, recovery_key: bytes) -> bytes:
+    """The head link: 32 bytes naming this exact history."""
+    out = _b.lib.hide_buffer_empty()
+    _check(
+        _b.lib.hide_identity_head(
+            log, len(log), recovery_key, len(recovery_key), ctypes.byref(out)
+        )
+    )
+    return _take(out)
+
+
+def verify_epoch_chain(chain: bytes) -> int:
+    """Verifies a published epoch history and returns how many epochs it holds."""
+    epochs = ctypes.c_size_t(0)
+    _check(_b.lib.hide_epoch_verify(chain, len(chain), ctypes.byref(epochs)))
+    return epochs.value
+
+
+def epoch_public_key(chain: bytes, epoch: int) -> bytes:
+    """The public key a sender should encrypt to for ``epoch``.
+
+    The chain is verified first, so a key is never returned from a history
+    that does not hold together. An epoch beyond the chain raises
+    :class:`ValueError`.
+    """
+    out = _b.lib.hide_buffer_empty()
+    _check(_b.lib.hide_epoch_public_key(chain, len(chain), epoch, ctypes.byref(out)))
+    return _take(out)
+
+
+def verify_inclusion(
+    leaf: bytes, index: int, size: int, path: bytes, root: bytes
+) -> None:
+    """Checks that ``leaf`` is entry ``index`` of a log of ``size`` under ``root``.
+
+    ``path`` is the concatenated 32-byte hashes; any other length raises
+    :class:`ValueError`. Returns ``None`` on success rather than ``True``: a
+    caller that forgets to check a boolean would treat every failure as a pass.
+    """
+    _check(
+        _b.lib.hide_transparency_verify_inclusion(
+            leaf, len(leaf), index, size, path, len(path), root, len(root)
+        )
+    )
+
+
+def verify_consistency(
+    old_size: int, new_size: int, path: bytes, old_root: bytes, new_root: bytes
+) -> None:
+    """Checks that ``old_root`` really is the root the log had before ``new_root``.
+
+    This is the check that catches a rewritten history. Raises
+    :class:`AuthenticationError` when it does not hold.
+    """
+    _check(
+        _b.lib.hide_transparency_verify_consistency(
+            old_size,
+            new_size,
+            path,
+            len(path),
+            old_root,
+            len(old_root),
+            new_root,
+            len(new_root),
+        )
+    )

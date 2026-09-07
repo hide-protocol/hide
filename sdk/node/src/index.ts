@@ -52,6 +52,12 @@ export class HideError extends Error {
 }
 /** The data was altered, or is not a HIDE container. */
 export class AuthenticationError extends HideError {}
+/**
+ * The bytes did not decode at all. Extends `AuthenticationError` so code that
+ * only cares that something failed is unaffected, while a caller that must
+ * tell corruption from forgery can catch this specifically.
+ */
+export class MalformedError extends AuthenticationError {}
 /** The passphrase is wrong, or the key file was modified. */
 export class WrongPassphraseError extends HideError {}
 /** This key was not one of the recipients. */
@@ -73,8 +79,9 @@ function check(code: number): void {
       throw new NotAKeyError(message);
     case ERR_NO_MATCHING_RECIPIENT:
       throw new NoMatchingRecipientError(message);
-    case ERR_AUTHENTICATION:
     case ERR_MALFORMED:
+      throw new MalformedError(message);
+    case ERR_AUTHENTICATION:
       throw new AuthenticationError(message);
     case ERR_CHALLENGE_EXPIRED:
       throw new ChallengeExpiredError(message);
@@ -478,4 +485,128 @@ export class SpentNonces {
   [Symbol.dispose](): void {
     this.close();
   }
+}
+
+/**
+ * Replays an identity log and returns how many devices it trusts now.
+ *
+ * Throws `MalformedError` for a log that does not decode and
+ * `AuthenticationError` for one that decodes but does not verify — the
+ * distinction that tells corruption from forgery. Returns a count rather than
+ * a boolean: a caller that forgets to check a boolean would treat every
+ * failure as a pass.
+ */
+export function verifyIdentity(log: Uint8Array, recoveryKey: Uint8Array): number {
+  const devices: [number] = [0];
+  check(
+    fns.identityVerify(log, log.length, recoveryKey, recoveryKey.length, devices),
+  );
+  return devices[0];
+}
+
+/**
+ * Whether the log trusts this device right now.
+ *
+ * A boolean is right here — this is a membership query, not a cryptographic
+ * check. The log is still verified first, so `false` means "not a member",
+ * never "did not verify".
+ */
+export function identityTrustsDevice(
+  log: Uint8Array,
+  recoveryKey: Uint8Array,
+  devicePublicKey: Uint8Array,
+): boolean {
+  const trusted: [number] = [0];
+  check(
+    fns.identityTrustsDevice(
+      log,
+      log.length,
+      recoveryKey,
+      recoveryKey.length,
+      devicePublicKey,
+      devicePublicKey.length,
+      trusted,
+    ),
+  );
+  return trusted[0] !== 0;
+}
+
+/** The head link: 32 bytes naming this exact history. */
+export function identityHead(log: Uint8Array, recoveryKey: Uint8Array): Buffer {
+  const out = emptyBuffer();
+  check(fns.identityHead(log, log.length, recoveryKey, recoveryKey.length, out));
+  return take(out);
+}
+
+/** Verifies a published epoch history and returns how many epochs it holds. */
+export function verifyEpochChain(chain: Uint8Array): number {
+  const epochs: [number] = [0];
+  check(fns.epochVerify(chain, chain.length, epochs));
+  return epochs[0];
+}
+
+/**
+ * The public key a sender should encrypt to for `epoch`. The chain is verified
+ * first, so a key is never returned from a history that does not hold
+ * together. An epoch beyond the chain throws `RangeError`.
+ */
+export function epochPublicKey(
+  chain: Uint8Array,
+  epoch: number | bigint,
+): Buffer {
+  const out = emptyBuffer();
+  check(fns.epochPublicKey(chain, chain.length, epoch, out));
+  return take(out);
+}
+
+/**
+ * Checks that `leaf` is entry `index` of a log of `size` under `root`. `path`
+ * is the concatenated 32-byte hashes; any other length throws `RangeError`.
+ *
+ * Returns nothing rather than a boolean, for the same reason `verify` does.
+ */
+export function verifyInclusion(
+  leaf: Uint8Array,
+  index: number | bigint,
+  size: number | bigint,
+  path: Uint8Array,
+  root: Uint8Array,
+): void {
+  check(
+    fns.transparencyVerifyInclusion(
+      leaf,
+      leaf.length,
+      index,
+      size,
+      path,
+      path.length,
+      root,
+      root.length,
+    ),
+  );
+}
+
+/**
+ * Checks that `oldRoot` really is the root the log had before it grew to
+ * `newRoot`. This is the check that catches a rewritten history.
+ */
+export function verifyConsistency(
+  oldSize: number | bigint,
+  newSize: number | bigint,
+  path: Uint8Array,
+  oldRoot: Uint8Array,
+  newRoot: Uint8Array,
+): void {
+  check(
+    fns.transparencyVerifyConsistency(
+      oldSize,
+      newSize,
+      path,
+      path.length,
+      oldRoot,
+      oldRoot.length,
+      newRoot,
+      newRoot.length,
+    ),
+  );
 }

@@ -183,4 +183,170 @@ public static unsafe class Hide
         Interop.Check(Native.hide_challenge_new(target.Pointer, now, validFor, &output));
         return Interop.Take(ref output);
     }
+
+    /// <summary>
+    /// Replays an identity log and returns how many devices it trusts now.
+    ///
+    /// Throws <see cref="MalformedException"/> for a log that does not decode and
+    /// <see cref="AuthenticationException"/> for one that decodes but does not
+    /// verify — the distinction that tells corruption from forgery. It returns a
+    /// count rather than a bool so that a caller who forgets to check cannot
+    /// treat every failure as a pass.
+    /// </summary>
+    public static int VerifyIdentity(ReadOnlySpan<byte> log, ReadOnlySpan<byte> recoveryKey)
+    {
+        nuint devices = 0;
+        fixed (byte* logPointer = log)
+        fixed (byte* recoveryPointer = recoveryKey)
+        {
+            Interop.Check(Native.hide_identity_verify(
+                logPointer,
+                (nuint)log.Length,
+                recoveryPointer,
+                (nuint)recoveryKey.Length,
+                &devices));
+        }
+
+        return checked((int)devices);
+    }
+
+    /// <summary>
+    /// Whether the log trusts this device right now.
+    ///
+    /// A bool is right here — this is a membership query, not a cryptographic
+    /// check. The log is still verified first, so false means "not a member",
+    /// never "did not verify".
+    /// </summary>
+    public static bool IdentityTrustsDevice(
+        ReadOnlySpan<byte> log,
+        ReadOnlySpan<byte> recoveryKey,
+        ReadOnlySpan<byte> devicePublicKey)
+    {
+        int trusted = 0;
+        fixed (byte* logPointer = log)
+        fixed (byte* recoveryPointer = recoveryKey)
+        fixed (byte* devicePointer = devicePublicKey)
+        {
+            Interop.Check(Native.hide_identity_trusts_device(
+                logPointer,
+                (nuint)log.Length,
+                recoveryPointer,
+                (nuint)recoveryKey.Length,
+                devicePointer,
+                (nuint)devicePublicKey.Length,
+                &trusted));
+        }
+
+        return trusted != 0;
+    }
+
+    /// <summary>The head link: 32 bytes naming this exact history.</summary>
+    public static byte[] IdentityHead(ReadOnlySpan<byte> log, ReadOnlySpan<byte> recoveryKey)
+    {
+        HideBuffer output = Native.hide_buffer_empty();
+        fixed (byte* logPointer = log)
+        fixed (byte* recoveryPointer = recoveryKey)
+        {
+            Interop.Check(Native.hide_identity_head(
+                logPointer,
+                (nuint)log.Length,
+                recoveryPointer,
+                (nuint)recoveryKey.Length,
+                &output));
+        }
+
+        return Interop.Take(ref output);
+    }
+
+    /// <summary>
+    /// Verifies a published epoch history and returns how many epochs it holds.
+    /// </summary>
+    public static int VerifyEpochChain(ReadOnlySpan<byte> chain)
+    {
+        nuint epochs = 0;
+        fixed (byte* pointer = chain)
+        {
+            Interop.Check(Native.hide_epoch_verify(pointer, (nuint)chain.Length, &epochs));
+        }
+
+        return checked((int)epochs);
+    }
+
+    /// <summary>
+    /// The public key a sender should encrypt to for <paramref name="epoch"/>.
+    /// The chain is verified first, so a key is never returned from a history
+    /// that does not hold together. An epoch beyond the chain throws
+    /// <see cref="ArgumentException"/>.
+    /// </summary>
+    public static byte[] EpochPublicKey(ReadOnlySpan<byte> chain, ulong epoch)
+    {
+        HideBuffer output = Native.hide_buffer_empty();
+        fixed (byte* pointer = chain)
+        {
+            Interop.Check(Native.hide_epoch_public_key(
+                pointer, (nuint)chain.Length, epoch, &output));
+        }
+
+        return Interop.Take(ref output);
+    }
+
+    /// <summary>
+    /// Checks that <paramref name="leaf"/> is entry <paramref name="index"/> of a
+    /// log of <paramref name="size"/> entries under <paramref name="root"/>.
+    /// <paramref name="path"/> is the concatenated 32-byte hashes; any other
+    /// length throws <see cref="ArgumentException"/>.
+    ///
+    /// Returns void rather than a bool, for the same reason
+    /// <see cref="Verify"/> does.
+    /// </summary>
+    public static void VerifyInclusion(
+        ReadOnlySpan<byte> leaf,
+        ulong index,
+        ulong size,
+        ReadOnlySpan<byte> path,
+        ReadOnlySpan<byte> root)
+    {
+        fixed (byte* leafPointer = leaf)
+        fixed (byte* pathPointer = path)
+        fixed (byte* rootPointer = root)
+        {
+            Interop.Check(Native.hide_transparency_verify_inclusion(
+                leafPointer,
+                (nuint)leaf.Length,
+                index,
+                size,
+                pathPointer,
+                (nuint)path.Length,
+                rootPointer,
+                (nuint)root.Length));
+        }
+    }
+
+    /// <summary>
+    /// Checks that <paramref name="oldRoot"/> really is the root the log had
+    /// before it grew to <paramref name="newRoot"/>. This is the check that
+    /// catches a rewritten history.
+    /// </summary>
+    public static void VerifyConsistency(
+        ulong oldSize,
+        ulong newSize,
+        ReadOnlySpan<byte> path,
+        ReadOnlySpan<byte> oldRoot,
+        ReadOnlySpan<byte> newRoot)
+    {
+        fixed (byte* pathPointer = path)
+        fixed (byte* oldPointer = oldRoot)
+        fixed (byte* newPointer = newRoot)
+        {
+            Interop.Check(Native.hide_transparency_verify_consistency(
+                oldSize,
+                newSize,
+                pathPointer,
+                (nuint)path.Length,
+                oldPointer,
+                (nuint)oldRoot.Length,
+                newPointer,
+                (nuint)newRoot.Length));
+        }
+    }
 }

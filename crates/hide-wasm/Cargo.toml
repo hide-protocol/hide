@@ -15,6 +15,9 @@ hide-crypto = { path = "../hide-crypto" }
 hide-keyring = { path = "../hide-keyring" }
 hide-object = { path = "../hide-object" }
 hide-sign = { path = "../hide-sign" }
+hide-identity = { path = "../hide-identity", version = "0.5.0" }
+hide-epoch = { path = "../hide-epoch", version = "0.5.0" }
+hide-transparency = { path = "../hide-transparency", version = "0.5.0" }
 wasm-bindgen = "=0.2.128"
 zeroize.workspace = true
 

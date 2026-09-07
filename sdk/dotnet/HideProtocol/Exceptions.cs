@@ -9,9 +9,23 @@ public class HideException : Exception
 }
 
 /// <summary>The data was altered, or is not a HIDE container.</summary>
-public sealed class AuthenticationException : HideException
+public class AuthenticationException : HideException
 {
     public AuthenticationException(string message) : base(message)
+    {
+    }
+}
+
+/// <summary>
+/// The bytes did not decode at all.
+///
+/// A subclass of <see cref="AuthenticationException"/> so that code which only
+/// cares that something failed is unaffected, while a caller that must tell
+/// corruption from forgery can catch this specifically.
+/// </summary>
+public sealed class MalformedException : AuthenticationException
+{
+    public MalformedException(string message) : base(message)
     {
     }
 }

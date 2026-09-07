@@ -203,6 +203,77 @@ _SIGNATURES = {
         ],
         ctypes.c_int32,
     ),
+    "hide_identity_verify": (
+        [
+            ctypes.c_char_p,
+            ctypes.c_size_t,
+            ctypes.c_char_p,
+            ctypes.c_size_t,
+            ctypes.POINTER(ctypes.c_size_t),
+        ],
+        ctypes.c_int32,
+    ),
+    "hide_identity_trusts_device": (
+        [
+            ctypes.c_char_p,
+            ctypes.c_size_t,
+            ctypes.c_char_p,
+            ctypes.c_size_t,
+            ctypes.c_char_p,
+            ctypes.c_size_t,
+            ctypes.POINTER(ctypes.c_int32),
+        ],
+        ctypes.c_int32,
+    ),
+    "hide_identity_head": (
+        [
+            ctypes.c_char_p,
+            ctypes.c_size_t,
+            ctypes.c_char_p,
+            ctypes.c_size_t,
+            ctypes.POINTER(Buffer),
+        ],
+        ctypes.c_int32,
+    ),
+    "hide_epoch_verify": (
+        [ctypes.c_char_p, ctypes.c_size_t, ctypes.POINTER(ctypes.c_size_t)],
+        ctypes.c_int32,
+    ),
+    "hide_epoch_public_key": (
+        [
+            ctypes.c_char_p,
+            ctypes.c_size_t,
+            ctypes.c_uint64,
+            ctypes.POINTER(Buffer),
+        ],
+        ctypes.c_int32,
+    ),
+    "hide_transparency_verify_inclusion": (
+        [
+            ctypes.c_char_p,
+            ctypes.c_size_t,
+            ctypes.c_uint64,
+            ctypes.c_uint64,
+            ctypes.c_char_p,
+            ctypes.c_size_t,
+            ctypes.c_char_p,
+            ctypes.c_size_t,
+        ],
+        ctypes.c_int32,
+    ),
+    "hide_transparency_verify_consistency": (
+        [
+            ctypes.c_uint64,
+            ctypes.c_uint64,
+            ctypes.c_char_p,
+            ctypes.c_size_t,
+            ctypes.c_char_p,
+            ctypes.c_size_t,
+            ctypes.c_char_p,
+            ctypes.c_size_t,
+        ],
+        ctypes.c_int32,
+    ),
 }
 
 for _name, (_argtypes, _restype) in _SIGNATURES.items():

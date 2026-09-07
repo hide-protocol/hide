@@ -210,6 +210,140 @@ public final class Hide {
         return bytes.length == 0 ? null : new String(bytes, StandardCharsets.UTF_8);
     }
 
+    /**
+     * Replays an identity log and reports how many devices it trusts now.
+     *
+     * <p>Throws {@link HideException.Malformed} for a log that does not decode
+     * and {@link HideException.Authentication} for one that decodes but does
+     * not verify — the distinction that tells corruption from forgery. A count
+     * is returned rather than a boolean: a caller who forgot to check one
+     * would read every failure as a pass.
+     */
+    public static int verifyIdentity(byte[] log, byte[] recoveryKey) {
+        try (Arena arena = Arena.ofConfined()) {
+            MemorySegment devices = arena.allocate(ValueLayout.JAVA_LONG);
+            check((int) Native.IDENTITY_VERIFY.invokeExact(
+                    arena.allocateFrom(ValueLayout.JAVA_BYTE, log), (long) log.length,
+                    arena.allocateFrom(ValueLayout.JAVA_BYTE, recoveryKey),
+                    (long) recoveryKey.length, devices));
+            return (int) devices.get(ValueLayout.JAVA_LONG, 0);
+        } catch (Throwable error) {
+            throw wrap(error);
+        }
+    }
+
+    /**
+     * Whether the log trusts this device right now.
+     *
+     * <p>A boolean is right here — this is a membership query, not a
+     * cryptographic check. The log is still verified first, so {@code false}
+     * means "not a member", never "did not verify": that throws.
+     */
+    public static boolean identityTrustsDevice(byte[] log, byte[] recoveryKey,
+                                               byte[] devicePublicKey) {
+        try (Arena arena = Arena.ofConfined()) {
+            MemorySegment trusted = arena.allocate(ValueLayout.JAVA_INT);
+            check((int) Native.IDENTITY_TRUSTS_DEVICE.invokeExact(
+                    arena.allocateFrom(ValueLayout.JAVA_BYTE, log), (long) log.length,
+                    arena.allocateFrom(ValueLayout.JAVA_BYTE, recoveryKey),
+                    (long) recoveryKey.length,
+                    arena.allocateFrom(ValueLayout.JAVA_BYTE, devicePublicKey),
+                    (long) devicePublicKey.length, trusted));
+            return trusted.get(ValueLayout.JAVA_INT, 0) != 0;
+        } catch (Throwable error) {
+            throw wrap(error);
+        }
+    }
+
+    /** The head link: 32 bytes naming this exact history. */
+    public static byte[] identityHead(byte[] log, byte[] recoveryKey) {
+        try (Arena arena = Arena.ofConfined()) {
+            MemorySegment out = Native.emptyBuffer(arena);
+            check((int) Native.IDENTITY_HEAD.invokeExact(
+                    arena.allocateFrom(ValueLayout.JAVA_BYTE, log), (long) log.length,
+                    arena.allocateFrom(ValueLayout.JAVA_BYTE, recoveryKey),
+                    (long) recoveryKey.length, out));
+            return Native.take(out);
+        } catch (Throwable error) {
+            throw wrap(error);
+        }
+    }
+
+    /** Verifies a published epoch history and reports how many epochs it holds. */
+    public static int verifyEpochChain(byte[] chain) {
+        try (Arena arena = Arena.ofConfined()) {
+            MemorySegment epochs = arena.allocate(ValueLayout.JAVA_LONG);
+            check((int) Native.EPOCH_VERIFY.invokeExact(
+                    arena.allocateFrom(ValueLayout.JAVA_BYTE, chain), (long) chain.length,
+                    epochs));
+            return (int) epochs.get(ValueLayout.JAVA_LONG, 0);
+        } catch (Throwable error) {
+            throw wrap(error);
+        }
+    }
+
+    /**
+     * The public key a sender should encrypt to for {@code epoch}.
+     *
+     * <p>The chain is verified first, so a key is never returned from a
+     * history that does not hold together. An epoch beyond the chain throws
+     * {@link IllegalArgumentException}.
+     */
+    public static byte[] epochPublicKey(byte[] chain, long epoch) {
+        try (Arena arena = Arena.ofConfined()) {
+            MemorySegment out = Native.emptyBuffer(arena);
+            check((int) Native.EPOCH_PUBLIC_KEY.invokeExact(
+                    arena.allocateFrom(ValueLayout.JAVA_BYTE, chain), (long) chain.length,
+                    epoch, out));
+            return Native.take(out);
+        } catch (Throwable error) {
+            throw wrap(error);
+        }
+    }
+
+    /**
+     * Checks that {@code leaf} is entry {@code index} of a log of {@code size}
+     * entries under {@code root}.
+     *
+     * <p>{@code path} is the concatenated 32-byte hashes; any other length
+     * throws {@link IllegalArgumentException}. Nothing is returned, for the
+     * same reason {@link #verify} returns nothing.
+     */
+    public static void verifyInclusion(byte[] leaf, long index, long size, byte[] path,
+                                       byte[] root) {
+        try (Arena arena = Arena.ofConfined()) {
+            MemorySegment leafBytes = arena.allocateFrom(ValueLayout.JAVA_BYTE, leaf);
+            MemorySegment pathBytes = arena.allocateFrom(ValueLayout.JAVA_BYTE, path);
+            MemorySegment rootBytes = arena.allocateFrom(ValueLayout.JAVA_BYTE, root);
+            check((int) Native.TRANSPARENCY_VERIFY_INCLUSION.invokeExact(
+                    leafBytes, (long) leaf.length, index, size,
+                    pathBytes, (long) path.length,
+                    rootBytes, (long) root.length));
+        } catch (Throwable error) {
+            throw wrap(error);
+        }
+    }
+
+    /**
+     * Checks that {@code oldRoot} really is the root the log had before it grew
+     * to {@code newRoot}. This is the check that catches a rewritten history.
+     */
+    public static void verifyConsistency(long oldSize, long newSize, byte[] path,
+                                         byte[] oldRoot, byte[] newRoot) {
+        try (Arena arena = Arena.ofConfined()) {
+            MemorySegment pathBytes = arena.allocateFrom(ValueLayout.JAVA_BYTE, path);
+            MemorySegment oldBytes = arena.allocateFrom(ValueLayout.JAVA_BYTE, oldRoot);
+            MemorySegment newBytes = arena.allocateFrom(ValueLayout.JAVA_BYTE, newRoot);
+            check((int) Native.TRANSPARENCY_VERIFY_CONSISTENCY.invokeExact(
+                    oldSize, newSize,
+                    pathBytes, (long) path.length,
+                    oldBytes, (long) oldRoot.length,
+                    newBytes, (long) newRoot.length));
+        } catch (Throwable error) {
+            throw wrap(error);
+        }
+    }
+
     static void check(int code) {
         if (code == Native.OK) {
             return;
@@ -226,8 +360,8 @@ public final class Hide {
             case Native.ERR_NOT_A_KEY -> new HideException.NotAKey(message);
             case Native.ERR_NO_MATCHING_RECIPIENT ->
                     new HideException.NoMatchingRecipient(message);
-            case Native.ERR_AUTHENTICATION, Native.ERR_MALFORMED ->
-                    new HideException.Authentication(message);
+                case Native.ERR_AUTHENTICATION -> new HideException.Authentication(message);
+                case Native.ERR_MALFORMED -> new HideException.Malformed(message);
                 case Native.ERR_CHALLENGE_EXPIRED -> new HideException.ChallengeExpired(message);
                 case Native.ERR_CHALLENGE_REPLAYED -> new HideException.ChallengeReplayed(message);
             case Native.ERR_INVALID_ARGUMENT, Native.ERR_TOO_LARGE ->

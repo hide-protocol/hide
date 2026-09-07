@@ -39,6 +39,16 @@ public final class HideTest {
         run("an encryption-only key cannot sign", HideTest::encryptionOnlyKey);
         run("a challenge is answered once", HideTest::challengeOnce);
         run("a late answer is expired", HideTest::challengeExpiry);
+        run("an identity log reports the devices it trusts", HideTest::identityDevices);
+        run("a revoked device is no longer trusted", HideTest::revokedDevice);
+        run("a tampered log is refused", HideTest::tamperedLog);
+        run("the head names this exact history", HideTest::identityHead);
+        run("an epoch chain verifies and yields keys", HideTest::epochChain);
+        run("an epoch beyond the chain is refused", HideTest::epochOutOfRange);
+        run("a spliced epoch chain does not verify", HideTest::splicedEpochChain);
+        run("an inclusion proof verifies only for its own leaf", HideTest::inclusion);
+        run("a path that is not whole hashes is refused", HideTest::partialHashPath);
+        run("a consistency proof catches a rewritten history", HideTest::consistency);
 
         if (failures > 0) {
             System.err.println(failures + " test(s) failed");
@@ -46,6 +56,78 @@ public final class HideTest {
         }
         System.out.println("all tests passed");
     }
+
+        private static void identityDevices() {
+        // Four events: create, enrol phone, enrol laptop, revoke laptop.
+        assertTrue(Hide.verifyIdentity(Fixtures.IDENTITY_LOG, Fixtures.IDENTITY_RECOVERY) == 2,
+            "the log must trust two devices");
+        }
+
+        private static void revokedDevice() {
+        assertTrue(Hide.identityTrustsDevice(Fixtures.IDENTITY_LOG, Fixtures.IDENTITY_RECOVERY,
+            Fixtures.IDENTITY_DEVICE_PHONE), "the enrolled phone is trusted");
+        assertTrue(!Hide.identityTrustsDevice(Fixtures.IDENTITY_LOG, Fixtures.IDENTITY_RECOVERY,
+            Fixtures.IDENTITY_DEVICE_LAPTOP), "a revoked laptop is still trusted");
+        }
+
+        private static void tamperedLog() {
+        assertThrows(HideException.Authentication.class,
+            () -> Hide.verifyIdentity(Fixtures.IDENTITY_TAMPERED, Fixtures.IDENTITY_RECOVERY),
+            "a tampered log");
+        // Bytes that do not decode at all are a different failure from bytes
+        // that decode and do not verify.
+        assertThrows(HideException.Malformed.class,
+            () -> Hide.verifyIdentity("not a log".getBytes(UTF_8), Fixtures.IDENTITY_RECOVERY),
+            "undecodable bytes");
+        }
+
+        private static void identityHead() {
+        byte[] head = Hide.identityHead(Fixtures.IDENTITY_LOG, Fixtures.IDENTITY_RECOVERY);
+        assertTrue(head.length == 32, "the head is 32 bytes");
+        assertTrue(Arrays.equals(head, Fixtures.IDENTITY_HEAD), "the head names this history");
+        }
+
+        private static void epochChain() {
+        assertTrue(Hide.verifyEpochChain(Fixtures.EPOCH_CHAIN) == 3, "the chain holds 3 epochs");
+        assertTrue(Arrays.equals(Hide.epochPublicKey(Fixtures.EPOCH_CHAIN, 1),
+            Fixtures.EPOCH_PUBLIC_KEY_1), "epoch 1 public key");
+        }
+
+        private static void epochOutOfRange() {
+        assertThrows(IllegalArgumentException.class,
+            () -> Hide.epochPublicKey(Fixtures.EPOCH_CHAIN, 3), "an out-of-range epoch");
+        }
+
+        private static void splicedEpochChain() {
+        assertThrows(HideException.Authentication.class,
+            () -> Hide.verifyEpochChain(Fixtures.EPOCH_BROKEN), "a spliced chain");
+        }
+
+        private static void inclusion() {
+        Hide.verifyInclusion(Fixtures.LEAF, 3, 8, Fixtures.INCLUSION_PATH, Fixtures.TREE_ROOT);
+        assertThrows(HideException.Authentication.class,
+            () -> Hide.verifyInclusion(Fixtures.OTHER_LEAF, 3, 8, Fixtures.INCLUSION_PATH,
+                Fixtures.TREE_ROOT),
+            "a foreign leaf");
+        }
+
+        private static void partialHashPath() {
+        byte[] truncated =
+            Arrays.copyOf(Fixtures.INCLUSION_PATH, Fixtures.INCLUSION_PATH.length - 1);
+        assertThrows(IllegalArgumentException.class,
+            () -> Hide.verifyInclusion(Fixtures.LEAF, 3, 8, truncated, Fixtures.TREE_ROOT),
+            "a partial hash");
+        }
+
+        private static void consistency() {
+        Hide.verifyConsistency(5, 8, Fixtures.CONSISTENCY_PATH, Fixtures.ROOT_AT_5,
+            Fixtures.TREE_ROOT);
+        // Same size, one entry silently replaced.
+        assertThrows(HideException.Authentication.class,
+            () -> Hide.verifyConsistency(5, 8, Fixtures.CONSISTENCY_PATH, Fixtures.ROOT_AT_5,
+                Fixtures.REWRITTEN_ROOT),
+            "a rewritten history");
+        }
 
     private static void roundTrip() {
         try (SecretKey secret = SecretKey.generate()) {
@@ -319,6 +401,21 @@ public final class HideTest {
             body.run();
         } catch (RuntimeException expected) {
             return;
+        }
+        throw new AssertionError("expected a failure: " + what);
+    }
+
+    /** The exact type matters here: malformed and unverified must stay distinct. */
+    private static void assertThrows(Class<? extends RuntimeException> expected, Runnable body,
+                                     String what) {
+        try {
+            body.run();
+        } catch (RuntimeException error) {
+            if (expected.isInstance(error)) {
+                return;
+            }
+            throw new AssertionError(what + " threw " + error.getClass().getSimpleName()
+                    + ", wanted " + expected.getSimpleName());
         }
         throw new AssertionError("expected a failure: " + what);
     }

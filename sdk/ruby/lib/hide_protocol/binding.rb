@@ -107,7 +107,18 @@ module Hide
       hide_challenge_answer: [[VOIDP, VOIDP, SIZE_T, VOIDP], INT32],
       hide_spent_nonces_new: [[], VOIDP],
       hide_spent_nonces_free: [[VOIDP], VOID],
-      hide_challenge_accept: [[VOIDP, VOIDP, SIZE_T, VOIDP, SIZE_T, VOIDP, SIZE_T, UINT64], INT32]
+      hide_challenge_accept: [[VOIDP, VOIDP, SIZE_T, VOIDP, SIZE_T, VOIDP, SIZE_T, UINT64], INT32],
+      hide_identity_verify: [[VOIDP, SIZE_T, VOIDP, SIZE_T, VOIDP], INT32],
+      hide_identity_trusts_device: [[VOIDP, SIZE_T, VOIDP, SIZE_T, VOIDP, SIZE_T, VOIDP], INT32],
+      hide_identity_head: [[VOIDP, SIZE_T, VOIDP, SIZE_T, VOIDP], INT32],
+      hide_epoch_verify: [[VOIDP, SIZE_T, VOIDP], INT32],
+      hide_epoch_public_key: [[VOIDP, SIZE_T, UINT64, VOIDP], INT32],
+      hide_transparency_verify_inclusion: [
+        [VOIDP, SIZE_T, UINT64, UINT64, VOIDP, SIZE_T, VOIDP, SIZE_T], INT32
+      ],
+      hide_transparency_verify_consistency: [
+        [UINT64, UINT64, VOIDP, SIZE_T, VOIDP, SIZE_T, VOIDP, SIZE_T], INT32
+      ]
     }.freeze
 
     FUNCTIONS = SIGNATURES.each_with_object({}) do |(name, (args, ret)), acc|
@@ -161,6 +172,11 @@ module Hide
       return nil if raw.empty?
 
       raw.dup.force_encoding(Encoding::UTF_8).scrub
+    end
+
+    # Reads a size_t out-parameter written into a pointer-sized slot.
+    def self.read_count(slot)
+      read_word(slot, 0)
     end
 
     # A slot holding one pointer-sized out-parameter.

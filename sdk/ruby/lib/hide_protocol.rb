@@ -29,6 +29,13 @@ module Hide
   # The data was altered, or is not a HIDE container.
   class AuthenticationError < Error; end
 
+  # The bytes did not decode at all.
+  #
+  # A subclass of AuthenticationError so that code which only cares that
+  # something failed is unaffected, while a caller that must tell corruption
+  # from forgery can rescue this specifically.
+  class MalformedError < AuthenticationError; end
+
   # The passphrase is wrong, or the key file was modified.
   class WrongPassphraseError < Error; end
 
@@ -56,7 +63,7 @@ module Hide
     Binding::ERR_NOT_A_KEY => NotAKeyError,
     Binding::ERR_AUTHENTICATION => AuthenticationError,
     Binding::ERR_NO_MATCHING_RECIPIENT => NoMatchingRecipientError,
-    Binding::ERR_MALFORMED => AuthenticationError,
+    Binding::ERR_MALFORMED => MalformedError,
     Binding::ERR_TOO_LARGE => TooLargeError,
     Binding::ERR_CHALLENGE_EXPIRED => ChallengeExpiredError,
     Binding::ERR_CHALLENGE_REPLAYED => ChallengeReplayedError
@@ -171,6 +178,118 @@ module Hide
               cstring(audience), Integer(now), Integer(valid_for), out
             ))
       Binding.take(out)
+    end
+
+    # Replays an identity log and returns how many devices it trusts now.
+    #
+    # Raises MalformedError for a log that does not decode and
+    # AuthenticationError for one that decodes but does not verify — the
+    # distinction that tells corruption from forgery. A count is returned
+    # rather than a boolean: a caller who forgot to test one would read every
+    # failure as a pass.
+    def verify_identity(log, recovery_key)
+      bytes = binary(log, "log")
+      recovery = binary(recovery_key, "recovery key")
+      slot = Binding.pointer_slot
+      check(Binding.call(
+              :hide_identity_verify,
+              buffer_arg(bytes), bytes.bytesize,
+              buffer_arg(recovery), recovery.bytesize,
+              slot
+            ))
+      Binding.read_count(slot)
+    end
+
+    # Whether the log trusts this device right now.
+    #
+    # A boolean is right here — this is a membership query, not a
+    # cryptographic check. The log is still verified first, so false means
+    # "not a member", never "did not verify": that raises.
+    def identity_trusts_device(log, recovery_key, device_public_key)
+      bytes = binary(log, "log")
+      recovery = binary(recovery_key, "recovery key")
+      device = binary(device_public_key, "device public key")
+      slot = Binding.pointer_slot
+      check(Binding.call(
+              :hide_identity_trusts_device,
+              buffer_arg(bytes), bytes.bytesize,
+              buffer_arg(recovery), recovery.bytesize,
+              buffer_arg(device), device.bytesize,
+              slot
+            ))
+      (Binding.read_count(slot) & 0xFFFFFFFF) != 0
+    end
+
+    # The head link: 32 bytes naming this exact history.
+    def identity_head(log, recovery_key)
+      bytes = binary(log, "log")
+      recovery = binary(recovery_key, "recovery key")
+      out = Binding.empty_buffer
+      check(Binding.call(
+              :hide_identity_head,
+              buffer_arg(bytes), bytes.bytesize,
+              buffer_arg(recovery), recovery.bytesize,
+              out
+            ))
+      Binding.take(out)
+    end
+
+    # Verifies a published epoch history and returns how many epochs it holds.
+    def verify_epoch_chain(chain)
+      bytes = binary(chain, "chain")
+      slot = Binding.pointer_slot
+      check(Binding.call(:hide_epoch_verify, buffer_arg(bytes), bytes.bytesize, slot))
+      Binding.read_count(slot)
+    end
+
+    # The public key a sender should encrypt to for this epoch.
+    #
+    # The chain is verified first, so a key is never returned from a history
+    # that does not hold together. An epoch beyond the chain raises
+    # InvalidArgumentError.
+    def epoch_public_key(chain, epoch)
+      bytes = binary(chain, "chain")
+      out = Binding.empty_buffer
+      check(Binding.call(
+              :hide_epoch_public_key,
+              buffer_arg(bytes), bytes.bytesize, Integer(epoch), out
+            ))
+      Binding.take(out)
+    end
+
+    # Checks that leaf is entry index of a log of size entries under root.
+    #
+    # path is the concatenated 32-byte hashes; any other length raises
+    # InvalidArgumentError. Nothing is returned, for the same reason verify
+    # returns nothing.
+    def verify_inclusion(leaf, index, size, path, root)
+      leaf_bytes = binary(leaf, "leaf")
+      path_bytes = binary(path, "path")
+      root_bytes = binary(root, "root")
+      check(Binding.call(
+              :hide_transparency_verify_inclusion,
+              buffer_arg(leaf_bytes), leaf_bytes.bytesize,
+              Integer(index), Integer(size),
+              buffer_arg(path_bytes), path_bytes.bytesize,
+              buffer_arg(root_bytes), root_bytes.bytesize
+            ))
+      nil
+    end
+
+    # Checks that old_root really is the root the log had before it grew to
+    # new_root. This is the check that catches a rewritten history.
+    def verify_consistency(old_size, new_size, path, old_root, new_root)
+      path_bytes = binary(path, "path")
+      old_bytes = binary(old_root, "old root")
+      new_bytes = binary(new_root, "new root")
+      check(Binding.call(
+              :hide_transparency_verify_consistency,
+              Integer(old_size), Integer(new_size),
+              buffer_arg(path_bytes), path_bytes.bytesize,
+              buffer_arg(old_bytes), old_bytes.bytesize,
+              buffer_arg(new_bytes), new_bytes.bytesize
+            ))
+      nil
     end
 
     def check(code)

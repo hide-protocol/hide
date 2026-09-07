@@ -194,4 +194,51 @@ internal static unsafe partial class Native
         byte* publicKey,
         nuint publicKeyLen,
         ulong now);
+
+    [LibraryImport(LibraryName)]
+    internal static partial int hide_identity_verify(
+        byte* log, nuint logLen, byte* recovery, nuint recoveryLen, nuint* outDevices);
+
+    [LibraryImport(LibraryName)]
+    internal static partial int hide_identity_trusts_device(
+        byte* log,
+        nuint logLen,
+        byte* recovery,
+        nuint recoveryLen,
+        byte* devicePublic,
+        nuint devicePublicLen,
+        int* outTrusted);
+
+    [LibraryImport(LibraryName)]
+    internal static partial int hide_identity_head(
+        byte* log, nuint logLen, byte* recovery, nuint recoveryLen, HideBuffer* @out);
+
+    [LibraryImport(LibraryName)]
+    internal static partial int hide_epoch_verify(byte* chain, nuint chainLen, nuint* outEpochs);
+
+    [LibraryImport(LibraryName)]
+    internal static partial int hide_epoch_public_key(
+        byte* chain, nuint chainLen, ulong epoch, HideBuffer* @out);
+
+    [LibraryImport(LibraryName)]
+    internal static partial int hide_transparency_verify_inclusion(
+        byte* leaf,
+        nuint leafLen,
+        ulong index,
+        ulong size,
+        byte* path,
+        nuint pathLen,
+        byte* root,
+        nuint rootLen);
+
+    [LibraryImport(LibraryName)]
+    internal static partial int hide_transparency_verify_consistency(
+        ulong oldSize,
+        ulong newSize,
+        byte* path,
+        nuint pathLen,
+        byte* oldRoot,
+        nuint oldRootLen,
+        byte* newRoot,
+        nuint newRootLen);
 }

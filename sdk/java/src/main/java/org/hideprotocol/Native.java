@@ -133,6 +133,39 @@ final class Native {
                     ValueLayout.ADDRESS, ValueLayout.JAVA_LONG,
                     ValueLayout.ADDRESS, ValueLayout.JAVA_LONG, ValueLayout.JAVA_LONG));
 
+    static final MethodHandle IDENTITY_VERIFY = bind("hide_identity_verify",
+            FunctionDescriptor.of(ValueLayout.JAVA_INT, ValueLayout.ADDRESS,
+                    ValueLayout.JAVA_LONG, ValueLayout.ADDRESS, ValueLayout.JAVA_LONG,
+                    ValueLayout.ADDRESS));
+    static final MethodHandle IDENTITY_TRUSTS_DEVICE = bind("hide_identity_trusts_device",
+            FunctionDescriptor.of(ValueLayout.JAVA_INT, ValueLayout.ADDRESS,
+                    ValueLayout.JAVA_LONG, ValueLayout.ADDRESS, ValueLayout.JAVA_LONG,
+                    ValueLayout.ADDRESS, ValueLayout.JAVA_LONG, ValueLayout.ADDRESS));
+    static final MethodHandle IDENTITY_HEAD = bind("hide_identity_head",
+            FunctionDescriptor.of(ValueLayout.JAVA_INT, ValueLayout.ADDRESS,
+                    ValueLayout.JAVA_LONG, ValueLayout.ADDRESS, ValueLayout.JAVA_LONG,
+                    ValueLayout.ADDRESS));
+
+    static final MethodHandle EPOCH_VERIFY = bind("hide_epoch_verify",
+            FunctionDescriptor.of(ValueLayout.JAVA_INT, ValueLayout.ADDRESS,
+                    ValueLayout.JAVA_LONG, ValueLayout.ADDRESS));
+    static final MethodHandle EPOCH_PUBLIC_KEY = bind("hide_epoch_public_key",
+            FunctionDescriptor.of(ValueLayout.JAVA_INT, ValueLayout.ADDRESS,
+                    ValueLayout.JAVA_LONG, ValueLayout.JAVA_LONG, ValueLayout.ADDRESS));
+
+    static final MethodHandle TRANSPARENCY_VERIFY_INCLUSION =
+            bind("hide_transparency_verify_inclusion",
+                    FunctionDescriptor.of(ValueLayout.JAVA_INT, ValueLayout.ADDRESS,
+                            ValueLayout.JAVA_LONG, ValueLayout.JAVA_LONG, ValueLayout.JAVA_LONG,
+                            ValueLayout.ADDRESS, ValueLayout.JAVA_LONG,
+                            ValueLayout.ADDRESS, ValueLayout.JAVA_LONG));
+    static final MethodHandle TRANSPARENCY_VERIFY_CONSISTENCY =
+            bind("hide_transparency_verify_consistency",
+                    FunctionDescriptor.of(ValueLayout.JAVA_INT, ValueLayout.JAVA_LONG,
+                            ValueLayout.JAVA_LONG, ValueLayout.ADDRESS, ValueLayout.JAVA_LONG,
+                            ValueLayout.ADDRESS, ValueLayout.JAVA_LONG,
+                            ValueLayout.ADDRESS, ValueLayout.JAVA_LONG));
+
     private static MethodHandle bind(String name, FunctionDescriptor descriptor) {
         return LINKER.downcallHandle(
                 LOOKUP.find(name).orElseThrow(() ->

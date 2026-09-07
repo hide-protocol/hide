@@ -342,10 +342,321 @@ pub fn version() -> String {
     env!("CARGO_PKG_VERSION").into()
 }
 
+/// A log or chain is public and can be large; this only stops a hostile length
+/// from exhausting memory.
+const MAX_LOG_BYTES: usize = 16 * 1024 * 1024;
+
+/// The distinction a caller needs to tell corruption from forgery. Thrown as
+/// text, matching every other error this module raises; the prefix is what a
+/// caller matches on.
+fn malformed(message: impl std::fmt::Display) -> JsValue {
+    JsValue::from_str(&format!("malformed: {message}"))
+}
+
+fn recovery_key(bytes: &[u8]) -> Result<VerifyingIdentity, JsValue> {
+    VerifyingIdentity::from_bytes(bytes).map_err(error)
+}
+
+fn identity_entries(log: &[u8]) -> Result<Vec<hide_identity::Entry>, JsValue> {
+    if log.len() > MAX_LOG_BYTES {
+        return Err(error("that log is too large for the browser build"));
+    }
+    hide_identity::decode(log).map_err(malformed)
+}
+
+/// Replays an identity log and returns how many devices it trusts now.
+///
+/// A log that does not decode throws `"malformed: …"`, one that decodes and
+/// does not verify throws the verification failure — the distinction that
+/// tells corruption from forgery. A count is returned rather than a boolean:
+/// a caller who forgot to check one would read every failure as a pass.
+#[wasm_bindgen(js_name = verifyIdentity)]
+pub fn verify_identity(log: &[u8], recovery: &[u8]) -> Result<usize, JsValue> {
+    let entries = identity_entries(log)?;
+    let membership =
+        hide_identity::IdentityLog::verify(&entries, &recovery_key(recovery)?).map_err(error)?;
+    Ok(membership.len())
+}
+
+/// Whether the log trusts this device right now.
+///
+/// A boolean is right here — this is a membership query, not a cryptographic
+/// check. The log is still verified first, so `false` means "not a member",
+/// never "did not verify": that throws.
+#[wasm_bindgen(js_name = identityTrustsDevice)]
+pub fn identity_trusts_device(
+    log: &[u8],
+    recovery: &[u8],
+    device_public: &[u8],
+) -> Result<bool, JsValue> {
+    let device = VerifyingIdentity::from_bytes(device_public).map_err(error)?;
+    let entries = identity_entries(log)?;
+    let membership =
+        hide_identity::IdentityLog::verify(&entries, &recovery_key(recovery)?).map_err(error)?;
+    Ok(membership.contains(&hide_identity::device_id(&device)))
+}
+
+/// The head link: 32 bytes naming this exact history.
+#[wasm_bindgen(js_name = identityHead)]
+pub fn identity_head(log: &[u8], recovery: &[u8]) -> Result<Vec<u8>, JsValue> {
+    let entries = identity_entries(log)?;
+    let log = hide_identity::IdentityLog::from_entries(entries, recovery_key(recovery)?)
+        .map_err(error)?;
+    Ok(log.head().to_vec())
+}
+
+fn epoch_records(chain: &[u8]) -> Result<Vec<hide_epoch::EpochRecord>, JsValue> {
+    if chain.len() > MAX_LOG_BYTES {
+        return Err(error("that chain is too large for the browser build"));
+    }
+    let records = hide_epoch::decode_records(chain).map_err(malformed)?;
+    hide_epoch::EpochChain::verify(&records).map_err(error)?;
+    Ok(records)
+}
+
+/// Verifies a published epoch history and returns how many epochs it holds.
+#[wasm_bindgen(js_name = verifyEpochChain)]
+pub fn verify_epoch_chain(chain: &[u8]) -> Result<usize, JsValue> {
+    Ok(epoch_records(chain)?.len())
+}
+
+/// The public key a sender should encrypt to for `epoch`.
+///
+/// The chain is verified first, so a key is never returned from a history that
+/// does not hold together. An epoch beyond the chain is refused.
+#[wasm_bindgen(js_name = epochPublicKey)]
+pub fn epoch_public_key(chain: &[u8], epoch: u64) -> Result<Vec<u8>, JsValue> {
+    let records = epoch_records(chain)?;
+    let record = records
+        .get(epoch as usize)
+        .ok_or_else(|| error("that epoch is beyond the chain"))?;
+    Ok(record.public_key.clone())
+}
+
+/// `path` is the concatenated 32-byte hashes; any other length is refused.
+fn hash_path(path: &[u8]) -> Result<Vec<[u8; 32]>, JsValue> {
+    if path.len() % 32 != 0 || path.len() > 64 * 32 {
+        return Err(error("a proof path must be whole 32-byte hashes"));
+    }
+    Ok(path
+        .chunks_exact(32)
+        .map(|chunk| {
+            let mut hash = [0u8; 32];
+            hash.copy_from_slice(chunk);
+            hash
+        })
+        .collect())
+}
+
+fn hash(bytes: &[u8], what: &str) -> Result<[u8; 32], JsValue> {
+    let mut value = [0u8; 32];
+    if bytes.len() != 32 {
+        return Err(error(format!("the {what} must be 32 bytes")));
+    }
+    value.copy_from_slice(bytes);
+    Ok(value)
+}
+
+/// Checks that `leaf` is entry `index` of a log of `size` entries under `root`.
+///
+/// Returns nothing on success rather than a boolean, for the same reason
+/// `verify` does.
+#[wasm_bindgen(js_name = verifyInclusion)]
+pub fn verify_inclusion(
+    leaf: &[u8],
+    index: u64,
+    size: u64,
+    path: &[u8],
+    root: &[u8],
+) -> Result<(), JsValue> {
+    let proof = hide_transparency::InclusionProof {
+        index,
+        size,
+        path: hash_path(path)?,
+    };
+    hide_transparency::verify_inclusion(&proof, &hash(leaf, "leaf")?, &hash(root, "root")?)
+        .map_err(error)
+}
+
+/// Checks that `old_root` really is the root the log had before it grew to
+/// `new_root`. This is the check that catches a rewritten history.
+#[wasm_bindgen(js_name = verifyConsistency)]
+pub fn verify_consistency(
+    old_size: u64,
+    new_size: u64,
+    path: &[u8],
+    old_root: &[u8],
+    new_root: &[u8],
+) -> Result<(), JsValue> {
+    let proof = hide_transparency::ConsistencyProof {
+        old_size,
+        new_size,
+        path: hash_path(path)?,
+    };
+    hide_transparency::verify_consistency(
+        &proof,
+        &hash(old_root, "old root")?,
+        &hash(new_root, "new root")?,
+    )
+    .map_err(error)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use wasm_bindgen_test::wasm_bindgen_test;
+
+    /// The same vectors every other SDK uses, so all of them agree.
+    mod fixtures {
+        macro_rules! vector {
+            ($name:ident, $file:literal) => {
+                pub const $name: &[u8] =
+                    include_bytes!(concat!("../../../conformance/vectors/subsystems/", $file));
+            };
+        }
+
+        vector!(IDENTITY_LOG, "identity-log.bin");
+        vector!(IDENTITY_RECOVERY, "identity-recovery.bin");
+        vector!(IDENTITY_DEVICE_PHONE, "identity-device-phone.bin");
+        vector!(IDENTITY_DEVICE_LAPTOP, "identity-device-laptop.bin");
+        vector!(IDENTITY_HEAD, "identity-head.bin");
+        vector!(IDENTITY_TAMPERED, "identity-tampered.bin");
+        vector!(EPOCH_CHAIN, "epoch-chain.bin");
+        vector!(EPOCH_PUBLIC_KEY_1, "epoch-public-key-1.bin");
+        vector!(EPOCH_BROKEN, "epoch-broken.bin");
+        vector!(LEAF, "leaf.bin");
+        vector!(OTHER_LEAF, "other-leaf.bin");
+        vector!(INCLUSION_PATH, "inclusion-path.bin");
+        vector!(TREE_ROOT, "tree-root.bin");
+        vector!(CONSISTENCY_PATH, "consistency-path.bin");
+        vector!(ROOT_AT_5, "root-at-5.bin");
+        vector!(REWRITTEN_ROOT, "rewritten-root.bin");
+    }
+
+    #[wasm_bindgen_test]
+    fn an_identity_log_reports_the_devices_it_trusts() {
+        // Four events: create, enrol phone, enrol laptop, revoke laptop.
+        assert_eq!(
+            verify_identity(fixtures::IDENTITY_LOG, fixtures::IDENTITY_RECOVERY).expect("verify"),
+            2
+        );
+        assert!(
+            identity_trusts_device(
+                fixtures::IDENTITY_LOG,
+                fixtures::IDENTITY_RECOVERY,
+                fixtures::IDENTITY_DEVICE_PHONE
+            )
+            .expect("trusts device"),
+            "the enrolled phone is not trusted"
+        );
+        assert!(
+            !identity_trusts_device(
+                fixtures::IDENTITY_LOG,
+                fixtures::IDENTITY_RECOVERY,
+                fixtures::IDENTITY_DEVICE_LAPTOP
+            )
+            .expect("trusts device"),
+            "a revoked laptop is still trusted"
+        );
+        assert_eq!(
+            identity_head(fixtures::IDENTITY_LOG, fixtures::IDENTITY_RECOVERY).expect("head"),
+            fixtures::IDENTITY_HEAD
+        );
+    }
+
+    #[wasm_bindgen_test]
+    fn a_tampered_log_is_refused() {
+        assert!(
+            verify_identity(fixtures::IDENTITY_TAMPERED, fixtures::IDENTITY_RECOVERY).is_err(),
+            "a tampered log verified"
+        );
+        // Bytes that do not decode at all are a different failure from bytes
+        // that decode and do not verify.
+        let failure = verify_identity(b"not a log", fixtures::IDENTITY_RECOVERY)
+            .expect_err("undecodable bytes verified");
+        assert!(
+            failure
+                .as_string()
+                .unwrap_or_default()
+                .starts_with("malformed:"),
+            "undecodable bytes were not reported as malformed"
+        );
+    }
+
+    #[wasm_bindgen_test]
+    fn an_epoch_chain_verifies_and_yields_keys() {
+        assert_eq!(
+            verify_epoch_chain(fixtures::EPOCH_CHAIN).expect("verify"),
+            3
+        );
+        assert_eq!(
+            epoch_public_key(fixtures::EPOCH_CHAIN, 1).expect("public key"),
+            fixtures::EPOCH_PUBLIC_KEY_1
+        );
+        assert!(
+            epoch_public_key(fixtures::EPOCH_CHAIN, 3).is_err(),
+            "an out-of-range epoch yielded a key"
+        );
+        assert!(
+            verify_epoch_chain(fixtures::EPOCH_BROKEN).is_err(),
+            "a spliced chain verified"
+        );
+    }
+
+    #[wasm_bindgen_test]
+    fn transparency_proofs_catch_a_rewritten_history() {
+        verify_inclusion(
+            fixtures::LEAF,
+            3,
+            8,
+            fixtures::INCLUSION_PATH,
+            fixtures::TREE_ROOT,
+        )
+        .expect("a genuine inclusion proof did not verify");
+        assert!(
+            verify_inclusion(
+                fixtures::OTHER_LEAF,
+                3,
+                8,
+                fixtures::INCLUSION_PATH,
+                fixtures::TREE_ROOT
+            )
+            .is_err(),
+            "a foreign leaf was included"
+        );
+        assert!(
+            verify_inclusion(
+                fixtures::LEAF,
+                3,
+                8,
+                &fixtures::INCLUSION_PATH[..fixtures::INCLUSION_PATH.len() - 1],
+                fixtures::TREE_ROOT
+            )
+            .is_err(),
+            "a partial hash was accepted"
+        );
+
+        verify_consistency(
+            5,
+            8,
+            fixtures::CONSISTENCY_PATH,
+            fixtures::ROOT_AT_5,
+            fixtures::TREE_ROOT,
+        )
+        .expect("a genuine consistency proof did not verify");
+        // Same size, one entry silently replaced.
+        assert!(
+            verify_consistency(
+                5,
+                8,
+                fixtures::CONSISTENCY_PATH,
+                fixtures::ROOT_AT_5,
+                fixtures::REWRITTEN_ROOT
+            )
+            .is_err(),
+            "a rewritten history was consistent"
+        );
+    }
 
     #[wasm_bindgen_test]
     fn round_trips_in_a_browser() {

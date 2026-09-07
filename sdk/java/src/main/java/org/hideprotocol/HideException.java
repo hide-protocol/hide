@@ -10,10 +10,25 @@ public class HideException extends RuntimeException {
     }
 
     /** The data was altered, or is not a HIDE container. */
-    public static final class Authentication extends HideException {
+    public static class Authentication extends HideException {
         private static final long serialVersionUID = 1L;
 
         Authentication(String message) {
+            super(message);
+        }
+    }
+
+    /**
+     * The bytes did not decode at all.
+     *
+     * <p>A subclass of {@link Authentication} so that code which only cares
+     * that something failed is unaffected, while a caller that must tell
+     * corruption from forgery can catch this specifically.
+     */
+    public static final class Malformed extends Authentication {
+        private static final long serialVersionUID = 1L;
+
+        Malformed(String message) {
             super(message);
         }
     }

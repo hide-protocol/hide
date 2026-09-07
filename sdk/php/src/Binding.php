@@ -101,6 +101,34 @@ final class Binding
                                       const uint8_t *signature, size_t signature_len,
                                       const uint8_t *public_key, size_t public_key_len,
                                       uint64_t now);
+
+        int32_t hide_identity_verify(const uint8_t *log, size_t log_len,
+                         const uint8_t *recovery, size_t recovery_len,
+                         size_t *out_devices);
+        int32_t hide_identity_trusts_device(const uint8_t *log, size_t log_len,
+                            const uint8_t *recovery, size_t recovery_len,
+                            const uint8_t *device_public,
+                            size_t device_public_len,
+                            int32_t *out_trusted);
+        int32_t hide_identity_head(const uint8_t *log, size_t log_len,
+                       const uint8_t *recovery, size_t recovery_len,
+                       HideBuffer *out);
+
+        int32_t hide_epoch_verify(const uint8_t *chain, size_t chain_len,
+                      size_t *out_epochs);
+        int32_t hide_epoch_public_key(const uint8_t *chain, size_t chain_len,
+                          uint64_t epoch, HideBuffer *out);
+
+        int32_t hide_transparency_verify_inclusion(const uint8_t *leaf, size_t leaf_len,
+                               uint64_t index, uint64_t size,
+                               const uint8_t *path, size_t path_len,
+                               const uint8_t *root, size_t root_len);
+        int32_t hide_transparency_verify_consistency(uint64_t old_size, uint64_t new_size,
+                                 const uint8_t *path, size_t path_len,
+                                 const uint8_t *old_root,
+                                 size_t old_root_len,
+                                 const uint8_t *new_root,
+                                 size_t new_root_len);
         C;
 
     private static ?\FFI $ffi = null;
@@ -262,7 +290,8 @@ final class Binding
             self::ERR_INVALID_ARGUMENT, self::ERR_TOO_LARGE => new \InvalidArgumentException($message),
             self::ERR_WRONG_PASSPHRASE => new WrongPassphraseException($message),
             self::ERR_NOT_A_KEY => new NotAKeyException($message),
-            self::ERR_AUTHENTICATION, self::ERR_MALFORMED => new AuthenticationException($message),
+            self::ERR_AUTHENTICATION => new AuthenticationException($message),
+            self::ERR_MALFORMED => new MalformedException($message),
             self::ERR_NO_MATCHING_RECIPIENT => new NoMatchingRecipientException($message),
             self::ERR_CHALLENGE_EXPIRED => new ChallengeExpiredException($message),
             self::ERR_CHALLENGE_REPLAYED => new ChallengeReplayedException($message),

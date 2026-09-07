@@ -14,12 +14,14 @@
 declare(strict_types=1);
 
 require __DIR__ . '/../autoload.php';
+require __DIR__ . '/fixtures.php';
 
 use HideProtocol\AuthenticationException;
 use HideProtocol\ChallengeExpiredException;
 use HideProtocol\ChallengeReplayedException;
 use HideProtocol\Hide;
 use HideProtocol\HideException;
+use HideProtocol\MalformedException;
 use HideProtocol\NoMatchingRecipientException;
 use HideProtocol\NotAKeyException;
 use HideProtocol\SecretKey;
@@ -466,6 +468,141 @@ test('an answer after the window has expired', function (): void {
         $spent->close();
         $identity->close();
     }
+});
+
+test('an identity log reports the devices it trusts', function (): void {
+    // Four events: create, enrol phone, enrol laptop, revoke laptop.
+    assertSame(
+        2,
+        Hide::verifyIdentity(Fixtures::get('IDENTITY_LOG'), Fixtures::get('IDENTITY_RECOVERY')),
+        'the log trusts two devices',
+    );
+});
+
+test('a revoked device is no longer trusted', function (): void {
+    assertTrue(
+        Hide::identityTrustsDevice(
+            Fixtures::get('IDENTITY_LOG'),
+            Fixtures::get('IDENTITY_RECOVERY'),
+            Fixtures::get('IDENTITY_DEVICE_PHONE'),
+        ),
+        'the enrolled phone is not trusted',
+    );
+    assertTrue(
+        !Hide::identityTrustsDevice(
+            Fixtures::get('IDENTITY_LOG'),
+            Fixtures::get('IDENTITY_RECOVERY'),
+            Fixtures::get('IDENTITY_DEVICE_LAPTOP'),
+        ),
+        'a revoked laptop is still trusted',
+    );
+});
+
+test('a tampered log is refused', function (): void {
+    assertThrows(
+        AuthenticationException::class,
+        static fn () => Hide::verifyIdentity(
+            Fixtures::get('IDENTITY_TAMPERED'),
+            Fixtures::get('IDENTITY_RECOVERY'),
+        ),
+        'a tampered log verified',
+    );
+    // Bytes that do not decode at all are a different failure from bytes that
+    // decode and do not verify.
+    assertThrows(
+        MalformedException::class,
+        static fn () => Hide::verifyIdentity('not a log', Fixtures::get('IDENTITY_RECOVERY')),
+        'undecodable bytes were not reported as malformed',
+    );
+});
+
+test('the head names this exact history', function (): void {
+    $head = Hide::identityHead(Fixtures::get('IDENTITY_LOG'), Fixtures::get('IDENTITY_RECOVERY'));
+    assertSame(32, strlen($head), 'the head is 32 bytes');
+    assertSame(Fixtures::get('IDENTITY_HEAD'), $head, 'the head names this history');
+});
+
+test('an epoch chain verifies and yields keys', function (): void {
+    assertSame(3, Hide::verifyEpochChain(Fixtures::get('EPOCH_CHAIN')), 'the chain holds 3 epochs');
+    assertSame(
+        Fixtures::get('EPOCH_PUBLIC_KEY_1'),
+        Hide::epochPublicKey(Fixtures::get('EPOCH_CHAIN'), 1),
+        'epoch 1 public key',
+    );
+});
+
+test('an epoch beyond the chain is refused', function (): void {
+    assertThrows(
+        InvalidArgumentException::class,
+        static fn () => Hide::epochPublicKey(Fixtures::get('EPOCH_CHAIN'), 3),
+        'an out-of-range epoch yielded a key',
+    );
+});
+
+test('a spliced epoch chain does not verify', function (): void {
+    assertThrows(
+        AuthenticationException::class,
+        static fn () => Hide::verifyEpochChain(Fixtures::get('EPOCH_BROKEN')),
+        'a spliced chain verified',
+    );
+});
+
+test('an inclusion proof verifies only for its own leaf', function (): void {
+    Hide::verifyInclusion(
+        Fixtures::get('LEAF'),
+        3,
+        8,
+        Fixtures::get('INCLUSION_PATH'),
+        Fixtures::get('TREE_ROOT'),
+    );
+    assertThrows(
+        AuthenticationException::class,
+        static fn () => Hide::verifyInclusion(
+            Fixtures::get('OTHER_LEAF'),
+            3,
+            8,
+            Fixtures::get('INCLUSION_PATH'),
+            Fixtures::get('TREE_ROOT'),
+        ),
+        'a foreign leaf was included',
+    );
+});
+
+test('a path that is not whole hashes is refused', function (): void {
+    $truncated = substr(Fixtures::get('INCLUSION_PATH'), 0, -1);
+    assertThrows(
+        InvalidArgumentException::class,
+        static fn () => Hide::verifyInclusion(
+            Fixtures::get('LEAF'),
+            3,
+            8,
+            $truncated,
+            Fixtures::get('TREE_ROOT'),
+        ),
+        'a partial hash was accepted',
+    );
+});
+
+test('a consistency proof catches a rewritten history', function (): void {
+    Hide::verifyConsistency(
+        5,
+        8,
+        Fixtures::get('CONSISTENCY_PATH'),
+        Fixtures::get('ROOT_AT_5'),
+        Fixtures::get('TREE_ROOT'),
+    );
+    // Same size, one entry silently replaced.
+    assertThrows(
+        AuthenticationException::class,
+        static fn () => Hide::verifyConsistency(
+            5,
+            8,
+            Fixtures::get('CONSISTENCY_PATH'),
+            Fixtures::get('ROOT_AT_5'),
+            Fixtures::get('REWRITTEN_ROOT'),
+        ),
+        'a rewritten history was consistent',
+    );
 });
 
 foreach ($tests as [$name, $body]) {

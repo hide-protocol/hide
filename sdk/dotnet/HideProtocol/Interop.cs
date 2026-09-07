@@ -58,7 +58,7 @@ internal static unsafe class Interop
             Native.ErrWrongPassphrase => new WrongPassphraseException(message),
             Native.ErrNotAKey => new NotAKeyException(message),
             Native.ErrAuthentication => new AuthenticationException(message),
-            Native.ErrMalformed => new AuthenticationException(message),
+            Native.ErrMalformed => new MalformedException(message),
             Native.ErrNoMatchingRecipient => new NoMatchingRecipientException(message),
             Native.ErrChallengeExpired => new ChallengeExpiredException(message),
             Native.ErrChallengeReplayed => new ChallengeReplayedException(message),

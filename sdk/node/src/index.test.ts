@@ -5,6 +5,7 @@ import {
   AuthenticationError,
   ChallengeExpiredError,
   ChallengeReplayedError,
+  MalformedError,
   NoMatchingRecipientError,
   NotAKeyError,
   PUBLIC_KEY_LEN,
@@ -18,10 +19,35 @@ import {
   dearmorPublicKey,
   decrypt,
   encrypt,
+  epochPublicKey,
+  identityHead,
+  identityTrustsDevice,
   inspectKey,
   newChallenge,
   verify,
+  verifyConsistency,
+  verifyEpochChain,
+  verifyIdentity,
+  verifyInclusion,
 } from "./index.js";
+import {
+  consistencyPath,
+  epochBroken,
+  epochChain,
+  epochPublicKey1,
+  identityDeviceLaptop,
+  identityDevicePhone,
+  identityHead as identityHeadFixture,
+  identityLog,
+  identityRecovery,
+  identityTampered,
+  inclusionPath,
+  leaf,
+  otherLeaf,
+  rewrittenRoot,
+  rootAt5,
+  treeRoot,
+} from "./fixtures.js";
 
 test("round trip carries metadata", () => {
   const secret = SecretKey.generate();
@@ -297,4 +323,76 @@ test("a closed identity cannot sign and never prints key material", () => {
   signer.close();
   signer.close(); // idempotent
   assert.throws(() => signer.sign(CONTEXT, MESSAGE), TypeError);
+});
+
+test("an identity log reports the devices it trusts", () => {
+  // Four events: create, enrol phone, enrol laptop, revoke laptop.
+  assert.equal(verifyIdentity(identityLog, identityRecovery), 2);
+});
+
+test("a revoked device is no longer trusted", () => {
+  assert.equal(
+    identityTrustsDevice(identityLog, identityRecovery, identityDevicePhone),
+    true,
+  );
+  assert.equal(
+    identityTrustsDevice(identityLog, identityRecovery, identityDeviceLaptop),
+    false,
+  );
+});
+
+test("a tampered log is refused", () => {
+  assert.throws(
+    () => verifyIdentity(identityTampered, identityRecovery),
+    AuthenticationError,
+  );
+  // Bytes that do not decode at all are a different failure from bytes that
+  // decode and do not verify.
+  assert.throws(
+    () => verifyIdentity(Buffer.from("not a log"), identityRecovery),
+    MalformedError,
+  );
+});
+
+test("the head names this exact history", () => {
+  const head = identityHead(identityLog, identityRecovery);
+  assert.deepEqual(head, identityHeadFixture);
+  assert.equal(head.length, 32);
+});
+
+test("an epoch chain verifies and yields keys", () => {
+  assert.equal(verifyEpochChain(epochChain), 3);
+  assert.deepEqual(epochPublicKey(epochChain, 1), epochPublicKey1);
+});
+
+test("an epoch beyond the chain is refused", () => {
+  assert.throws(() => epochPublicKey(epochChain, 3), RangeError);
+});
+
+test("a spliced epoch chain does not verify", () => {
+  assert.throws(() => verifyEpochChain(epochBroken), AuthenticationError);
+});
+
+test("an inclusion proof verifies only for its own leaf", () => {
+  verifyInclusion(leaf, 3, 8, inclusionPath, treeRoot);
+  assert.throws(
+    () => verifyInclusion(otherLeaf, 3, 8, inclusionPath, treeRoot),
+    AuthenticationError,
+  );
+});
+
+test("a path that is not whole hashes is refused", () => {
+  assert.throws(
+    () => verifyInclusion(leaf, 3, 8, inclusionPath.subarray(0, -1), treeRoot),
+    RangeError,
+  );
+});
+
+test("a consistency proof catches a rewritten history", () => {
+  verifyConsistency(5, 8, consistencyPath, rootAt5, treeRoot);
+  // Same size, one entry silently replaced.
+  assert.throws(
+    () => verifyConsistency(5, 8, consistencyPath, rootAt5, rewrittenRoot),
+    AuthenticationError,
+  );
 });

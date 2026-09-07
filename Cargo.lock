@@ -1041,9 +1041,12 @@ version = "0.5.0"
 dependencies = [
  "getrandom 0.4.3",
  "hide-crypto",
+ "hide-epoch",
+ "hide-identity",
  "hide-keyring",
  "hide-object",
  "hide-sign",
+ "hide-transparency",
  "wasm-bindgen",
  "wasm-bindgen-test",
  "zeroize",

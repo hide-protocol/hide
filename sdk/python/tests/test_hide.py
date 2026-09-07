@@ -6,6 +6,8 @@ import pytest
 
 import hide_protocol as hide
 
+import fixtures as fx
+
 
 def test_round_trip_carries_metadata() -> None:
     with hide.SecretKey.generate() as secret:
@@ -204,3 +206,67 @@ def test_a_closed_identity_cannot_sign_and_never_prints_key_material() -> None:
     assert "closed" in repr(signer)
     with pytest.raises(ValueError):
         signer.sign(CONTEXT, b"anything")
+
+
+def test_an_identity_log_reports_the_devices_it_trusts() -> None:
+    # Four events: create, enrol phone, enrol laptop, revoke laptop.
+    assert hide.verify_identity(fx.IDENTITY_LOG, fx.IDENTITY_RECOVERY) == 2
+
+
+def test_a_revoked_device_is_no_longer_trusted() -> None:
+    assert hide.identity_trusts_device(
+        fx.IDENTITY_LOG, fx.IDENTITY_RECOVERY, fx.IDENTITY_DEVICE_PHONE
+    )
+    assert not hide.identity_trusts_device(
+        fx.IDENTITY_LOG, fx.IDENTITY_RECOVERY, fx.IDENTITY_DEVICE_LAPTOP
+    )
+
+
+def test_a_tampered_log_is_refused() -> None:
+    with pytest.raises(hide.AuthenticationError):
+        hide.verify_identity(fx.IDENTITY_TAMPERED, fx.IDENTITY_RECOVERY)
+    # Bytes that do not decode at all are a different failure from bytes that
+    # decode and do not verify.
+    with pytest.raises(hide.Malformed):
+        hide.verify_identity(b"not a log", fx.IDENTITY_RECOVERY)
+
+
+def test_the_head_names_this_exact_history() -> None:
+    head = hide.identity_head(fx.IDENTITY_LOG, fx.IDENTITY_RECOVERY)
+    assert head == fx.IDENTITY_HEAD
+    assert len(head) == 32
+
+
+def test_an_epoch_chain_verifies_and_yields_keys() -> None:
+    assert hide.verify_epoch_chain(fx.EPOCH_CHAIN) == 3
+    assert hide.epoch_public_key(fx.EPOCH_CHAIN, 1) == fx.EPOCH_PUBLIC_KEY_1
+
+
+def test_an_epoch_beyond_the_chain_is_refused() -> None:
+    with pytest.raises(ValueError):
+        hide.epoch_public_key(fx.EPOCH_CHAIN, 3)
+
+
+def test_a_spliced_epoch_chain_does_not_verify() -> None:
+    with pytest.raises(hide.AuthenticationError):
+        hide.verify_epoch_chain(fx.EPOCH_BROKEN)
+
+
+def test_an_inclusion_proof_verifies_only_for_its_own_leaf() -> None:
+    hide.verify_inclusion(fx.LEAF, 3, 8, fx.INCLUSION_PATH, fx.TREE_ROOT)
+    with pytest.raises(hide.AuthenticationError):
+        hide.verify_inclusion(fx.OTHER_LEAF, 3, 8, fx.INCLUSION_PATH, fx.TREE_ROOT)
+
+
+def test_a_path_that_is_not_whole_hashes_is_refused() -> None:
+    with pytest.raises(ValueError):
+        hide.verify_inclusion(fx.LEAF, 3, 8, fx.INCLUSION_PATH[:-1], fx.TREE_ROOT)
+
+
+def test_a_consistency_proof_catches_a_rewritten_history() -> None:
+    hide.verify_consistency(5, 8, fx.CONSISTENCY_PATH, fx.ROOT_AT_5, fx.TREE_ROOT)
+    # Same size, one entry silently replaced.
+    with pytest.raises(hide.AuthenticationError):
+        hide.verify_consistency(
+            5, 8, fx.CONSISTENCY_PATH, fx.ROOT_AT_5, fx.REWRITTEN_ROOT
+        )

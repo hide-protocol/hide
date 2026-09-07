@@ -6,6 +6,7 @@ $LOAD_PATH.unshift(File.expand_path("../lib", __dir__))
 
 require "minitest/autorun"
 require "hide_protocol"
+require_relative "fixtures"
 
 class TestHide < Minitest::Test
   def test_round_trip_carries_metadata
@@ -351,6 +352,85 @@ class TestHide < Minitest::Test
     assert_predicate signer, :closed?
     assert_raises(Hide::ClosedKeyError) { signer.public_key }
     assert_raises(Hide::ClosedKeyError) { signer.sign(CONTEXT, "x") }
+  end
+
+  def test_an_identity_log_reports_the_devices_it_trusts
+    # Four events: create, enrol phone, enrol laptop, revoke laptop.
+    assert_equal 2, Hide.verify_identity(Fixtures::IDENTITY_LOG, Fixtures::IDENTITY_RECOVERY)
+  end
+
+  def test_a_revoked_device_is_no_longer_trusted
+    assert Hide.identity_trusts_device(
+      Fixtures::IDENTITY_LOG, Fixtures::IDENTITY_RECOVERY, Fixtures::IDENTITY_DEVICE_PHONE
+    )
+    refute Hide.identity_trusts_device(
+      Fixtures::IDENTITY_LOG, Fixtures::IDENTITY_RECOVERY, Fixtures::IDENTITY_DEVICE_LAPTOP
+    )
+  end
+
+  def test_a_tampered_log_is_refused
+    assert_raises(Hide::AuthenticationError) do
+      Hide.verify_identity(Fixtures::IDENTITY_TAMPERED, Fixtures::IDENTITY_RECOVERY)
+    end
+    # Bytes that do not decode at all are a different failure from bytes that
+    # decode and do not verify.
+    assert_raises(Hide::MalformedError) do
+      Hide.verify_identity("not a log", Fixtures::IDENTITY_RECOVERY)
+    end
+  end
+
+  def test_the_head_names_this_exact_history
+    head = Hide.identity_head(Fixtures::IDENTITY_LOG, Fixtures::IDENTITY_RECOVERY)
+    assert_equal Fixtures::IDENTITY_HEAD, head
+    assert_equal 32, head.bytesize
+  end
+
+  def test_an_epoch_chain_verifies_and_yields_keys
+    assert_equal 3, Hide.verify_epoch_chain(Fixtures::EPOCH_CHAIN)
+    assert_equal Fixtures::EPOCH_PUBLIC_KEY_1, Hide.epoch_public_key(Fixtures::EPOCH_CHAIN, 1)
+  end
+
+  def test_an_epoch_beyond_the_chain_is_refused
+    assert_raises(Hide::InvalidArgumentError) do
+      Hide.epoch_public_key(Fixtures::EPOCH_CHAIN, 3)
+    end
+  end
+
+  def test_a_spliced_epoch_chain_does_not_verify
+    assert_raises(Hide::AuthenticationError) do
+      Hide.verify_epoch_chain(Fixtures::EPOCH_BROKEN)
+    end
+  end
+
+  def test_an_inclusion_proof_verifies_only_for_its_own_leaf
+    assert_nil Hide.verify_inclusion(
+      Fixtures::LEAF, 3, 8, Fixtures::INCLUSION_PATH, Fixtures::TREE_ROOT
+    )
+    assert_raises(Hide::AuthenticationError) do
+      Hide.verify_inclusion(
+        Fixtures::OTHER_LEAF, 3, 8, Fixtures::INCLUSION_PATH, Fixtures::TREE_ROOT
+      )
+    end
+  end
+
+  def test_a_path_that_is_not_whole_hashes_is_refused
+    assert_raises(Hide::InvalidArgumentError) do
+      Hide.verify_inclusion(
+        Fixtures::LEAF, 3, 8, Fixtures::INCLUSION_PATH[0...-1], Fixtures::TREE_ROOT
+      )
+    end
+  end
+
+  def test_a_consistency_proof_catches_a_rewritten_history
+    assert_nil Hide.verify_consistency(
+      5, 8, Fixtures::CONSISTENCY_PATH, Fixtures::ROOT_AT_5, Fixtures::TREE_ROOT
+    )
+    # Same size, one entry silently replaced.
+    assert_raises(Hide::AuthenticationError) do
+      Hide.verify_consistency(
+        5, 8, Fixtures::CONSISTENCY_PATH, Fixtures::ROOT_AT_5, Fixtures::REWRITTEN_ROOT
+      )
+    end
   end
 
   private
