@@ -82,10 +82,24 @@ jobs:
           fi
           for crate in hide-format hide-crypto hide-sign hide-keyring hide-object hide-ffi hide-cli; do
             echo "::group::$crate"
-            cargo publish $flags -p "$crate"
+            if [ "${{ inputs.dry_run }}" = "true" ]; then
+              # Until the first real publish, a dependent cannot resolve its
+              # sibling: the version exists only in this checkout. That one
+              # error is expected; every other one still fails the job.
+              if ! out=$(cargo publish $flags -p "$crate" 2>&1); then
+                echo "$out"
+                echo "$out" | grep -q "no matching package named .hide-" \
+                  || { echo "::error::$crate failed for a reason other than an unpublished sibling"; exit 1; }
+                echo "::notice::$crate: sibling not on crates.io yet, expected before the first publish"
+              else
+                echo "$out"
+              fi
+            else
+              cargo publish $flags -p "$crate"
+              # crates.io needs a moment before a dependent crate can resolve it.
+              sleep 30
+            fi
             echo "::endgroup::"
-            # crates.io needs a moment before a dependent crate can resolve it.
-            if [ "${{ inputs.dry_run }}" != "true" ]; then sleep 30; fi
           done
 
   pypi:
