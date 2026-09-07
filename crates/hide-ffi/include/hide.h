@@ -121,6 +121,11 @@ typedef struct HideSigningIdentity HideSigningIdentity;
  * the verifier, so this must outlive a single request. */
 typedef struct HideSpentNonces HideSpentNonces;
 
+/* Creates an identity sealed under a passphrase, ready to write to disk. One
+ * seed backs both encryption and signing, so there is one thing to back up;
+ * the seed itself never crosses this boundary. */
+int32_t hide_identity_generate(const char *passphrase, HideBuffer *out_key_file);
+
 /* Loads a signing identity. A key file written before signatures existed
  * carries no signing seed and fails with HIDE_ERR_NOT_A_KEY rather than being
  * silently downgraded. Pass passphrase = NULL for a raw key file. */

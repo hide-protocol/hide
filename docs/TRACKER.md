@@ -288,6 +288,41 @@ Domain separation is tested in *both* directions: a detached signature must not
 authenticate a login, and answering a challenge must not hand out something
 that verifies over a file.
 
+### P6 — the C ABI and all eight SDKs
+
+**The bug this phase existed to find.** P3 changed `hide keygen` to write a
+master **seed**, and the CLI derives the encryption key from it. But
+`hide_keyring::open` — used by the FFI and by WASM, so by every SDK — still
+read those 32 bytes as the recipient key itself. The CLI's own `.pub` file did
+not match the key any SDK derived from its `.key`. Nothing caught it for three
+phases, because each surface was self-consistent and `cargo test --workspace`
+cannot compare surfaces. Cross-surface conformance is now in the pre-push hook.
+
+A second symptom of the same cause: a protected identity file could not be
+opened as an encryption key by any SDK, because `unprotect` demanded
+`KeyPurpose::Encryption`. `open` now derives for an `Identity` file and reads
+directly for an `Encryption` one; `unprotect` still refuses the mismatch, so
+the purpose check that P3 added is intact.
+
+**Why the frozen fixture could not simply be repaired.** `recipient.test-secret`
+is a v0.1.0 artifact: the file *is* the recipient key. Finding a seed that
+derives to that exact value is a preimage attack on SHA-256, so the obvious fix
+does not exist — a recommendation worth withdrawing rather than faking. The
+v0.1.0 vectors are therefore untouched, still proving the format has not
+drifted, and a new seed-based vector covers the path every surface actually
+takes. Its test asserts both that the derived key opens the container and that
+the literal reading does *not*.
+
+**Eight bindings, built in parallel.** Seven go through the C ABI; WASM binds
+the crates directly and cannot. Each keeps its own language's conventions —
+`IDisposable` in .NET, `FinalizationRegistry` in Node, block form in Ruby,
+`error` returns in Go — rather than transliterating the Python shape. `verify`
+throws everywhere instead of returning a boolean a caller can forget to check.
+
+The header is hand-written, so a Rust test now reads `hide.h` and asserts every
+constant against the Rust definition. The C round-trip only covers constants it
+happens to exercise, and is skipped where no C compiler exists.
+
 ---
 
 ## Rules that apply to this milestone

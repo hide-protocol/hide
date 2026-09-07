@@ -33,10 +33,15 @@ final class Native {
     static final int ERR_NO_MATCHING_RECIPIENT = 5;
     static final int ERR_MALFORMED = 6;
     static final int ERR_TOO_LARGE = 7;
+        static final int ERR_CHALLENGE_EXPIRED = 8;
+        static final int ERR_CHALLENGE_REPLAYED = 9;
 
     static final int KEY_PROTECTED = 1;
 
     static final int PUBLIC_KEY_LEN = 1216;
+        static final int SIGNATURE_LEN = 3373;
+        static final int VERIFYING_KEY_LEN = 1984;
+        static final int NONCE_LEN = 32;
     static final int MIN_PASSPHRASE_LEN = 8;
 
     /** Mirrors HideBuffer in hide.h. */
@@ -91,6 +96,42 @@ final class Native {
             FunctionDescriptor.of(ValueLayout.JAVA_INT, ValueLayout.ADDRESS,
                     ValueLayout.JAVA_LONG, ValueLayout.ADDRESS, ValueLayout.ADDRESS,
                     ValueLayout.ADDRESS, ValueLayout.ADDRESS));
+
+    static final MethodHandle IDENTITY_GENERATE = bind("hide_identity_generate",
+            FunctionDescriptor.of(ValueLayout.JAVA_INT, ValueLayout.ADDRESS, ValueLayout.ADDRESS));
+    static final MethodHandle SIGNING_IDENTITY_OPEN = bind("hide_signing_identity_open",
+            FunctionDescriptor.of(ValueLayout.JAVA_INT, ValueLayout.ADDRESS,
+                    ValueLayout.JAVA_LONG, ValueLayout.ADDRESS, ValueLayout.ADDRESS));
+    static final MethodHandle SIGNING_IDENTITY_PUBLIC = bind("hide_signing_identity_public",
+            FunctionDescriptor.of(ValueLayout.JAVA_INT, ValueLayout.ADDRESS, ValueLayout.ADDRESS));
+    static final MethodHandle SIGNING_IDENTITY_FREE = bind("hide_signing_identity_free",
+            FunctionDescriptor.ofVoid(ValueLayout.ADDRESS));
+
+    static final MethodHandle SIGN_MESSAGE = bind("hide_sign_message",
+            FunctionDescriptor.of(ValueLayout.JAVA_INT, ValueLayout.ADDRESS,
+                    ValueLayout.ADDRESS, ValueLayout.JAVA_LONG,
+                    ValueLayout.ADDRESS, ValueLayout.JAVA_LONG, ValueLayout.ADDRESS));
+    static final MethodHandle VERIFY_MESSAGE = bind("hide_verify_message",
+            FunctionDescriptor.of(ValueLayout.JAVA_INT, ValueLayout.ADDRESS,
+                    ValueLayout.JAVA_LONG, ValueLayout.ADDRESS, ValueLayout.JAVA_LONG,
+                    ValueLayout.ADDRESS, ValueLayout.JAVA_LONG,
+                    ValueLayout.ADDRESS, ValueLayout.JAVA_LONG));
+
+    static final MethodHandle CHALLENGE_NEW = bind("hide_challenge_new",
+            FunctionDescriptor.of(ValueLayout.JAVA_INT, ValueLayout.ADDRESS,
+                    ValueLayout.JAVA_LONG, ValueLayout.JAVA_LONG, ValueLayout.ADDRESS));
+    static final MethodHandle CHALLENGE_ANSWER = bind("hide_challenge_answer",
+            FunctionDescriptor.of(ValueLayout.JAVA_INT, ValueLayout.ADDRESS,
+                    ValueLayout.ADDRESS, ValueLayout.JAVA_LONG, ValueLayout.ADDRESS));
+    static final MethodHandle SPENT_NONCES_NEW = bind("hide_spent_nonces_new",
+            FunctionDescriptor.of(ValueLayout.ADDRESS));
+    static final MethodHandle SPENT_NONCES_FREE = bind("hide_spent_nonces_free",
+            FunctionDescriptor.ofVoid(ValueLayout.ADDRESS));
+    static final MethodHandle CHALLENGE_ACCEPT = bind("hide_challenge_accept",
+            FunctionDescriptor.of(ValueLayout.JAVA_INT, ValueLayout.ADDRESS,
+                    ValueLayout.ADDRESS, ValueLayout.JAVA_LONG,
+                    ValueLayout.ADDRESS, ValueLayout.JAVA_LONG,
+                    ValueLayout.ADDRESS, ValueLayout.JAVA_LONG, ValueLayout.JAVA_LONG));
 
     private static MethodHandle bind(String name, FunctionDescriptor descriptor) {
         return LINKER.downcallHandle(

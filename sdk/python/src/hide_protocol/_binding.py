@@ -20,12 +20,17 @@ ERR_AUTHENTICATION = 4
 ERR_NO_MATCHING_RECIPIENT = 5
 ERR_MALFORMED = 6
 ERR_TOO_LARGE = 7
+ERR_CHALLENGE_EXPIRED = 8
+ERR_CHALLENGE_REPLAYED = 9
 
 KEY_RAW = 0
 KEY_PROTECTED = 1
 
 PUBLIC_KEY_LEN = 1216
 MIN_PASSPHRASE_LEN = 8
+SIGNATURE_LEN = 3373
+VERIFYING_KEY_LEN = 1984
+NONCE_LEN = 32
 
 
 class Buffer(ctypes.Structure):
@@ -130,6 +135,71 @@ _SIGNATURES = {
             ctypes.POINTER(Buffer),
             ctypes.POINTER(Buffer),
             ctypes.POINTER(Buffer),
+        ],
+        ctypes.c_int32,
+    ),
+    "hide_identity_generate": (
+        [ctypes.c_char_p, ctypes.POINTER(Buffer)],
+        ctypes.c_int32,
+    ),
+    "hide_signing_identity_open": (
+        [
+            ctypes.c_char_p,
+            ctypes.c_size_t,
+            ctypes.c_char_p,
+            ctypes.POINTER(ctypes.c_void_p),
+        ],
+        ctypes.c_int32,
+    ),
+    "hide_signing_identity_public": (
+        [ctypes.c_void_p, ctypes.POINTER(Buffer)],
+        ctypes.c_int32,
+    ),
+    "hide_signing_identity_free": ([ctypes.c_void_p], None),
+    "hide_sign_message": (
+        [
+            ctypes.c_void_p,
+            ctypes.c_char_p,
+            ctypes.c_size_t,
+            ctypes.c_char_p,
+            ctypes.c_size_t,
+            ctypes.POINTER(Buffer),
+        ],
+        ctypes.c_int32,
+    ),
+    "hide_verify_message": (
+        [
+            ctypes.c_char_p,
+            ctypes.c_size_t,
+            ctypes.c_char_p,
+            ctypes.c_size_t,
+            ctypes.c_char_p,
+            ctypes.c_size_t,
+            ctypes.c_char_p,
+            ctypes.c_size_t,
+        ],
+        ctypes.c_int32,
+    ),
+    "hide_challenge_new": (
+        [ctypes.c_char_p, ctypes.c_uint64, ctypes.c_uint64, ctypes.POINTER(Buffer)],
+        ctypes.c_int32,
+    ),
+    "hide_challenge_answer": (
+        [ctypes.c_void_p, ctypes.c_char_p, ctypes.c_size_t, ctypes.POINTER(Buffer)],
+        ctypes.c_int32,
+    ),
+    "hide_spent_nonces_new": ([], ctypes.c_void_p),
+    "hide_spent_nonces_free": ([ctypes.c_void_p], None),
+    "hide_challenge_accept": (
+        [
+            ctypes.c_void_p,
+            ctypes.c_char_p,
+            ctypes.c_size_t,
+            ctypes.c_char_p,
+            ctypes.c_size_t,
+            ctypes.c_char_p,
+            ctypes.c_size_t,
+            ctypes.c_uint64,
         ],
         ctypes.c_int32,
     ),

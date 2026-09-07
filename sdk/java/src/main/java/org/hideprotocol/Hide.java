@@ -30,6 +30,15 @@ public final class Hide {
     /** The exact size of a HIDE public key. */
     public static final int PUBLIC_KEY_LEN = Native.PUBLIC_KEY_LEN;
 
+    /** The exact size of a HIDE signature. */
+    public static final int SIGNATURE_LEN = Native.SIGNATURE_LEN;
+
+    /** The exact size of a shareable verifying key. */
+    public static final int VERIFYING_KEY_LEN = Native.VERIFYING_KEY_LEN;
+
+    /** The size of the random nonce inside a challenge. */
+    public static final int NONCE_LEN = Native.NONCE_LEN;
+
     /** The shortest passphrase that will be accepted. */
     public static final int MIN_PASSPHRASE_LEN = Native.MIN_PASSPHRASE_LEN;
 
@@ -150,6 +159,52 @@ public final class Hide {
         }
     }
 
+    /** Signs {@code message} under {@code context}. */
+    public static byte[] sign(SigningIdentity identity, byte[] context, byte[] message) {
+        return identity.sign(context, message);
+    }
+
+    /**
+     * Throws unless both signature halves verify.
+     *
+     * <p>Returns nothing rather than a boolean: a caller who forgets to check
+     * a return value would treat every failure as a pass.
+     */
+    public static void verify(byte[] publicKey, byte[] context, byte[] message,
+                              byte[] signature) {
+        try (Arena arena = Arena.ofConfined()) {
+            MemorySegment key = arena.allocateFrom(ValueLayout.JAVA_BYTE, publicKey);
+            MemorySegment ctx = arena.allocateFrom(ValueLayout.JAVA_BYTE, context);
+            MemorySegment body = arena.allocateFrom(ValueLayout.JAVA_BYTE, message);
+            MemorySegment sig = arena.allocateFrom(ValueLayout.JAVA_BYTE, signature);
+            check((int) Native.VERIFY_MESSAGE.invokeExact(
+                    key, (long) publicKey.length,
+                    ctx, (long) context.length,
+                    body, (long) message.length,
+                    sig, (long) signature.length));
+        } catch (Throwable error) {
+            throw wrap(error);
+        }
+    }
+
+    /**
+     * Creates a challenge for a prover to answer.
+     *
+     * <p>A detached signature proves possession at some point, to nobody in
+     * particular, and can be replayed. A challenge binds a nonce, an audience
+     * and an expiry, so an answer is good once, here, now.
+     */
+    public static byte[] newChallenge(String audience, long now, long validFor) {
+        try (Arena arena = Arena.ofConfined()) {
+            MemorySegment out = Native.emptyBuffer(arena);
+            MemorySegment name = arena.allocateFrom(audience);
+            check((int) Native.CHALLENGE_NEW.invokeExact(name, now, validFor, out));
+            return Native.take(out);
+        } catch (Throwable error) {
+            throw wrap(error);
+        }
+    }
+
     /** Metadata is empty rather than absent at the ABI; normalise it here. */
     private static String text(byte[] bytes) {
         return bytes.length == 0 ? null : new String(bytes, StandardCharsets.UTF_8);
@@ -173,6 +228,8 @@ public final class Hide {
                     new HideException.NoMatchingRecipient(message);
             case Native.ERR_AUTHENTICATION, Native.ERR_MALFORMED ->
                     new HideException.Authentication(message);
+                case Native.ERR_CHALLENGE_EXPIRED -> new HideException.ChallengeExpired(message);
+                case Native.ERR_CHALLENGE_REPLAYED -> new HideException.ChallengeReplayed(message);
             case Native.ERR_INVALID_ARGUMENT, Native.ERR_TOO_LARGE ->
                     new IllegalArgumentException(message);
             default -> new HideException(message);

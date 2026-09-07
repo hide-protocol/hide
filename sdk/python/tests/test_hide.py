@@ -124,3 +124,83 @@ def test_empty_payloads_are_valid() -> None:
     with hide.SecretKey.generate() as secret:
         box = hide.encrypt(b"", [secret.public_key()])
         assert hide.decrypt(box, secret).data == b""
+
+
+PASSPHRASE = "correct horse battery staple"
+CONTEXT = b"HIDE/0.5 python test"
+
+
+def identity() -> hide.SigningIdentity:
+    return hide.SigningIdentity.load(
+        hide.SigningIdentity.generate(PASSPHRASE), PASSPHRASE
+    )
+
+
+def test_signs_and_verifies() -> None:
+    with identity() as signer:
+        public = signer.public_key()
+        assert len(public) == hide.VERIFYING_KEY_LEN
+        signature = signer.sign(CONTEXT, b"the message")
+        assert len(signature) == hide.SIGNATURE_LEN
+        hide.verify(public, CONTEXT, b"the message", signature)
+
+
+def test_a_changed_message_does_not_verify() -> None:
+    with identity() as signer:
+        public = signer.public_key()
+        signature = signer.sign(CONTEXT, b"the message")
+        with pytest.raises(hide.AuthenticationError):
+            hide.verify(public, CONTEXT, b"the messagE", signature)
+
+
+def test_a_different_context_does_not_verify() -> None:
+    with identity() as signer:
+        public = signer.public_key()
+        signature = signer.sign(CONTEXT, b"the message")
+        with pytest.raises(hide.AuthenticationError):
+            hide.verify(public, b"another context", b"the message", signature)
+
+
+def test_another_identity_cannot_be_impersonated() -> None:
+    with identity() as signer, identity() as impostor:
+        signature = impostor.sign(CONTEXT, b"the message")
+        with pytest.raises(hide.AuthenticationError):
+            hide.verify(signer.public_key(), CONTEXT, b"the message", signature)
+
+
+def test_an_encryption_only_key_cannot_sign() -> None:
+    with hide.SecretKey.generate() as secret:
+        sealed = secret.protect(PASSPHRASE)
+    with pytest.raises(hide.NotAKeyFile):
+        hide.SigningIdentity.load(sealed, PASSPHRASE)
+
+
+def test_a_challenge_is_answered_once_and_then_refused() -> None:
+    with identity() as prover:
+        public = prover.public_key()
+        challenge = hide.new_challenge("ssh://host.example", 1_000, 60)
+        answer = prover.answer(challenge)
+
+        with hide.SpentNonces() as spent:
+            spent.accept(challenge, answer, public, 1_000)
+            # The identical valid answer, presented again.
+            with pytest.raises(hide.ChallengeReplayed):
+                spent.accept(challenge, answer, public, 1_000)
+
+
+def test_an_answer_after_the_window_is_refused() -> None:
+    with identity() as prover:
+        public = prover.public_key()
+        challenge = hide.new_challenge("ssh://host.example", 1_000, 60)
+        answer = prover.answer(challenge)
+        with hide.SpentNonces() as spent:
+            with pytest.raises(hide.ChallengeExpired):
+                spent.accept(challenge, answer, public, 1_100)
+
+
+def test_a_closed_identity_cannot_sign_and_never_prints_key_material() -> None:
+    signer = identity()
+    signer.close()
+    assert "closed" in repr(signer)
+    with pytest.raises(ValueError):
+        signer.sign(CONTEXT, b"anything")

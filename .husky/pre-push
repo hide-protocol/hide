@@ -31,4 +31,22 @@ if ! cargo build --release -p hide-cli; then
   exit 1
 fi
 
+# The Rust suite cannot see a CLI/SDK disagreement: each surface is
+# self-consistent, and only running them against each other exposes a break.
+# Needs the WASM build and the Node SDK, which not every checkout has.
+if [ -f conformance/cross-surface/wasm/hide_wasm.js ] && [ -f sdk/node/dist/index.js ]; then
+  if ! cargo build -p hide-cli -p hide-ffi; then
+    echo ""
+    echo "pre-push: could not build the CLI and FFI for conformance. Push blocked."
+    exit 1
+  fi
+  if ! node conformance/cross-surface/verify.mjs; then
+    echo ""
+    echo "pre-push: cross-surface conformance failed. Push blocked."
+    exit 1
+  fi
+else
+  echo "pre-push: cross-surface conformance skipped (no WASM/Node build); CI still runs it"
+fi
+
 echo "pre-push: tests + release build clean in $(( $(date +%s) - start ))s"

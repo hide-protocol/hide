@@ -261,7 +261,105 @@ class TestHide < Minitest::Test
     assert_match(/\A\d+\.\d+/, Hide.version)
   end
 
+  PASSPHRASE = "correct horse battery staple"
+  CONTEXT = "HIDE/0.5 ruby test"
+
+  def test_signs_and_verifies
+    identity do |signer|
+      public_key = signer.public_key
+      assert_equal Hide::VERIFYING_KEY_LEN, public_key.bytesize
+      assert_equal Encoding::BINARY, public_key.encoding
+
+      signature = signer.sign(CONTEXT, "the message")
+      assert_equal Hide::SIGNATURE_LEN, signature.bytesize
+      assert_nil Hide.verify(public_key, CONTEXT, "the message", signature)
+    end
+  end
+
+  def test_a_changed_message_does_not_verify
+    identity do |signer|
+      signature = signer.sign(CONTEXT, "the message")
+      assert_raises(Hide::AuthenticationError) do
+        Hide.verify(signer.public_key, CONTEXT, "the messagE", signature)
+      end
+    end
+  end
+
+  def test_a_different_context_does_not_verify
+    identity do |signer|
+      signature = signer.sign(CONTEXT, "the message")
+      assert_raises(Hide::AuthenticationError) do
+        Hide.verify(signer.public_key, "another context", "the message", signature)
+      end
+    end
+  end
+
+  def test_another_identity_cannot_be_impersonated
+    identity do |signer|
+      identity do |impostor|
+        signature = impostor.sign(CONTEXT, "the message")
+        assert_raises(Hide::AuthenticationError) do
+          Hide.verify(signer.public_key, CONTEXT, "the message", signature)
+        end
+      end
+    end
+  end
+
+  def test_an_encryption_only_key_cannot_sign
+    sealed = nil
+    Hide::SecretKey.generate { |secret| sealed = secret.protect(PASSPHRASE) }
+    assert_raises(Hide::NotAKeyError) { Hide::SigningIdentity.load(sealed, PASSPHRASE) }
+  end
+
+  def test_a_challenge_is_answered_once_and_then_refused
+    identity do |prover|
+      public_key = prover.public_key
+      challenge = Hide.new_challenge("ssh://host.example", 1_000, 60)
+      answer = prover.answer(challenge)
+
+      Hide::SpentNonces.open do |spent|
+        assert_nil spent.accept(challenge, answer, public_key, 1_000)
+        # The identical valid answer, presented again.
+        assert_raises(Hide::ChallengeReplayedError) do
+          spent.accept(challenge, answer, public_key, 1_000)
+        end
+      end
+    end
+  end
+
+  def test_an_answer_after_the_window_is_refused
+    identity do |prover|
+      challenge = Hide.new_challenge("ssh://host.example", 1_000, 60)
+      answer = prover.answer(challenge)
+      Hide::SpentNonces.open do |spent|
+        assert_raises(Hide::ChallengeExpiredError) do
+          spent.accept(challenge, answer, prover.public_key, 1_100)
+        end
+      end
+    end
+  end
+
+  def test_a_closed_identity_never_prints_key_material
+    signer = Hide::SigningIdentity.load(
+      Hide::SigningIdentity.generate(PASSPHRASE), PASSPHRASE
+    )
+    public_key = signer.public_key
+    refute closed_key_leaks?(signer.inspect, public_key)
+
+    signer.close
+    signer.close # idempotent
+    assert_predicate signer, :closed?
+    assert_raises(Hide::ClosedKeyError) { signer.public_key }
+    assert_raises(Hide::ClosedKeyError) { signer.sign(CONTEXT, "x") }
+  end
+
   private
+
+  def identity(&block)
+    Hide::SigningIdentity.load(
+      Hide::SigningIdentity.generate(PASSPHRASE), PASSPHRASE, &block
+    )
+  end
 
   def closed_key_leaks?(text, public_key)
     text.include?(public_key.unpack1("H*")[0, 16])

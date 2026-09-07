@@ -18,6 +18,8 @@ module Hide
     ERR_NO_MATCHING_RECIPIENT = 5
     ERR_TOO_LARGE = 7
     ERR_MALFORMED = 6
+    ERR_CHALLENGE_EXPIRED = 8
+    ERR_CHALLENGE_REPLAYED = 9
     ERR_PANIC = 98
     ERR_INTERNAL = 99
 
@@ -25,6 +27,9 @@ module Hide
     KEY_PROTECTED = 1
 
     PUBLIC_KEY_LEN = 1216
+    SIGNATURE_LEN = 3373
+    VERIFYING_KEY_LEN = 1984
+    NONCE_LEN = 32
     MIN_PASSPHRASE_LEN = 8
 
     WORD = Fiddle::SIZEOF_VOIDP
@@ -72,6 +77,7 @@ module Hide
     INT32 = Fiddle::TYPE_INT
     SIZE_T = Fiddle::TYPE_SIZE_T
     VOID = Fiddle::TYPE_VOID
+    UINT64 = Fiddle::TYPE_LONG_LONG
 
     SIGNATURES = {
       hide_error_message: [[INT32], VOIDP],
@@ -90,7 +96,18 @@ module Hide
       hide_public_key_armor: [[VOIDP, SIZE_T, VOIDP], INT32],
       hide_public_key_dearmor: [[VOIDP, VOIDP], INT32],
       hide_encrypt: [[VOIDP, SIZE_T, VOIDP, SIZE_T, VOIDP, VOIDP, VOIDP], INT32],
-      hide_decrypt: [[VOIDP, SIZE_T, VOIDP, VOIDP, VOIDP, VOIDP], INT32]
+      hide_decrypt: [[VOIDP, SIZE_T, VOIDP, VOIDP, VOIDP, VOIDP], INT32],
+      hide_identity_generate: [[VOIDP, VOIDP], INT32],
+      hide_signing_identity_open: [[VOIDP, SIZE_T, VOIDP, VOIDP], INT32],
+      hide_signing_identity_public: [[VOIDP, VOIDP], INT32],
+      hide_signing_identity_free: [[VOIDP], VOID],
+      hide_sign_message: [[VOIDP, VOIDP, SIZE_T, VOIDP, SIZE_T, VOIDP], INT32],
+      hide_verify_message: [[VOIDP, SIZE_T, VOIDP, SIZE_T, VOIDP, SIZE_T, VOIDP, SIZE_T], INT32],
+      hide_challenge_new: [[VOIDP, UINT64, UINT64, VOIDP], INT32],
+      hide_challenge_answer: [[VOIDP, VOIDP, SIZE_T, VOIDP], INT32],
+      hide_spent_nonces_new: [[], VOIDP],
+      hide_spent_nonces_free: [[VOIDP], VOID],
+      hide_challenge_accept: [[VOIDP, VOIDP, SIZE_T, VOIDP, SIZE_T, VOIDP, SIZE_T, UINT64], INT32]
     }.freeze
 
     FUNCTIONS = SIGNATURES.each_with_object({}) do |(name, (args, ret)), acc|

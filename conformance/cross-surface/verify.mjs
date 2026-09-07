@@ -185,14 +185,18 @@ try {
   );
 
   // The frozen vectors must still open everywhere, or the format has moved.
+  // These use the seed-based key file, because that is how every surface loads
+  // an unprotected key; the v0.1 fixture beside them is the recipient key
+  // itself and is covered by the Rust suite instead.
   const vectors = join(root, "conformance", "vectors");
-  const vectorKey = wasm.SecretKey.load(await readFile(join(vectors, "recipient.test-secret")), undefined);
-  const vector = await readFile(join(vectors, "hello.hide"));
-  const expected = await readFile(join(vectors, "hello.txt"));
+  const vectorSeed = await readFile(join(vectors, "identity.test-seed"));
+  const vectorKey = wasm.SecretKey.load(vectorSeed, undefined);
+  const vector = await readFile(join(vectors, "identity.hide"));
+  const expected = await readFile(join(vectors, "identity.txt"));
   check("frozen vectors -> wasm", Buffer.from(wasm.decrypt(new Uint8Array(vector), vectorKey).data).equals(expected));
   check(
     "frozen vectors -> node",
-    node.decrypt(vector, node.SecretKey.load(await readFile(join(vectors, "recipient.test-secret")))).data.equals(expected),
+    node.decrypt(vector, node.SecretKey.load(vectorSeed)).data.equals(expected),
   );
 
   // A container from one surface must be rejected by all when damaged.
@@ -212,6 +216,73 @@ try {
   }
   check("tampering refused by node", nodeRefused);
   check("tampering refused by wasm", wasmRefused);
+
+  // Signatures must cross surfaces too: a signature is worthless if only the
+  // surface that produced it can check it.
+  cli(["keygen", "--secret", "s.key", "--public", "s.pub", "--insecure-plaintext"]);
+  const signingKey = await readFile(join(work, "s.key"));
+  const context = new TextEncoder().encode("HIDE/0.5 cross-surface");
+  const signed = new TextEncoder().encode("the signed message");
+
+  const wasmSigner = wasm.SigningIdentity.load(signingKey, undefined);
+  const nodeSigner = node.SigningIdentity.load(signingKey);
+  const signingPublic = wasmSigner.publicKey();
+  check(
+    "both surfaces derive the same verifying key",
+    Buffer.from(signingPublic).equals(Buffer.from(nodeSigner.publicKey())),
+  );
+
+  const wasmSignature = wasmSigner.sign(context, signed);
+  const nodeSignature = nodeSigner.sign(context, signed);
+
+  const verifies = (verifier, signature) => {
+    try {
+      verifier(signature);
+      return true;
+    } catch {
+      return false;
+    }
+  };
+  const byNode = (signature) =>
+    node.verify(Buffer.from(signingPublic), Buffer.from(context), Buffer.from(signed), Buffer.from(signature));
+  const byWasm = (signature) =>
+    wasm.verify(signingPublic, context, signed, new Uint8Array(signature));
+
+  check("wasm signature -> node", verifies(byNode, wasmSignature));
+  check("node signature -> wasm", verifies(byWasm, nodeSignature));
+
+  // A signature over a different message must fail everywhere, or the check
+  // above proves only that the call returns.
+  const otherMessage = new TextEncoder().encode("a different message");
+  check(
+    "node refuses a signature over another message",
+    !verifies(
+      (signature) =>
+        node.verify(Buffer.from(signingPublic), Buffer.from(context), Buffer.from(otherMessage), Buffer.from(signature)),
+      wasmSignature,
+    ),
+  );
+  check(
+    "wasm refuses a signature over another message",
+    !verifies(
+      (signature) => wasm.verify(signingPublic, context, otherMessage, new Uint8Array(signature)),
+      nodeSignature,
+    ),
+  );
+
+  // A challenge issued by one surface must be answerable by another, or
+  // authentication could never span a client and a server written differently.
+  const challenge = wasm.newChallenge("ssh://cross.example", 1000n, 60n);
+  const nodeAnswer = nodeSigner.answer(Buffer.from(challenge));
+  const spent = new wasm.SpentNonces();
+  check(
+    "wasm challenge answered by node",
+    verifies(() => spent.accept(challenge, new Uint8Array(nodeAnswer), signingPublic, 1000n), null),
+  );
+  check(
+    "the same answer is refused the second time",
+    !verifies(() => spent.accept(challenge, new Uint8Array(nodeAnswer), signingPublic, 1000n), null),
+  );
 
   // Each adapter language against the CLI, the frozen vectors, and damage.
   const run = (language, args) =>
@@ -238,8 +309,8 @@ try {
 
       run(language, [
         "decrypt",
-        join(vectors, "recipient.test-secret"),
-        join(vectors, "hello.hide"),
+        join(vectors, "identity.test-seed"),
+        join(vectors, "identity.hide"),
         `${tag}.vector.out`,
       ]);
       check(

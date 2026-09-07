@@ -23,6 +23,8 @@ internal static unsafe partial class Native
     internal const int ErrNoMatchingRecipient = 5;
     internal const int ErrMalformed = 6;
     internal const int ErrTooLarge = 7;
+    internal const int ErrChallengeExpired = 8;
+    internal const int ErrChallengeReplayed = 9;
 
     internal const int KeyRaw = 0;
     internal const int KeyProtected = 1;
@@ -134,4 +136,62 @@ internal static unsafe partial class Native
         HideBuffer* @out,
         HideBuffer* outFilename,
         HideBuffer* outMediaType);
+
+    [LibraryImport(LibraryName)]
+    internal static partial int hide_identity_generate(byte* passphrase, HideBuffer* outKeyFile);
+
+    [LibraryImport(LibraryName)]
+    internal static partial int hide_signing_identity_open(
+        byte* data, nuint len, byte* passphrase, IntPtr* outIdentity);
+
+    [LibraryImport(LibraryName)]
+    internal static partial int hide_signing_identity_public(IntPtr identity, HideBuffer* @out);
+
+    [LibraryImport(LibraryName)]
+    internal static partial void hide_signing_identity_free(IntPtr identity);
+
+    [LibraryImport(LibraryName)]
+    internal static partial int hide_sign_message(
+        IntPtr identity,
+        byte* context,
+        nuint contextLen,
+        byte* message,
+        nuint messageLen,
+        HideBuffer* @out);
+
+    [LibraryImport(LibraryName)]
+    internal static partial int hide_verify_message(
+        byte* publicKey,
+        nuint publicKeyLen,
+        byte* context,
+        nuint contextLen,
+        byte* message,
+        nuint messageLen,
+        byte* signature,
+        nuint signatureLen);
+
+    [LibraryImport(LibraryName)]
+    internal static partial int hide_challenge_new(
+        byte* audience, ulong now, ulong validFor, HideBuffer* @out);
+
+    [LibraryImport(LibraryName)]
+    internal static partial int hide_challenge_answer(
+        IntPtr identity, byte* challenge, nuint challengeLen, HideBuffer* @out);
+
+    [LibraryImport(LibraryName)]
+    internal static partial IntPtr hide_spent_nonces_new();
+
+    [LibraryImport(LibraryName)]
+    internal static partial void hide_spent_nonces_free(IntPtr spent);
+
+    [LibraryImport(LibraryName)]
+    internal static partial int hide_challenge_accept(
+        IntPtr spent,
+        byte* challenge,
+        nuint challengeLen,
+        byte* signature,
+        nuint signatureLen,
+        byte* publicKey,
+        nuint publicKeyLen,
+        ulong now);
 }

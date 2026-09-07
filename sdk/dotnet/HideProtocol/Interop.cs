@@ -60,6 +60,8 @@ internal static unsafe class Interop
             Native.ErrAuthentication => new AuthenticationException(message),
             Native.ErrMalformed => new AuthenticationException(message),
             Native.ErrNoMatchingRecipient => new NoMatchingRecipientException(message),
+            Native.ErrChallengeExpired => new ChallengeExpiredException(message),
+            Native.ErrChallengeReplayed => new ChallengeReplayedException(message),
             _ => (Exception)new HideException(message),
         };
     }

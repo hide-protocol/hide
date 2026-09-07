@@ -16,10 +16,15 @@ declare(strict_types=1);
 require __DIR__ . '/../autoload.php';
 
 use HideProtocol\AuthenticationException;
+use HideProtocol\ChallengeExpiredException;
+use HideProtocol\ChallengeReplayedException;
 use HideProtocol\Hide;
 use HideProtocol\HideException;
 use HideProtocol\NoMatchingRecipientException;
+use HideProtocol\NotAKeyException;
 use HideProtocol\SecretKey;
+use HideProtocol\SigningIdentity;
+use HideProtocol\SpentNonces;
 use HideProtocol\WrongPassphraseException;
 
 /** @var list<array{0: string, 1: callable}> */
@@ -339,6 +344,127 @@ test('garbage is rejected rather than crashing', function (): void {
         }
     } finally {
         $secret->close();
+    }
+});
+
+/** An identity ready to sign, plus the sealed key file it came from. */
+function newIdentity(string $passphrase = 'correct horse battery'): array
+{
+    $sealed = SigningIdentity::generate($passphrase);
+
+    return [SigningIdentity::load($sealed, $passphrase), $sealed];
+}
+
+test('an identity signs and the signature verifies', function (): void {
+    [$identity] = newIdentity();
+    try {
+        $public = $identity->publicKey();
+        assertSame(Hide::VERIFYING_KEY_LEN, strlen($public), 'verifying key length');
+
+        $signature = $identity->sign('invoice', 'total: 9000 RON');
+        assertSame(Hide::SIGNATURE_LEN, strlen($signature), 'signature length');
+
+        Hide::verify($public, 'invoice', 'total: 9000 RON', $signature);
+    } finally {
+        $identity->close();
+    }
+});
+
+test('a changed message does not verify', function (): void {
+    [$identity] = newIdentity();
+    try {
+        $public = $identity->publicKey();
+        $signature = $identity->sign('invoice', 'total: 9000 RON');
+        assertThrows(
+            AuthenticationException::class,
+            static fn () => Hide::verify($public, 'invoice', 'total: 9001 RON', $signature),
+            'a tampered message verified',
+        );
+    } finally {
+        $identity->close();
+    }
+});
+
+test('a different context does not verify', function (): void {
+    [$identity] = newIdentity();
+    try {
+        $public = $identity->publicKey();
+        $signature = $identity->sign('invoice', 'total: 9000 RON');
+        assertThrows(
+            AuthenticationException::class,
+            static fn () => Hide::verify($public, 'receipt', 'total: 9000 RON', $signature),
+            'a signature verified under another context',
+        );
+    } finally {
+        $identity->close();
+    }
+});
+
+test('one identity cannot be impersonated by another', function (): void {
+    [$alice] = newIdentity();
+    [$mallory] = newIdentity('another passphrase entirely');
+    try {
+        $forged = $mallory->sign('invoice', 'total: 9000 RON');
+        assertThrows(
+            AuthenticationException::class,
+            static fn () => Hide::verify($alice->publicKey(), 'invoice', 'total: 9000 RON', $forged),
+            'mallory signed as alice',
+        );
+    } finally {
+        $alice->close();
+        $mallory->close();
+    }
+});
+
+test('an encryption-only key file cannot sign', function (): void {
+    $secret = SecretKey::generate();
+    $sealed = $secret->protect('correct horse battery');
+    $secret->close();
+
+    // Predates signatures, so it carries no signing seed: refused rather than
+    // silently downgraded to an invented one.
+    assertThrows(
+        NotAKeyException::class,
+        static fn () => SigningIdentity::load($sealed, 'correct horse battery'),
+        'an encryption-only key produced a signing identity',
+    );
+});
+
+test('a challenge is accepted once and refused when replayed', function (): void {
+    [$identity] = newIdentity();
+    $spent = new SpentNonces();
+    try {
+        $public = $identity->publicKey();
+        $challenge = Hide::newChallenge('https://example.test', 1000, 60);
+        $answer = $identity->answer($challenge);
+        assertSame(Hide::SIGNATURE_LEN, strlen($answer), 'an answer is a signature');
+
+        $spent->accept($challenge, $answer, $public, 1010);
+        assertThrows(
+            ChallengeReplayedException::class,
+            static fn () => $spent->accept($challenge, $answer, $public, 1020),
+            'a replayed answer was accepted',
+        );
+    } finally {
+        $spent->close();
+        $identity->close();
+    }
+});
+
+test('an answer after the window has expired', function (): void {
+    [$identity] = newIdentity();
+    $spent = new SpentNonces();
+    try {
+        $challenge = Hide::newChallenge('https://example.test', 1000, 60);
+        $answer = $identity->answer($challenge);
+        assertThrows(
+            ChallengeExpiredException::class,
+            static fn () => $spent->accept($challenge, $answer, $identity->publicKey(), 2000),
+            'an expired answer was accepted',
+        );
+    } finally {
+        $spent->close();
+        $identity->close();
     }
 });
 

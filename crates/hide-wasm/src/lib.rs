@@ -6,15 +6,22 @@
 //! the desktop application for keys that matter.
 
 use hide_crypto::{RecipientPublic, RecipientSecret};
-use hide_keyring::KeyFormat;
+use hide_keyring::{KeyFormat, KeyPurpose};
 use hide_object::Metadata;
+use hide_sign::{ChallengeError, VerifyingIdentity};
 use wasm_bindgen::prelude::*;
 use zeroize::Zeroizing;
 
 pub const PUBLIC_KEY_LEN: usize = 1216;
+pub const SIGNATURE_LEN: usize = hide_sign::SIGNATURE_LENGTH;
+pub const VERIFYING_KEY_LEN: usize = hide_sign::VERIFYING_KEY_LENGTH;
 
 /// Messages are held in memory; this bounds what a hostile length can allocate.
 const MAX_INPUT: usize = 64 * 1024 * 1024;
+
+/// A challenge is a nonce, a short audience and two timestamps. Anything
+/// larger is not one, and must be refused before it is parsed.
+const MAX_CHALLENGE: usize = 4096;
 
 fn error(message: impl std::fmt::Display) -> JsValue {
     JsValue::from_str(&message.to_string())
@@ -166,6 +173,170 @@ pub fn inspect_key(data: &[u8]) -> String {
     }
 }
 
+/// A signing key. The seed never crosses into JavaScript.
+#[wasm_bindgen]
+pub struct SigningIdentity {
+    inner: hide_sign::SigningIdentity,
+}
+
+#[wasm_bindgen]
+impl SigningIdentity {
+    /// Creates an identity and returns the sealed key file to store. One seed
+    /// backs both encryption and signing, so there is a single thing to back
+    /// up. A forgotten passphrase cannot be recovered.
+    pub fn generate(passphrase: &str) -> Result<Vec<u8>, JsValue> {
+        let identity = hide_keyring::Identity::generate().map_err(error)?;
+        hide_keyring::protect_identity(identity.expose_seed_for_sealing(), passphrase)
+            .map_err(error)
+    }
+
+    /// Opens a key file for signing. A file written before signatures existed
+    /// carries no signing seed, and fails rather than being downgraded.
+    pub fn load(data: &[u8], passphrase: Option<String>) -> Result<SigningIdentity, JsValue> {
+        if data.len() > 4096 {
+            return Err(error("that file is too large to be a HIDE key"));
+        }
+        let seed = match hide_keyring::inspect(data) {
+            // An unprotected file is a master seed, exactly as the CLI writes
+            // it, so it carries both keys.
+            KeyFormat::Raw => {
+                let mut seed = Zeroizing::new([0_u8; 32]);
+                if data.len() != seed.len() {
+                    return Err(error("that file is not a HIDE key"));
+                }
+                seed.copy_from_slice(data);
+                seed
+            }
+            KeyFormat::Protected => {
+                let passphrase =
+                    passphrase.ok_or_else(|| error("that key file needs its passphrase"))?;
+                let (seed, purpose) =
+                    hide_keyring::unprotect_seed(data, &passphrase).map_err(error)?;
+                if purpose != KeyPurpose::Identity {
+                    return Err(error(
+                        "that key predates signatures and holds no signing key; create a new identity",
+                    ));
+                }
+                seed
+            }
+        };
+        let signing = hide_keyring::Identity::from_seed(seed).signing_seed();
+        Ok(SigningIdentity {
+            inner: hide_sign::SigningIdentity::from_bytes(&*signing).map_err(error)?,
+        })
+    }
+
+    /// The shareable verifying key, for others to check signatures with.
+    #[wasm_bindgen(js_name = publicKey)]
+    pub fn public_key(&self) -> Vec<u8> {
+        self.inner.verifying_key().to_bytes().to_vec()
+    }
+
+    /// Signs `message` under `context`. The context separates uses of one
+    /// identity; never let a remote party choose it.
+    pub fn sign(&self, context: &[u8], message: &[u8]) -> Result<Vec<u8>, JsValue> {
+        if message.len() > MAX_INPUT {
+            return Err(error("that message is too large for the browser build"));
+        }
+        Ok(self.inner.sign(context, message).to_vec())
+    }
+
+    /// Answers a challenge, proving possession to whoever issued it.
+    pub fn answer(&self, challenge: &[u8]) -> Result<Vec<u8>, JsValue> {
+        Ok(decode_challenge(challenge)?.answer(&self.inner).to_vec())
+    }
+}
+
+fn decode_challenge(bytes: &[u8]) -> Result<hide_sign::Challenge, JsValue> {
+    if bytes.len() > MAX_CHALLENGE {
+        return Err(error("that is too large to be a HIDE challenge"));
+    }
+    hide_sign::Challenge::decode(bytes).map_err(error)
+}
+
+/// Throws unless both halves verify. Returns nothing on success rather than a
+/// boolean, so a caller that forgets to check cannot read failure as a pass.
+#[wasm_bindgen]
+pub fn verify(
+    public_key: &[u8],
+    context: &[u8],
+    message: &[u8],
+    signature: &[u8],
+) -> Result<(), JsValue> {
+    if message.len() > MAX_INPUT {
+        return Err(error("that message is too large for the browser build"));
+    }
+    VerifyingIdentity::from_bytes(public_key)
+        .map_err(error)?
+        .verify(context, message, signature)
+        .map_err(error)
+}
+
+/// Creates a challenge for a prover to answer.
+///
+/// A detached signature proves possession at some point, to nobody in
+/// particular, and can be replayed. A challenge binds a random nonce, an
+/// audience and an expiry, so an answer is good once, here, now.
+#[wasm_bindgen(js_name = newChallenge)]
+pub fn new_challenge(audience: &str, now: u64, valid_for: u64) -> Result<Vec<u8>, JsValue> {
+    Ok(hide_sign::Challenge::new(audience, now, valid_for)
+        .map_err(error)?
+        .encode())
+}
+
+/// The verifier's record of answered challenges.
+///
+/// Replay can only be caught here: a replayed answer is a genuine signature
+/// and nothing about it is invalid on its own. This must therefore outlive a
+/// single request.
+#[wasm_bindgen]
+pub struct SpentNonces {
+    inner: hide_sign::SpentNonces,
+}
+
+impl Default for SpentNonces {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+#[wasm_bindgen]
+impl SpentNonces {
+    #[wasm_bindgen(constructor)]
+    pub fn new() -> SpentNonces {
+        SpentNonces {
+            inner: hide_sign::SpentNonces::new(),
+        }
+    }
+
+    /// Accepts an answer exactly once. Throws `"replayed"` the second time,
+    /// `"expired"` after the window, and a verification failure otherwise.
+    pub fn accept(
+        &mut self,
+        challenge: &[u8],
+        signature: &[u8],
+        public_key: &[u8],
+        now: u64,
+    ) -> Result<(), JsValue> {
+        let challenge = decode_challenge(challenge)?;
+        let prover = VerifyingIdentity::from_bytes(public_key).map_err(error)?;
+        self.inner
+            .accept(&challenge, signature, &prover, now)
+            .map_err(|failure| {
+                error(match failure {
+                    ChallengeError::NotSigned => "signature verification failed",
+                    ChallengeError::Expired => "expired",
+                    ChallengeError::Replayed => "replayed",
+                })
+            })
+    }
+
+    #[wasm_bindgen(getter)]
+    pub fn size(&self) -> usize {
+        self.inner.len()
+    }
+}
+
 #[wasm_bindgen]
 pub fn version() -> String {
     env!("CARGO_PKG_VERSION").into()
@@ -247,6 +418,79 @@ mod tests {
         assert!(
             encrypt(b"x", &public[..100], None, None).is_err(),
             "partial key accepted"
+        );
+    }
+
+    fn identity(passphrase: &str) -> SigningIdentity {
+        let sealed = SigningIdentity::generate(passphrase).expect("generate");
+        SigningIdentity::load(&sealed, Some(passphrase.into())).expect("load")
+    }
+
+    #[wasm_bindgen_test]
+    fn signs_and_verifies() {
+        let signer = identity("correct horse battery");
+        let public = signer.public_key();
+        assert_eq!(public.len(), VERIFYING_KEY_LEN);
+
+        let signature = signer.sign(b"hide/test", b"invoice 42").expect("sign");
+        assert_eq!(signature.len(), SIGNATURE_LEN);
+        verify(&public, b"hide/test", b"invoice 42", &signature).expect("verify");
+
+        assert!(
+            verify(&public, b"hide/test", b"invoice 43", &signature).is_err(),
+            "a changed message verified"
+        );
+        assert!(
+            verify(&public, b"hide/other", b"invoice 42", &signature).is_err(),
+            "a different context verified"
+        );
+
+        let other = identity("a different passphrase");
+        assert!(
+            verify(&other.public_key(), b"hide/test", b"invoice 42", &signature).is_err(),
+            "one identity was impersonated by another"
+        );
+    }
+
+    #[wasm_bindgen_test]
+    fn encryption_only_keys_cannot_sign() {
+        let secret = SecretKey::generate().expect("keygen");
+        let sealed = secret.protect("correct horse battery").expect("protect");
+        assert!(
+            SigningIdentity::load(&sealed, Some("correct horse battery".into())).is_err(),
+            "an encryption-only key was accepted for signing"
+        );
+    }
+
+    #[wasm_bindgen_test]
+    fn a_challenge_is_answered_once() {
+        let prover = identity("correct horse battery");
+        let public = prover.public_key();
+        let challenge = new_challenge("hide.example", 1_000, 60).expect("challenge");
+        let answer = prover.answer(&challenge).expect("answer");
+
+        let mut spent = SpentNonces::new();
+        spent
+            .accept(&challenge, &answer, &public, 1_010)
+            .expect("first answer");
+        assert!(
+            spent.accept(&challenge, &answer, &public, 1_020).is_err(),
+            "a replayed answer was accepted"
+        );
+    }
+
+    #[wasm_bindgen_test]
+    fn an_answer_after_the_window_expires() {
+        let prover = identity("correct horse battery");
+        let challenge = new_challenge("hide.example", 1_000, 60).expect("challenge");
+        let answer = prover.answer(&challenge).expect("answer");
+
+        let mut spent = SpentNonces::new();
+        assert!(
+            spent
+                .accept(&challenge, &answer, &prover.public_key(), 2_000)
+                .is_err(),
+            "an expired answer was accepted"
         );
     }
 }

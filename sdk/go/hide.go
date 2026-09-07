@@ -52,6 +52,10 @@ func status(code C.int32_t) error {
 		return ErrNoMatchingRecipient
 	case C.HIDE_ERR_NOT_A_KEY:
 		return ErrNotAKey
+	case C.HIDE_ERR_CHALLENGE_EXPIRED:
+		return ErrChallengeExpired
+	case C.HIDE_ERR_CHALLENGE_REPLAYED:
+		return ErrChallengeReplayed
 	default:
 		return fmt.Errorf("hide: %s", C.GoString(C.hide_error_message(code)))
 	}

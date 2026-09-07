@@ -16,6 +16,10 @@ final class Hide
     public const PUBLIC_KEY_LEN = 1216;
     public const MIN_PASSPHRASE_LEN = 8;
 
+    public const SIGNATURE_LEN = 3373;
+    public const VERIFYING_KEY_LEN = 1984;
+    public const NONCE_LEN = 32;
+
     private function __construct()
     {
     }
@@ -141,6 +145,65 @@ final class Hide
         $out = Binding::emptyBuffer();
         try {
             Binding::check($ffi->hide_public_key_dearmor($arg, \FFI::addr($out)));
+        } finally {
+            Binding::release($arg);
+        }
+
+        return Binding::take($out);
+    }
+
+    /**
+     * Verifies a signature, throwing unless BOTH halves verify.
+     *
+     * Returns void rather than a bool: a caller who forgets to check a return
+     * value would treat every failure as a pass.
+     */
+    public static function verify(
+        string $publicKey,
+        string $context,
+        string $message,
+        string $signature,
+    ): void {
+        $ffi = Binding::ffi();
+        // All four are binary and length-prefixed; none may be a C string.
+        $key = Binding::bytes($publicKey);
+        $contextBytes = Binding::bytes($context);
+        $messageBytes = Binding::bytes($message);
+        $signatureBytes = Binding::bytes($signature);
+
+        try {
+            Binding::check($ffi->hide_verify_message(
+                $ffi->cast('uint8_t *', $key),
+                strlen($publicKey),
+                $ffi->cast('uint8_t *', $contextBytes),
+                strlen($context),
+                $ffi->cast('uint8_t *', $messageBytes),
+                strlen($message),
+                $ffi->cast('uint8_t *', $signatureBytes),
+                strlen($signature),
+            ));
+        } finally {
+            Binding::release($key);
+            Binding::release($contextBytes);
+            Binding::release($messageBytes);
+            Binding::release($signatureBytes);
+        }
+    }
+
+    /**
+     * Creates a challenge for a prover to answer.
+     *
+     * A detached signature proves possession at some point, to nobody in
+     * particular, and can be replayed. A challenge binds a random nonce, an
+     * audience and an expiry, so an answer is good once, here, now.
+     */
+    public static function newChallenge(string $audience, int $now, int $validFor): string
+    {
+        $ffi = Binding::ffi();
+        $arg = Binding::cString($audience, 'audience');
+        $out = Binding::emptyBuffer();
+        try {
+            Binding::check($ffi->hide_challenge_new($arg, $now, $validFor, \FFI::addr($out)));
         } finally {
             Binding::release($arg);
         }

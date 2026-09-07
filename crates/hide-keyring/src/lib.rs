@@ -184,13 +184,31 @@ fn protect_seed(
     Ok(output)
 }
 
-/// Opens a key file, with or without a passphrase depending on its format.
+/// Opens a key file and returns the encryption key, whatever shape the file is.
+///
+/// Every surface must read a key file the same way. A raw file is a master
+/// seed, exactly as the CLI writes it, so the encryption key is derived rather
+/// than being the file's bytes; reading those bytes directly yields a
+/// different key and silently breaks interoperability.
 pub fn open(bytes: &[u8], passphrase: Option<&str>) -> Result<RecipientSecret, KeyringError> {
     match inspect(bytes) {
-        KeyFormat::Raw => Ok(RecipientSecret::from_bytes(bytes)?),
+        KeyFormat::Raw => {
+            let mut seed = Zeroizing::new([0_u8; SEED_LEN]);
+            if bytes.len() != SEED_LEN {
+                return Err(KeyringError::Malformed);
+            }
+            seed.copy_from_slice(bytes);
+            Identity::from_seed(seed).recipient_secret()
+        }
         KeyFormat::Protected => {
             let passphrase = passphrase.ok_or(KeyringError::WrongPassphrase)?;
-            unprotect(bytes, passphrase)
+            let (seed, purpose) = unprotect_seed(bytes, passphrase)?;
+            match purpose {
+                // An identity holds both keys; asking for the encryption one is
+                // not a purpose mismatch.
+                KeyPurpose::Identity => Identity::from_seed(seed).recipient_secret(),
+                KeyPurpose::Encryption => Ok(RecipientSecret::from_bytes(&seed[..])?),
+            }
         }
     }
 }
@@ -449,8 +467,18 @@ mod tests {
     #[test]
     fn raw_keys_still_open_without_a_passphrase() -> Result<(), KeyringError> {
         let raw = secret().expose_seed_for_sealing().to_vec();
+        let mut seed = Zeroizing::new([0_u8; SEED_LEN]);
+        seed.copy_from_slice(&raw);
+        let expected = Identity::from_seed(seed).recipient_secret()?;
         assert_eq!(inspect(&raw), KeyFormat::Raw);
-        assert_eq!(open(&raw, None)?.expose_seed_for_sealing(), raw);
+        // A raw file is a master seed, so the encryption key is derived from
+        // it. Reading the bytes as the key itself is what broke CLI/SDK
+        // interoperability: every surface must agree with the CLI here.
+        assert_eq!(
+            open(&raw, None)?.public_key()?.to_bytes(),
+            expected.public_key()?.to_bytes()
+        );
+        assert_ne!(open(&raw, None)?.expose_seed_for_sealing(), raw);
         assert_eq!(
             error_of(open(&protect(&secret(), "correct horse battery")?, None)),
             KeyringError::WrongPassphrase

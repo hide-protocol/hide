@@ -32,6 +32,13 @@ public final class HideTest {
         run("a closed key is unusable", HideTest::closedKey);
         run("empty payloads are valid", HideTest::emptyPayload);
         run("garbage is rejected, not crashed", HideTest::garbage);
+        run("signatures round trip", HideTest::signatures);
+        run("a changed message does not verify", HideTest::changedMessage);
+        run("a different context does not verify", HideTest::differentContext);
+        run("an identity cannot be impersonated", HideTest::impersonation);
+        run("an encryption-only key cannot sign", HideTest::encryptionOnlyKey);
+        run("a challenge is answered once", HideTest::challengeOnce);
+        run("a late answer is expired", HideTest::challengeExpiry);
 
         if (failures > 0) {
             System.err.println(failures + " test(s) failed");
@@ -180,6 +187,101 @@ public final class HideTest {
     private static void garbage() {
         try (SecretKey secret = SecretKey.generate()) {
             assertThrows(() -> Hide.decrypt("not a container".getBytes(UTF_8), secret), "garbage");
+        }
+    }
+
+    private static final String PASSPHRASE = "correct horse battery";
+
+    private static SigningIdentity newIdentity() {
+        return SigningIdentity.load(SigningIdentity.generate(PASSPHRASE), PASSPHRASE);
+    }
+
+    private static void signatures() {
+        try (SigningIdentity identity = newIdentity()) {
+            byte[] publicKey = identity.publicKey();
+            assertTrue(publicKey.length == Hide.VERIFYING_KEY_LEN, "verifying key length");
+
+            byte[] context = "invoice".getBytes(UTF_8);
+            byte[] message = "pay 9000 RON".getBytes(UTF_8);
+            byte[] signature = identity.sign(context, message);
+            assertTrue(signature.length == Hide.SIGNATURE_LEN, "signature length");
+
+            Hide.verify(publicKey, context, message, signature);
+        }
+    }
+
+    private static void changedMessage() {
+        try (SigningIdentity identity = newIdentity()) {
+            byte[] context = "invoice".getBytes(UTF_8);
+            byte[] signature = identity.sign(context, "pay 10".getBytes(UTF_8));
+            byte[] publicKey = identity.publicKey();
+            assertThrows(() -> Hide.verify(publicKey, context, "pay 90".getBytes(UTF_8), signature),
+                    "altered message");
+        }
+    }
+
+    private static void differentContext() {
+        try (SigningIdentity identity = newIdentity()) {
+            byte[] message = "same bytes".getBytes(UTF_8);
+            byte[] signature = identity.sign("login".getBytes(UTF_8), message);
+            byte[] publicKey = identity.publicKey();
+            assertThrows(
+                    () -> Hide.verify(publicKey, "payment".getBytes(UTF_8), message, signature),
+                    "context substitution");
+        }
+    }
+
+    private static void impersonation() {
+        try (SigningIdentity alice = newIdentity(); SigningIdentity mallory = newIdentity()) {
+            byte[] context = "invoice".getBytes(UTF_8);
+            byte[] message = "from alice".getBytes(UTF_8);
+            byte[] signature = mallory.sign(context, message);
+            byte[] alicePublic = alice.publicKey();
+            assertThrows(() -> Hide.verify(alicePublic, context, message, signature),
+                    "impersonation");
+        }
+    }
+
+    private static void encryptionOnlyKey() {
+        byte[] sealed;
+        try (SecretKey secret = SecretKey.generate()) {
+            sealed = secret.protect(PASSPHRASE);
+        }
+        try {
+            SigningIdentity.load(sealed, PASSPHRASE);
+            fail("a key with no signing seed loaded");
+        } catch (HideException.NotAKey expected) {
+            // Correct.
+        }
+    }
+
+    private static void challengeOnce() {
+        try (SigningIdentity identity = newIdentity(); SpentNonces spent = new SpentNonces()) {
+            byte[] publicKey = identity.publicKey();
+            byte[] challenge = Hide.newChallenge("api.example", 1_000, 60);
+            byte[] answer = identity.answer(challenge);
+
+            spent.accept(challenge, answer, publicKey, 1_010);
+            try {
+                spent.accept(challenge, answer, publicKey, 1_020);
+                fail("a replayed answer was accepted");
+            } catch (HideException.ChallengeReplayed expected) {
+                // Correct.
+            }
+        }
+    }
+
+    private static void challengeExpiry() {
+        try (SigningIdentity identity = newIdentity(); SpentNonces spent = new SpentNonces()) {
+            byte[] publicKey = identity.publicKey();
+            byte[] challenge = Hide.newChallenge("api.example", 1_000, 60);
+            byte[] answer = identity.answer(challenge);
+            try {
+                spent.accept(challenge, answer, publicKey, 5_000);
+                fail("an expired answer was accepted");
+            } catch (HideException.ChallengeExpired expected) {
+                // Correct.
+            }
         }
     }
 

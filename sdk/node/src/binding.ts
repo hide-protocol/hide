@@ -57,10 +57,15 @@ export const ERR_AUTHENTICATION = 4;
 export const ERR_NO_MATCHING_RECIPIENT = 5;
 export const ERR_MALFORMED = 6;
 export const ERR_TOO_LARGE = 7;
+export const ERR_CHALLENGE_EXPIRED = 8;
+export const ERR_CHALLENGE_REPLAYED = 9;
 
 export const KEY_PROTECTED = 1;
 export const PUBLIC_KEY_LEN = 1216;
 export const MIN_PASSPHRASE_LEN = 8;
+export const SIGNATURE_LEN = 3373;
+export const VERIFYING_KEY_LEN = 1984;
+export const NONCE_LEN = 32;
 
 export const fns = {
   version: lib.func("const char *hide_version()"),
@@ -96,6 +101,35 @@ export const fns = {
   ),
   decrypt: lib.func(
     "int32_t hide_decrypt(const uint8_t *container, size_t container_len, void *secret, _Out_ HideBuffer *out, _Out_ HideBuffer *filename, _Out_ HideBuffer *media_type)",
+  ),
+
+  identityGenerate: lib.func(
+    "int32_t hide_identity_generate(const char *passphrase, _Out_ HideBuffer *out)",
+  ),
+  signingIdentityOpen: lib.func(
+    "int32_t hide_signing_identity_open(const uint8_t *data, size_t len, const char *passphrase, _Out_ void **identity)",
+  ),
+  signingIdentityPublic: lib.func(
+    "int32_t hide_signing_identity_public(void *identity, _Out_ HideBuffer *out)",
+  ),
+  signingIdentityFree: lib.func("void hide_signing_identity_free(void *identity)"),
+  signMessage: lib.func(
+    "int32_t hide_sign_message(void *identity, const uint8_t *context, size_t context_len, const uint8_t *message, size_t message_len, _Out_ HideBuffer *out)",
+  ),
+  verifyMessage: lib.func(
+    "int32_t hide_verify_message(const uint8_t *public_key, size_t public_key_len, const uint8_t *context, size_t context_len, const uint8_t *message, size_t message_len, const uint8_t *signature, size_t signature_len)",
+  ),
+
+  challengeNew: lib.func(
+    "int32_t hide_challenge_new(const char *audience, uint64_t now, uint64_t valid_for, _Out_ HideBuffer *out)",
+  ),
+  challengeAnswer: lib.func(
+    "int32_t hide_challenge_answer(void *identity, const uint8_t *challenge, size_t challenge_len, _Out_ HideBuffer *out)",
+  ),
+  spentNoncesNew: lib.func("void *hide_spent_nonces_new()"),
+  spentNoncesFree: lib.func("void hide_spent_nonces_free(void *spent)"),
+  challengeAccept: lib.func(
+    "int32_t hide_challenge_accept(void *spent, const uint8_t *challenge, size_t challenge_len, const uint8_t *signature, size_t signature_len, const uint8_t *public_key, size_t public_key_len, uint64_t now)",
   ),
 };
 

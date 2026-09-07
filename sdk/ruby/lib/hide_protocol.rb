@@ -13,6 +13,9 @@ require_relative "hide_protocol/binding"
 #   Hide.decrypt(box, secret).plaintext # => "hello"
 module Hide
   PUBLIC_KEY_LEN = Binding::PUBLIC_KEY_LEN
+  SIGNATURE_LEN = Binding::SIGNATURE_LEN
+  VERIFYING_KEY_LEN = Binding::VERIFYING_KEY_LEN
+  NONCE_LEN = Binding::NONCE_LEN
   MIN_PASSPHRASE_LEN = Binding::MIN_PASSPHRASE_LEN
 
   MAX_RECIPIENTS = 64
@@ -41,6 +44,12 @@ module Hide
   # The key has been closed and its material released.
   class ClosedKeyError < Error; end
 
+  # The challenge expired before it was answered.
+  class ChallengeExpiredError < Error; end
+
+  # This challenge was already answered. Almost certainly a replay.
+  class ChallengeReplayedError < Error; end
+
   ERRORS = {
     Binding::ERR_INVALID_ARGUMENT => InvalidArgumentError,
     Binding::ERR_WRONG_PASSPHRASE => WrongPassphraseError,
@@ -48,7 +57,9 @@ module Hide
     Binding::ERR_AUTHENTICATION => AuthenticationError,
     Binding::ERR_NO_MATCHING_RECIPIENT => NoMatchingRecipientError,
     Binding::ERR_MALFORMED => AuthenticationError,
-    Binding::ERR_TOO_LARGE => TooLargeError
+    Binding::ERR_TOO_LARGE => TooLargeError,
+    Binding::ERR_CHALLENGE_EXPIRED => ChallengeExpiredError,
+    Binding::ERR_CHALLENGE_REPLAYED => ChallengeReplayedError
   }.freeze
 
   class << self
@@ -128,6 +139,40 @@ module Hide
       kind == Binding::KEY_PROTECTED ? "protected" : "raw"
     end
 
+    def sign(identity, context, message)
+      identity.sign(context, message)
+    end
+
+    # Raises unless both the Ed25519 and the ML-DSA half verify. Nothing is
+    # returned: a caller who forgot to test a boolean would read every failure
+    # as a pass.
+    def verify(public_key, context, message, signature)
+      key = binary(public_key, "public key")
+      ctx = binary(context, "context")
+      msg = binary(message, "message")
+      sig = binary(signature, "signature")
+      check(Binding.call(
+              :hide_verify_message,
+              buffer_arg(key), key.bytesize,
+              buffer_arg(ctx), ctx.bytesize,
+              buffer_arg(msg), msg.bytesize,
+              buffer_arg(sig), sig.bytesize
+            ))
+      nil
+    end
+
+    # A detached signature proves possession at some point, to nobody in
+    # particular, and can be replayed. A challenge binds a random nonce, an
+    # audience and an expiry, so an answer is good once, here, now.
+    def new_challenge(audience, now, valid_for)
+      out = Binding.empty_buffer
+      check(Binding.call(
+              :hide_challenge_new,
+              cstring(audience), Integer(now), Integer(valid_for), out
+            ))
+      Binding.take(out)
+    end
+
     def check(code)
       return if code == Binding::OK
 
@@ -194,6 +239,197 @@ module Hide
     end
 
     alias data plaintext
+  end
+
+  # Argument coercion shared by the classes that pass byte strings to the core.
+  module Bytes
+    private
+
+    def binary(value, what)
+      raise InvalidArgumentError, "#{what} must be a String" unless value.is_a?(String)
+
+      value.dup.force_encoding(Encoding::BINARY)
+    end
+
+    # Fiddle passes a String as a pointer to its bytes, but a zero-length
+    # String has no address the callee may read, so give it one it can ignore.
+    def arg(bytes)
+      bytes.empty? ? Fiddle::Pointer.malloc(1, Fiddle::RUBY_FREE) : bytes
+    end
+  end
+
+  # A signing key. The seed stays inside the native library and is never
+  # exposed to Ruby; there is deliberately no accessor for it.
+  class SigningIdentity
+    include Bytes
+
+    class << self
+      # Creates an identity and returns the sealed key file to store. One seed
+      # backs both encryption and signing, so there is one thing to back up.
+      def generate(passphrase)
+        text = passphrase.to_s
+        if text.length < MIN_PASSPHRASE_LEN
+          raise InvalidArgumentError,
+                "the passphrase must be at least #{MIN_PASSPHRASE_LEN} characters"
+        end
+
+        out = Binding.empty_buffer
+        Hide.check(Binding.call(:hide_identity_generate, "#{text}\x00".b, out))
+        Binding.take(out)
+      end
+
+      # Loads a signing identity. A key file written before signatures existed
+      # carries no signing seed and fails rather than being downgraded.
+      def open(data, passphrase = nil, &block)
+        raise InvalidArgumentError, "key data must be a String" unless data.is_a?(String)
+
+        bytes = data.dup.force_encoding(Encoding::BINARY)
+        handle = Binding.pointer_slot
+        Hide.check(Binding.call(
+                     :hide_signing_identity_open,
+                     bytes.empty? ? Fiddle::Pointer.malloc(1, Fiddle::RUBY_FREE) : bytes,
+                     bytes.bytesize,
+                     passphrase.nil? ? nil : "#{passphrase}\x00".b,
+                     handle
+                   ))
+        identity = new(handle[0, Binding::WORD].unpack1(Binding::WORD_PACK))
+        return identity unless block
+
+        begin
+          block.call(identity)
+        ensure
+          identity.close
+        end
+      end
+
+      alias load open
+    end
+
+    def initialize(address)
+      @address = address
+    end
+
+    # The shareable verifying key, for others to check signatures with.
+    def public_key
+      alive!
+      out = Binding.empty_buffer
+      Hide.check(Binding.call(:hide_signing_identity_public, handle, out))
+      Binding.take(out)
+    end
+
+    # context separates uses of one identity, so a signature made for one
+    # purpose cannot be replayed as another. Never let a remote party choose it.
+    def sign(context, message)
+      alive!
+      ctx = binary(context, "context")
+      msg = binary(message, "message")
+      out = Binding.empty_buffer
+      Hide.check(Binding.call(
+                   :hide_sign_message,
+                   handle,
+                   arg(ctx), ctx.bytesize,
+                   arg(msg), msg.bytesize,
+                   out
+                 ))
+      Binding.take(out)
+    end
+
+    # Answers a challenge, proving possession to whoever issued it.
+    def answer(challenge)
+      alive!
+      bytes = binary(challenge, "challenge")
+      out = Binding.empty_buffer
+      Hide.check(Binding.call(:hide_challenge_answer, handle, arg(bytes), bytes.bytesize, out))
+      Binding.take(out)
+    end
+
+    def close
+      return if @address.nil? || @address.zero?
+
+      Binding.call(:hide_signing_identity_free, Fiddle::Pointer.new(@address))
+      @address = nil
+      nil
+    end
+
+    def closed?
+      @address.nil? || @address.zero?
+    end
+
+    # Never render key material, not even a fingerprint of it.
+    def inspect
+      "#<Hide::SigningIdentity #{closed? ? "closed" : "open"}>"
+    end
+
+    alias to_s inspect
+
+    private
+
+    def handle
+      Fiddle::Pointer.new(@address)
+    end
+
+    def alive!
+      raise ClosedKeyError, "this identity has been closed" if closed?
+    end
+  end
+
+  # The verifier's record of answered challenges.
+  #
+  # Replay can only be detected by the verifier: a replayed answer is a genuine
+  # signature and nothing about it is invalid on its own. This must therefore
+  # outlive a single request.
+  class SpentNonces
+    include Bytes
+
+    def self.open
+      record = new
+      return record unless block_given?
+
+      begin
+        yield record
+      ensure
+        record.close
+      end
+    end
+
+    def initialize
+      pointer = Binding.call(:hide_spent_nonces_new)
+      raise Error, "could not allocate the nonce record" if pointer.null?
+
+      @address = pointer.to_i
+    end
+
+    # Accepts an answer exactly once: raises ChallengeReplayedError the second
+    # time, ChallengeExpiredError after the window, AuthenticationError if it
+    # does not verify.
+    def accept(challenge, signature, public_key, now)
+      raise ClosedKeyError, "this record has been closed" if closed?
+
+      chal = binary(challenge, "challenge")
+      sig = binary(signature, "signature")
+      key = binary(public_key, "public key")
+      Hide.check(Binding.call(
+                   :hide_challenge_accept,
+                   Fiddle::Pointer.new(@address),
+                   arg(chal), chal.bytesize,
+                   arg(sig), sig.bytesize,
+                   arg(key), key.bytesize,
+                   Integer(now)
+                 ))
+      nil
+    end
+
+    def close
+      return if closed?
+
+      Binding.call(:hide_spent_nonces_free, Fiddle::Pointer.new(@address))
+      @address = nil
+      nil
+    end
+
+    def closed?
+      @address.nil? || @address.zero?
+    end
   end
 
   # A secret key. The bytes stay inside the native library and are never

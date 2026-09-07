@@ -514,11 +514,45 @@ pub const HIDE_ERR_CHALLENGE_REPLAYED: i32 = 9;
 /// seed: a binding can sign, and cannot leak.
 pub struct HideSigningIdentity(hide_sign::SigningIdentity);
 
+/// Creates an identity and returns it sealed under `passphrase`, ready to
+/// write to disk. One seed backs both encryption and signing, so a caller has
+/// a single thing to back up; the seed itself never crosses the boundary.
+///
+/// # Safety
+/// `passphrase` must be a valid C string and `out` must be non-null.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn hide_identity_generate(
+    passphrase: *const c_char,
+    out_key_file: *mut HideBuffer,
+) -> i32 {
+    guard(|| {
+        if out_key_file.is_null() {
+            return HIDE_ERR_INVALID_ARGUMENT;
+        }
+        let Some(Some(passphrase)) = (unsafe { borrow_str(passphrase) }) else {
+            return HIDE_ERR_INVALID_ARGUMENT;
+        };
+        let identity = match hide_keyring::Identity::generate() {
+            Ok(identity) => identity,
+            Err(_) => return HIDE_ERR_INTERNAL,
+        };
+        match hide_keyring::protect_identity(identity.expose_seed_for_sealing(), passphrase) {
+            Ok(sealed) => {
+                unsafe { *out_key_file = HideBuffer::from_vec(sealed) };
+                HIDE_OK
+            }
+            Err(error) => keyring_error_code(&error),
+        }
+    })
+}
+
 /// The verifier's record of answered challenges. Replay can only be detected
 /// by the verifier, so this must outlive a single request.
 pub struct HideSpentNonces(hide_sign::SpentNonces);
 
 /// Loads a signing identity from a key file's bytes.
+///
+/// See [`hide_identity_generate`] for creating one in the first place.
 ///
 /// A key file written before signatures existed carries no signing seed, and
 /// fails here rather than being silently downgraded.

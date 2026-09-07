@@ -39,3 +39,19 @@ public sealed class NotAKeyException : HideException
     {
     }
 }
+
+/// <summary>The challenge expired before it was answered.</summary>
+public sealed class ChallengeExpiredException : HideException
+{
+    public ChallengeExpiredException(string message) : base(message)
+    {
+    }
+}
+
+/// <summary>This challenge was already answered. Almost certainly a replay.</summary>
+public sealed class ChallengeReplayedException : HideException
+{
+    public ChallengeReplayedException(string message) : base(message)
+    {
+    }
+}

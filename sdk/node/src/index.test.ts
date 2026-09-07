@@ -3,15 +3,24 @@ import { test } from "node:test";
 
 import {
   AuthenticationError,
+  ChallengeExpiredError,
+  ChallengeReplayedError,
   NoMatchingRecipientError,
+  NotAKeyError,
   PUBLIC_KEY_LEN,
+  SIGNATURE_LEN,
   SecretKey,
+  SigningIdentity,
+  SpentNonces,
+  VERIFYING_KEY_LEN,
   WrongPassphraseError,
   armorPublicKey,
   dearmorPublicKey,
   decrypt,
   encrypt,
   inspectKey,
+  newChallenge,
+  verify,
 } from "./index.js";
 
 test("round trip carries metadata", () => {
@@ -174,4 +183,118 @@ test("a corrupt container yields an authentication error, not a crash", () => {
   } finally {
     secret.close();
   }
+});
+
+const PASSPHRASE = "correct horse battery staple";
+const CONTEXT = Buffer.from("HIDE/0.5 node test");
+const MESSAGE = Buffer.from("the message");
+
+function identity(): SigningIdentity {
+  return SigningIdentity.load(SigningIdentity.generate(PASSPHRASE), PASSPHRASE);
+}
+
+test("signs and verifies", () => {
+  const signer = identity();
+  try {
+    const publicKey = signer.publicKey();
+    assert.equal(publicKey.length, VERIFYING_KEY_LEN);
+    const signature = signer.sign(CONTEXT, MESSAGE);
+    assert.equal(signature.length, SIGNATURE_LEN);
+    verify(publicKey, CONTEXT, MESSAGE, signature);
+  } finally {
+    signer.close();
+  }
+});
+
+test("a changed message does not verify", () => {
+  const signer = identity();
+  try {
+    const signature = signer.sign(CONTEXT, MESSAGE);
+    assert.throws(
+      () => verify(signer.publicKey(), CONTEXT, Buffer.from("the messagE"), signature),
+      AuthenticationError,
+    );
+  } finally {
+    signer.close();
+  }
+});
+
+test("a different context does not verify", () => {
+  const signer = identity();
+  try {
+    const signature = signer.sign(CONTEXT, MESSAGE);
+    assert.throws(
+      () =>
+        verify(signer.publicKey(), Buffer.from("another context"), MESSAGE, signature),
+      AuthenticationError,
+    );
+  } finally {
+    signer.close();
+  }
+});
+
+test("another identity cannot be impersonated", () => {
+  const signer = identity();
+  const impostor = identity();
+  try {
+    const signature = impostor.sign(CONTEXT, MESSAGE);
+    assert.throws(
+      () => verify(signer.publicKey(), CONTEXT, MESSAGE, signature),
+      AuthenticationError,
+    );
+  } finally {
+    signer.close();
+    impostor.close();
+  }
+});
+
+test("an encryption-only key cannot sign", () => {
+  const secret = SecretKey.generate();
+  const sealed = secret.protect(PASSPHRASE);
+  secret.close();
+  assert.throws(() => SigningIdentity.load(sealed, PASSPHRASE), NotAKeyError);
+});
+
+test("a challenge is answered once and then refused", () => {
+  const prover = identity();
+  const spent = new SpentNonces();
+  try {
+    const publicKey = prover.publicKey();
+    const challenge = newChallenge("ssh://host.example", 1000, 60);
+    const answer = prover.answer(challenge);
+
+    spent.accept(challenge, answer, publicKey, 1000);
+    // The identical valid answer, presented again.
+    assert.throws(
+      () => spent.accept(challenge, answer, publicKey, 1000),
+      ChallengeReplayedError,
+    );
+  } finally {
+    spent.close();
+    prover.close();
+  }
+});
+
+test("an answer after the window is refused", () => {
+  const prover = identity();
+  const spent = new SpentNonces();
+  try {
+    const challenge = newChallenge("ssh://host.example", 1000, 60);
+    const answer = prover.answer(challenge);
+    assert.throws(
+      () => spent.accept(challenge, answer, prover.publicKey(), 1100),
+      ChallengeExpiredError,
+    );
+  } finally {
+    spent.close();
+    prover.close();
+  }
+});
+
+test("a closed identity cannot sign and never prints key material", () => {
+  const signer = identity();
+  assert.equal(JSON.stringify(signer), '"[hide.SigningIdentity]"');
+  signer.close();
+  signer.close(); // idempotent
+  assert.throws(() => signer.sign(CONTEXT, MESSAGE), TypeError);
 });

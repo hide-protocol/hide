@@ -37,15 +37,16 @@ P5.1,5,task,"Challenge: random nonce, audience, expiry",done,P1.4,crates/hide-si
 P5.2,5,task,Domain separation so a challenge cannot be replayed as a container signature,done,P1.4,crates/hide-sign,Tested both ways: detached sig is not an answer and an answer is not a detached sig,
 P5.3,5,task,Reject a stale or reused challenge,done,P1.4,crates/hide-sign,9/9 mutations detected,An expired answer must not spend the nonce
 P6.1,6,task,"C ABI: sign, verify, identity handles",done,P5.3,crates/hide-ffi,cargo test -p hide-ffi (13 unit + 2 C ABI tests),"Opaque handles; header drift is now asserted in Rust, not only via the C compiler"
-P6.2,6,task,Python binding,not-started,P6.1,sdk/python,,
-P6.3,6,task,Node binding,not-started,P6.1,sdk/node,,
-P6.4,6,task,Go binding,not-started,P6.1,sdk/go,,
-P6.5,6,task,Java binding,not-started,P6.1,sdk/java,,
-P6.6,6,task,Ruby binding,not-started,P6.1,sdk/ruby,,
-P6.7,6,task,PHP binding,not-started,P6.1,sdk/php,,
-P6.8,6,task,.NET binding,not-started,P6.1,sdk/dotnet,,
-P6.9,6,task,WASM binding,not-started,P1.4,crates/hide-wasm,,Binds the crates directly; cannot use the C FFI
-P6.10,6,task,Cross-surface: every surface verifies every other's signature,not-started,P6.9,conformance/cross-surface,,Must fail rather than skip
+P6.2,6,task,Python binding,done,P6.1,sdk/python,19 passed (python -m pytest sdk/python/tests),
+P6.3,6,task,Node binding,done,P6.1,sdk/node,pass 20 fail 0 (node --test dist/index.test.js),
+P6.4,6,task,Go binding,done,P6.1,sdk/go,ok (go test -count=1 ./...),Local runs need the GNU target; MSVC .lib cannot be linked by mingw
+P6.5,6,task,Java binding,done,P6.1,sdk/java,all tests passed (19),
+P6.6,6,task,Ruby binding,done,P6.1,sdk/ruby,"27 runs, 0 failures",
+P6.7,6,task,PHP binding,done,P6.1,sdk/php,21 tests 0 failed (run in WSL; no PHP on Windows),Mutation-tested: 4/4 detected
+P6.8,6,task,.NET binding,done,P6.1,sdk/dotnet,Passed! 25 tests,
+P6.9,6,task,WASM binding,done,P1.4,crates/hide-wasm,8 passed (cargo test --target wasm32-unknown-unknown),Binds the crates directly; cannot use the C FFI
+P6.10,6,task,Cross-surface: every surface verifies every other's signature,done,P6.9,conformance/cross-surface,all 25 cross-surface checks passed,Now also runs in the pre-push hook
+P6.11,6,bug,"Raw key files meant different things to the CLI and the SDKs",done,P6.10,crates/hide-keyring,file pub == node pub: true; 25/25 conformance,A P3 regression that no Rust test could see
 P7.1,7,task,README and SECURITY state the SSH limitation plainly,not-started,P6.10,docs,,No claim of post-quantum SSH
 P7.2,7,task,CHANGELOG and version bump across every surface,not-started,P7.1,repo,,
 P7.3,7,task,Tag v0.5.0 and verify the published artifacts,not-started,P7.2,release,,Download, checksum, run

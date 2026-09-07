@@ -44,4 +44,22 @@ public class HideException extends RuntimeException {
             super(message);
         }
     }
+
+    /** The challenge was answered after its window closed. */
+    public static final class ChallengeExpired extends HideException {
+        private static final long serialVersionUID = 1L;
+
+        ChallengeExpired(String message) {
+            super(message);
+        }
+    }
+
+    /** This answer was already accepted; a genuine signature replayed. */
+    public static final class ChallengeReplayed extends HideException {
+        private static final long serialVersionUID = 1L;
+
+        ChallengeReplayed(String message) {
+            super(message);
+        }
+    }
 }

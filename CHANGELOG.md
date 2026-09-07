@@ -34,6 +34,12 @@ rather than opening them with the signature silently ignored.
   signature, an answer cannot be replayed to another service or reused later.
   `SpentNonces` records what has been answered and forgets entries once expiry
   alone would refuse them.
+- **Signing, verification and challenges in all eight SDKs** — Python, Node,
+  Go, Java, Ruby, PHP, .NET and WASM — plus the C ABI they are built on.
+  `verify` throws or returns an error in every language; none returns a boolean
+  a caller can forget to check.
+- **`hide_identity_generate`** in the C ABI, so a binding can create an identity
+  rather than only load one.
 
 ### Changed
 
@@ -46,6 +52,16 @@ rather than opening them with the signature silently ignored.
   message naming the fix.
 
 ### Security
+
+### Fixed
+
+- **A raw key file meant different things to the CLI and to the SDKs.** Since
+  the identity work landed, `hide keygen --insecure-plaintext` writes a master
+  seed and the CLI derives the encryption key from it, but every SDK read those
+  32 bytes as the key itself — so a container encrypted to the CLI's own public
+  key could not be opened through any SDK. `hide_keyring::open` now derives, and
+  a protected identity file also yields its encryption key. Protected key files
+  written by 0.4.0 are unaffected and still open.
 
 - **SSH authentication is not post-quantum, and the README says so.** OpenSSH
   accepts only `ssh-ed25519`, `sk-*` and RSA for user authentication, so the

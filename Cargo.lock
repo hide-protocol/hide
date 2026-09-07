@@ -538,6 +538,7 @@ version = "0.4.0"
 dependencies = [
  "hide-crypto",
  "hide-format",
+ "hide-keyring",
  "hide-sign",
  "proptest",
  "thiserror",
@@ -567,6 +568,7 @@ dependencies = [
  "hide-crypto",
  "hide-keyring",
  "hide-object",
+ "hide-sign",
  "wasm-bindgen",
  "wasm-bindgen-test",
  "zeroize",

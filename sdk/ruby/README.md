@@ -10,8 +10,8 @@ cannot afford to lose or expose. The format may change.
 
 **A successful decryption proves the data was not altered. It does *not* prove
 who sent it.** Anyone holding your public key can produce a container that
-decrypts for you. If you need to know the sender, you need a signature, and
-HIDE does not provide one.
+decrypts for you. If you need to know the sender, sign the message with
+`Hide::SigningIdentity` and verify it separately.
 
 A decrypted filename is attacker-controlled. Never use it to choose an output
 path.
@@ -99,6 +99,40 @@ text = Hide.armor_public_key(public_key)  # "hide-public-key:..."
 Hide.dearmor_public_key(text)             # back to bytes
 ```
 
+### Signing
+
+Encryption and signing share one seed, so there is a single thing to back up.
+
+```ruby
+sealed = Hide::SigningIdentity.generate("a long passphrase")  # write this to disk
+
+Hide::SigningIdentity.open(sealed, "a long passphrase") do |signer|
+  public_key = signer.public_key                  # 1984 bytes, shareable
+  signature = signer.sign("myapp/v1 release", bytes)  # 3373 bytes
+  Hide.verify(public_key, "myapp/v1 release", bytes, signature)
+end
+```
+
+`verify` returns `nil` and raises on failure, rather than returning a boolean a
+caller could forget to test. The context string separates uses of one identity:
+never let a remote party choose it.
+
+### Proving possession live
+
+A detached signature proves possession at some point, to nobody in particular,
+and can be replayed. A challenge binds a nonce, an audience and an expiry.
+
+```ruby
+challenge = Hide.new_challenge("ssh://host.example", Time.now.to_i, 60)
+answer = signer.answer(challenge)
+
+spent = Hide::SpentNonces.new   # must outlive the request
+spent.accept(challenge, answer, public_key, Time.now.to_i)
+```
+
+The second acceptance of the same answer raises `ChallengeReplayedError`, and
+one presented after the window raises `ChallengeExpiredError`.
+
 ## API
 
 | | |
@@ -109,7 +143,13 @@ Hide.dearmor_public_key(text)             # back to bytes
 | `Hide.armor_public_key` / `Hide.dearmor_public_key` | text form of a public key |
 | `Hide.inspect_key(bytes)` | `"raw"` or `"protected"` |
 | `Hide::SecretKey.generate` / `.open(bytes, passphrase = nil)` | keys |
+| `Hide::SigningIdentity.generate(passphrase)` | sealed key file bytes |
+| `Hide::SigningIdentity.open(bytes, passphrase = nil)` | `#public_key`, `#sign`, `#answer`, `#close` |
+| `Hide.verify(public_key, context, message, signature)` | raises unless it verifies |
+| `Hide.new_challenge(audience, now, valid_for)` | challenge bytes |
+| `Hide::SpentNonces#accept(challenge, signature, public_key, now)` | accepts once |
 | `Hide::PUBLIC_KEY_LEN` (1216), `Hide::MIN_PASSPHRASE_LEN` (8) | constants |
+| `Hide::SIGNATURE_LEN` (3373), `Hide::VERIFYING_KEY_LEN` (1984), `Hide::NONCE_LEN` (32) | constants |
 
 Encryption takes between 1 and 64 recipients, each public key exactly
 `Hide::PUBLIC_KEY_LEN` bytes.
@@ -123,7 +163,8 @@ Everything raises a subclass of `Hide::Error`:
 
 `InvalidArgumentError`, `AuthenticationError` (altered data, or not a
 container), `WrongPassphraseError`, `NoMatchingRecipientError` (this key was
-not a recipient), `NotAKeyError`, `TooLargeError`, `ClosedKeyError`.
+not a recipient), `NotAKeyError`, `TooLargeError`, `ClosedKeyError`,
+`ChallengeExpiredError`, `ChallengeReplayedError`.
 
 ## Tests
 

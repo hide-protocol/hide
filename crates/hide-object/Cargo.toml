@@ -22,6 +22,9 @@ zeroize.workspace = true
 
 [dev-dependencies]
 proptest.workspace = true
+# Only the vector generator and the vector test need it: they must derive a key
+# the same way every surface does.
+hide-keyring = { path = "../hide-keyring" }
 
 [lints]
 workspace = true

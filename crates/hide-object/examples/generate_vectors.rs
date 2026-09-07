@@ -1,8 +1,10 @@
 use std::{error::Error, fs, path::PathBuf};
 
 use hide_crypto::RecipientSecret;
+use hide_keyring::Identity;
 use hide_object::{Metadata, SignaturePlacement, encrypt_for_vector, encrypt_signed_for_vector};
 use hide_sign::SigningIdentity;
+use zeroize::Zeroizing;
 
 fn main() -> Result<(), Box<dyn Error>> {
     let directory = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../conformance/vectors");
@@ -56,6 +58,37 @@ fn main() -> Result<(), Box<dyn Error>> {
         fs::write(directory.join(format!("{name}.hide")), &ciphertext)?;
         fs::write(directory.join(format!("{name}.txt")), plaintext)?;
         println!("generated {name}: {} bytes", ciphertext.len());
+    }
+
+    // The vectors above predate identities: their secret file IS the recipient
+    // key. Every surface now reads an unprotected key file as a master seed and
+    // derives from it, so those vectors cannot exercise that path. These do.
+    let seed = Zeroizing::new([0x77_u8; 32]);
+    let identity_key = Identity::from_seed(seed);
+    let derived = identity_key.recipient_secret()?;
+    let derived_public = derived.public_key()?;
+    fs::write(directory.join("identity.test-seed"), [0x77; 32])?;
+    fs::write(
+        directory.join("identity.test-public"),
+        derived_public.to_bytes(),
+    )?;
+    {
+        let plaintext = b"Hello from a seed\n".as_slice();
+        let metadata = Metadata {
+            filename: Some("identity.txt".into()),
+            media_type: Some("text/plain".into()),
+            signature: None,
+        };
+        let mut ciphertext = Vec::new();
+        encrypt_for_vector(
+            &mut &*plaintext,
+            &mut ciphertext,
+            &derived_public,
+            &metadata,
+        )?;
+        fs::write(directory.join("identity.hide"), &ciphertext)?;
+        fs::write(directory.join("identity.txt"), plaintext)?;
+        println!("generated identity: {} bytes", ciphertext.len());
     }
     Ok(())
 }

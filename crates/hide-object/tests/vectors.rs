@@ -29,6 +29,33 @@ fn frozen_vectors_decrypt_and_match_recorded_bytes() -> Result<(), Box<dyn Error
     Ok(())
 }
 
+/// The vectors above predate identities: their secret file IS the recipient
+/// key, so they exercise a path no surface takes any more. This one is opened
+/// the way the CLI and every SDK open an unprotected key file — as a master
+/// seed the encryption key is derived from.
+#[test]
+fn the_seed_vector_opens_the_way_every_surface_loads_a_key_file() -> Result<(), Box<dyn Error>> {
+    let directory = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../conformance/vectors");
+    let file = fs::read(directory.join("identity.test-seed"))?;
+    let secret = hide_keyring::open(&file, None)?;
+    assert_eq!(
+        secret.public_key()?.to_bytes(),
+        fs::read(directory.join("identity.test-public"))?
+    );
+
+    let container = fs::read(directory.join("identity.hide"))?;
+    let mut plaintext = Vec::new();
+    decrypt_to_staging(&mut container.as_slice(), &mut plaintext, &secret)?;
+    assert_eq!(plaintext, fs::read(directory.join("identity.txt"))?);
+
+    // Reading the file as the key itself is the regression this vector exists
+    // to catch: it must NOT open the container.
+    let literal = RecipientSecret::from_bytes(&file)?;
+    let mut wrong = Vec::new();
+    assert!(decrypt_to_staging(&mut container.as_slice(), &mut wrong, &literal).is_err());
+    Ok(())
+}
+
 /// The v0.1 containers predate signatures entirely. That they still open, and
 /// report no signer, is the compatibility guarantee for every existing file.
 #[test]

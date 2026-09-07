@@ -22,6 +22,8 @@ final class Binding
     public const ERR_NO_MATCHING_RECIPIENT = 5;
     public const ERR_MALFORMED = 6;
     public const ERR_TOO_LARGE = 7;
+    public const ERR_CHALLENGE_EXPIRED = 8;
+    public const ERR_CHALLENGE_REPLAYED = 9;
 
     public const KEY_RAW = 0;
     public const KEY_PROTECTED = 1;
@@ -70,6 +72,35 @@ final class Binding
         int32_t hide_decrypt(const uint8_t *container, size_t container_len,
                              const void *secret, HideBuffer *out,
                              HideBuffer *out_filename, HideBuffer *out_media_type);
+
+        int32_t hide_identity_generate(const char *passphrase, HideBuffer *out_key_file);
+        int32_t hide_signing_identity_open(const uint8_t *data, size_t len,
+                                          const char *passphrase, void **out_identity);
+        int32_t hide_signing_identity_public(const void *identity, HideBuffer *out);
+        void hide_signing_identity_free(void *identity);
+
+        int32_t hide_sign_message(const void *identity,
+                                  const uint8_t *context, size_t context_len,
+                                  const uint8_t *message, size_t message_len,
+                                  HideBuffer *out);
+        int32_t hide_verify_message(const uint8_t *public_key, size_t public_key_len,
+                                    const uint8_t *context, size_t context_len,
+                                    const uint8_t *message, size_t message_len,
+                                    const uint8_t *signature, size_t signature_len);
+
+        int32_t hide_challenge_new(const char *audience, uint64_t now,
+                                   uint64_t valid_for, HideBuffer *out);
+        int32_t hide_challenge_answer(const void *identity,
+                                      const uint8_t *challenge, size_t challenge_len,
+                                      HideBuffer *out);
+
+        void *hide_spent_nonces_new(void);
+        void hide_spent_nonces_free(void *spent);
+        int32_t hide_challenge_accept(void *spent,
+                                      const uint8_t *challenge, size_t challenge_len,
+                                      const uint8_t *signature, size_t signature_len,
+                                      const uint8_t *public_key, size_t public_key_len,
+                                      uint64_t now);
         C;
 
     private static ?\FFI $ffi = null;
@@ -233,6 +264,8 @@ final class Binding
             self::ERR_NOT_A_KEY => new NotAKeyException($message),
             self::ERR_AUTHENTICATION, self::ERR_MALFORMED => new AuthenticationException($message),
             self::ERR_NO_MATCHING_RECIPIENT => new NoMatchingRecipientException($message),
+            self::ERR_CHALLENGE_EXPIRED => new ChallengeExpiredException($message),
+            self::ERR_CHALLENGE_REPLAYED => new ChallengeReplayedException($message),
             default => new HideException($message),
         };
     }

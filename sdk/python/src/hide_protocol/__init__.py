@@ -27,6 +27,13 @@ __all__ = [
     "NoMatchingRecipient",
     "NotAKeyFile",
     "SecretKey",
+    "SigningIdentity",
+    "SpentNonces",
+    "ChallengeExpired",
+    "ChallengeReplayed",
+    "sign",
+    "verify",
+    "new_challenge",
     "Decrypted",
     "encrypt",
     "decrypt",
@@ -35,6 +42,8 @@ __all__ = [
     "inspect_key",
     "MIN_PASSPHRASE_LEN",
     "PUBLIC_KEY_LEN",
+    "SIGNATURE_LEN",
+    "VERIFYING_KEY_LEN",
     "__version__",
 ]
 
@@ -61,6 +70,14 @@ class NotAKeyFile(HideError):
     """The bytes are not a HIDE key."""
 
 
+class ChallengeExpired(HideError):
+    """The challenge expired before it was answered."""
+
+
+class ChallengeReplayed(HideError):
+    """This challenge was already answered. Almost certainly a replay."""
+
+
 _ERRORS = {
     _b.ERR_INVALID_ARGUMENT: ValueError,
     _b.ERR_WRONG_PASSPHRASE: WrongPassphrase,
@@ -69,6 +86,8 @@ _ERRORS = {
     _b.ERR_NO_MATCHING_RECIPIENT: NoMatchingRecipient,
     _b.ERR_MALFORMED: AuthenticationError,
     _b.ERR_TOO_LARGE: ValueError,
+    _b.ERR_CHALLENGE_EXPIRED: ChallengeExpired,
+    _b.ERR_CHALLENGE_REPLAYED: ChallengeReplayed,
 }
 
 
@@ -268,3 +287,188 @@ def inspect_key(data: bytes) -> str:
     kind = ctypes.c_int32(-1)
     _check(_b.lib.hide_inspect_key(data, len(data), ctypes.byref(kind)))
     return "protected" if kind.value == _b.KEY_PROTECTED else "raw"
+
+
+SIGNATURE_LEN = _b.SIGNATURE_LEN
+VERIFYING_KEY_LEN = _b.VERIFYING_KEY_LEN
+
+
+class SigningIdentity:
+    """A signing key. The seed stays in the native library and is never exposed.
+
+    A key file written before signatures existed carries no signing seed and
+    raises :class:`NotAKeyFile` rather than being silently downgraded.
+    """
+
+    __slots__ = ("_handle",)
+
+    def __init__(self, handle: ctypes.c_void_p) -> None:
+        self._handle = handle
+
+    @staticmethod
+    def generate(passphrase: str) -> bytes:
+        """Creates an identity, returning the sealed key file to store.
+
+        One seed backs both encryption and signing, so there is a single thing
+        to back up. A forgotten passphrase cannot be recovered.
+        """
+        if len(passphrase) < MIN_PASSPHRASE_LEN:
+            raise ValueError(
+                f"the passphrase must be at least {MIN_PASSPHRASE_LEN} characters"
+            )
+        out = _b.lib.hide_buffer_empty()
+        _check(_b.lib.hide_identity_generate(passphrase.encode(), ctypes.byref(out)))
+        return _take(out)
+
+    @classmethod
+    def load(cls, data: bytes, passphrase: str | None = None) -> "SigningIdentity":
+        handle = ctypes.c_void_p()
+        _check(
+            _b.lib.hide_signing_identity_open(
+                data,
+                len(data),
+                passphrase.encode() if passphrase is not None else None,
+                ctypes.byref(handle),
+            )
+        )
+        return cls(handle)
+
+    def public_key(self) -> bytes:
+        """The shareable verifying key, for others to check signatures with."""
+        self._alive()
+        out = _b.lib.hide_buffer_empty()
+        _check(_b.lib.hide_signing_identity_public(self._handle, ctypes.byref(out)))
+        return _take(out)
+
+    def sign(self, context: bytes, message: bytes) -> bytes:
+        """Signs ``message`` under ``context``.
+
+        ``context`` separates uses of one identity, so a signature made for one
+        purpose cannot be replayed as another. Never let a remote party choose
+        it.
+        """
+        self._alive()
+        out = _b.lib.hide_buffer_empty()
+        _check(
+            _b.lib.hide_sign_message(
+                self._handle, context, len(context), message, len(message),
+                ctypes.byref(out),
+            )
+        )
+        return _take(out)
+
+    def answer(self, challenge: bytes) -> bytes:
+        """Answers a challenge, proving possession to whoever issued it."""
+        self._alive()
+        out = _b.lib.hide_buffer_empty()
+        _check(
+            _b.lib.hide_challenge_answer(
+                self._handle, challenge, len(challenge), ctypes.byref(out)
+            )
+        )
+        return _take(out)
+
+    def close(self) -> None:
+        if getattr(self, "_handle", None):
+            _b.lib.hide_signing_identity_free(self._handle)
+            self._handle = None
+
+    def _alive(self) -> None:
+        if not getattr(self, "_handle", None):
+            raise ValueError("this identity has been closed")
+
+    def __enter__(self) -> "SigningIdentity":
+        return self
+
+    def __exit__(self, *_: object) -> None:
+        self.close()
+
+    def __del__(self) -> None:
+        self.close()
+
+    def __repr__(self) -> str:
+        state = "closed" if not getattr(self, "_handle", None) else "open"
+        return f"<hide_protocol.SigningIdentity {state}>"
+
+
+def sign(identity: SigningIdentity, context: bytes, message: bytes) -> bytes:
+    return identity.sign(context, message)
+
+
+def verify(
+    public_key: bytes, context: bytes, message: bytes, signature: bytes
+) -> None:
+    """Raises :class:`AuthenticationError` unless both halves verify.
+
+    Returns ``None`` on success rather than ``True``: a caller that forgets to
+    check a boolean would treat every failure as a pass.
+    """
+    _check(
+        _b.lib.hide_verify_message(
+            public_key, len(public_key), context, len(context),
+            message, len(message), signature, len(signature),
+        )
+    )
+
+
+def new_challenge(audience: str, now: int, valid_for: int) -> bytes:
+    """Creates a challenge for a prover to answer.
+
+    A detached signature proves possession at some point, to nobody in
+    particular, and can be replayed. A challenge binds a random nonce, an
+    audience and an expiry, so an answer is good once, here, now.
+    """
+    out = _b.lib.hide_buffer_empty()
+    _check(
+        _b.lib.hide_challenge_new(
+            audience.encode(), now, valid_for, ctypes.byref(out)
+        )
+    )
+    return _take(out)
+
+
+class SpentNonces:
+    """The verifier's record of answered challenges.
+
+    Replay can only be detected by the verifier: a replayed answer is a
+    genuine signature and nothing about it is invalid on its own. This must
+    therefore outlive a single request.
+    """
+
+    __slots__ = ("_handle",)
+
+    def __init__(self) -> None:
+        self._handle = ctypes.c_void_p(_b.lib.hide_spent_nonces_new())
+        if not self._handle:
+            raise HideError("could not allocate the nonce record")
+
+    def accept(
+        self, challenge: bytes, signature: bytes, public_key: bytes, now: int
+    ) -> None:
+        """Accepts an answer exactly once.
+
+        Raises :class:`ChallengeReplayed` the second time, :class:`ChallengeExpired`
+        after the window, and :class:`AuthenticationError` if it does not verify.
+        """
+        if not getattr(self, "_handle", None):
+            raise ValueError("this record has been closed")
+        _check(
+            _b.lib.hide_challenge_accept(
+                self._handle, challenge, len(challenge), signature, len(signature),
+                public_key, len(public_key), now,
+            )
+        )
+
+    def close(self) -> None:
+        if getattr(self, "_handle", None):
+            _b.lib.hide_spent_nonces_free(self._handle)
+            self._handle = None
+
+    def __enter__(self) -> "SpentNonces":
+        return self
+
+    def __exit__(self, *_: object) -> None:
+        self.close()
+
+    def __del__(self) -> None:
+        self.close()

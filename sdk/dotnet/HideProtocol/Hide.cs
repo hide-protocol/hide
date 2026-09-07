@@ -25,6 +25,9 @@ public static unsafe class Hide
 {
     public const int PublicKeyLength = 1216;
     public const int MinPassphraseLength = 8;
+    public const int SignatureLength = 3373;
+    public const int VerifyingKeyLength = 1984;
+    public const int NonceLength = 32;
 
     private const int MaxRecipients = 64;
 
@@ -137,5 +140,47 @@ public static unsafe class Hide
         }
 
         return kind == Native.KeyProtected ? KeyKind.Protected : KeyKind.Raw;
+    }
+
+    /// <summary>
+    /// Throws unless both the Ed25519 and ML-DSA halves verify. It returns void
+    /// rather than a bool so that a caller who forgets to check cannot treat
+    /// every failure as a pass.
+    /// </summary>
+    public static void Verify(
+        ReadOnlySpan<byte> publicKey,
+        ReadOnlySpan<byte> context,
+        ReadOnlySpan<byte> message,
+        ReadOnlySpan<byte> signature)
+    {
+        fixed (byte* key = publicKey)
+        fixed (byte* contextPointer = context)
+        fixed (byte* messagePointer = message)
+        fixed (byte* signaturePointer = signature)
+        {
+            Interop.Check(Native.hide_verify_message(
+                key,
+                (nuint)publicKey.Length,
+                contextPointer,
+                (nuint)context.Length,
+                messagePointer,
+                (nuint)message.Length,
+                signaturePointer,
+                (nuint)signature.Length));
+        }
+    }
+
+    /// <summary>
+    /// Creates a challenge for a prover to answer. A detached signature proves
+    /// possession at some point, to nobody in particular, and can be replayed;
+    /// a challenge binds a random nonce, an audience and an expiry.
+    /// </summary>
+    public static byte[] NewChallenge(string audience, ulong now, ulong validFor)
+    {
+        ArgumentNullException.ThrowIfNull(audience);
+        using Utf8String target = Utf8String.Create(audience, nameof(audience));
+        HideBuffer output = Native.hide_buffer_empty();
+        Interop.Check(Native.hide_challenge_new(target.Pointer, now, validFor, &output));
+        return Interop.Take(ref output);
     }
 }
