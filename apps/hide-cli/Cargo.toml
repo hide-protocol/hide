@@ -4,19 +4,24 @@ version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+keywords.workspace = true
+categories.workspace = true
 publish.workspace = true
+description = "Command-line interface for the HIDE protocol: encrypt to a person, not to a key"
 
 [[bin]]
 name = "hide"
 path = "src/main.rs"
 
 [dependencies]
-hide-crypto = { path = "../../crates/hide-crypto" }
-hide-keyring = { path = "../../crates/hide-keyring" }
-hide-sign = { path = "../../crates/hide-sign" }
+hide-crypto = { path = "../../crates/hide-crypto", version = "0.5.0" }
+hide-keyring = { path = "../../crates/hide-keyring", version = "0.5.0" }
+hide-sign = { path = "../../crates/hide-sign", version = "0.5.0" }
 base64.workspace = true
 rpassword.workspace = true
-hide-object = { path = "../../crates/hide-object" }
+hide-object = { path = "../../crates/hide-object", version = "0.5.0" }
 clap.workspace = true
 tempfile.workspace = true
 zeroize.workspace = true

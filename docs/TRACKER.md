@@ -398,6 +398,38 @@ Registry uploads are irreversible — a name is claimed permanently and a versio
 can only be yanked, never replaced. That is the argument for building every
 artifact locally and inspecting its contents before a token exists at all.
 
+### P8.4 — the crates.io half had never compiled as a publish
+
+The first dry run passed seven jobs of eight. `crates` failed on the first
+crate with `package.publish must be set to true`, and behind that were four
+more faults stacked in the same job, each only visible once the previous was
+fixed.
+
+**Nothing was publishable.** The workspace sets `publish = false` and every
+library inherits it with `publish.workspace = true`. The comment justifying it
+claimed the CLI publishes as `hide-protocol-cli`; no such name appears anywhere
+else in the repo and `hide-cli` is free on crates.io, so the comment described
+a decision that was never carried out.
+
+**Five crates had no `description`**, which crates.io requires and which
+`cargo build` never asks for.
+
+**Every internal dependency was path-only.** A published crate cannot depend on
+a path: crates.io needs a version to resolve against. All seven now carry
+`version = "0.5.0"` alongside the path, which cargo uses locally and the
+registry uses when resolving.
+
+**`hide-sign` was absent from the publish list, and the order was wrong.**
+`hide-object` depends on `hide-sign` and `hide-keyring`, both of which came
+after it; the loop would have failed at the fourth crate having already
+published three — and a published version cannot be replaced. The order is now
+checked against the actual dependency graph rather than by eye.
+
+`cargo publish --dry-run` cannot verify a dependent crate before its dependency
+exists on the registry, so `hide-sign` onward can only be proved by the real
+sequential publish. `hide-format` and `hide-crypto`, which depend on nothing
+internal, both package cleanly.
+
 ---
 
 ## Rules that apply to this milestone

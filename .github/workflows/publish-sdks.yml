@@ -80,7 +80,7 @@ jobs:
           if [ "${{ inputs.dry_run }}" = "true" ]; then
             flags="$flags --dry-run"
           fi
-          for crate in hide-format hide-crypto hide-object hide-keyring hide-ffi hide-cli; do
+          for crate in hide-format hide-crypto hide-sign hide-keyring hide-object hide-ffi hide-cli; do
             echo "::group::$crate"
             cargo publish $flags -p "$crate"
             echo "::endgroup::"

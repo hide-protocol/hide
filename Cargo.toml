@@ -15,9 +15,8 @@ homepage = "https://github.com/hide-protocol/hide"
 keywords = ["encryption", "cryptography", "post-quantum", "hpke", "ml-kem"]
 categories = ["cryptography"]
 # Publishing is deliberate, not automatic: the publish-sdks workflow is started
-# by hand. `hide` is taken on crates.io by an unrelated crate, so the binary
-# crate publishes as `hide-protocol-cli`.
-publish = false
+# by hand, names the version and says which registries.
+publish = true
 
 [workspace.dependencies]
 thiserror = "=2.0.20"

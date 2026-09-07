@@ -4,10 +4,15 @@ version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+keywords.workspace = true
+categories.workspace = true
 publish.workspace = true
+description = "Identity and key file handling for the HIDE protocol"
 
 [dependencies]
-hide-crypto = { path = "../hide-crypto" }
+hide-crypto = { path = "../hide-crypto", version = "0.5.0" }
 hkdf.workspace = true
 sha2.workspace = true
 argon2.workspace = true
