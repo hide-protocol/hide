@@ -86,7 +86,9 @@ jobs:
           if [ "${{ inputs.dry_run }}" = "true" ]; then
             flags="$flags --dry-run"
           fi
-          for crate in hide-format hide-crypto hide-sign hide-keyring hide-object hide-ffi hide-cli; do
+          # Dependency order: each crate's dependencies must already be on the
+          # index when it is published, or cargo refuses it.
+          for crate in hide-format hide-crypto hide-sign hide-transparency hide-epoch hide-identity hide-mls hide-keyring hide-object hide-ffi hide-cli; do
             echo "::group::$crate"
             if [ "${{ inputs.dry_run }}" = "true" ]; then
               # Until the first real publish, a dependent cannot resolve its
