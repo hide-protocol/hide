@@ -25,15 +25,18 @@ P3.3,3,task,hide encrypt --sign,done,P3.1,apps/hide-cli,cargo test -p hide-cli -
 P3.4,3,task,hide open reports the signer,done,P3.3,apps/hide-cli,cargo test -p hide-cli --test signing,"Prints a fingerprint plus 'check that key against one you already trust; HIDE does not'"
 P3.5,3,task,Key files carry a purpose byte,done,P3.1,crates/hide-keyring,cargo test -p hide-keyring (11 passed),Format v2; v1 files still open as encryption-only
 P3.6,3,task,info reports signing keys signatures and signed containers,done,P3.4,apps/hide-cli,cargo test -p hide-cli --test signing info_recognises_signing_keys_signatures_and_signed_containers,
-P4.1,4,task,ssh-agent protocol: request and response framing,not-started,P1.4,apps/hide-cli,,ssh-encoding 0.3.0
-P4.2,4,task,REQUEST_IDENTITIES and SIGN_REQUEST over Ed25519,not-started,P4.1,apps/hide-cli,,
-P4.3,4,task,Unix socket and Windows named pipe transport,not-started,P4.2,apps/hide-cli,,
-P4.4,4,task,hide ssh-key exports an OpenSSH public key,not-started,P1.4,apps/hide-cli,,
-P4.5,4,task,Verified against a real sshd and against GitHub,not-started,P4.3,apps/hide-cli,,Empirical or it does not count
-P5.1,5,task,Challenge: random nonce, audience, expiry,not-started,P1.4,crates/hide-sign,,
+P4.1,4,task,ssh-agent protocol: request and response framing,done,P1.4,apps/hide-cli,cargo test -p hide-cli --bin hide (11 tests),Hand-rolled; no ssh-encoding dependency
+P4.2,4,task,REQUEST_IDENTITIES and SIGN_REQUEST over Ed25519,done,P4.1,apps/hide-cli,ssh-add -l lists the key via the agent,
+P4.3,4,task,Unix socket and Windows named pipe transport,done,P4.2,apps/hide-cli,Pipe \\.\pipe\hide-agent observed while serving,interprocess 2.4.4 on Windows only; std on Unix
+P4.4,4,task,hide ssh-key exports an OpenSSH public key,done,P1.4,apps/hide-cli,ssh-keygen -l -f computes the same fingerprint,
+P4.5,4,task,OpenSSH signs and verifies through the agent,done,P4.3,apps/hide-cli,ssh-keygen -Y sign then -Y verify: Good "file" signature,Proves the full SIGN_REQUEST path
+P4.6,4,task,Confirmation is required by default,done,P4.3,apps/hide-cli,Refusing yields "agent refused operation" and no signature,--no-confirm opts out
+P4.7,4,task,Agent invariants survive mutation testing,done,P4.5,apps/hide-cli,6/6 mutations detected,Two survivors were real gaps and were fixed
+P4.8,4,task,Verified against GitHub with a real account,blocked,P4.5,apps/hide-cli,,Needs the user to add the key at github.com/settings/keys
+P5.1,5,task,"Challenge: random nonce, audience, expiry",not-started,P1.4,crates/hide-sign,,
 P5.2,5,task,Domain separation so a challenge cannot be replayed as a container signature,not-started,P5.1,crates/hide-sign,,
 P5.3,5,task,Reject a stale or reused challenge,not-started,P5.2,crates/hide-sign,,
-P6.1,6,task,C ABI: sign, verify, identity handles,not-started,P5.3,crates/hide-ffi,,Panic-safe boundary as with the rest
+P6.1,6,task,"C ABI: sign, verify, identity handles",not-started,P5.3,crates/hide-ffi,,Panic-safe boundary as with the rest
 P6.2,6,task,Python binding,not-started,P6.1,sdk/python,,
 P6.3,6,task,Node binding,not-started,P6.1,sdk/node,,
 P6.4,6,task,Go binding,not-started,P6.1,sdk/go,,

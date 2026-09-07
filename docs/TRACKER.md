@@ -50,6 +50,9 @@ raise it if you disagree.
 | D8 | Identity on disk | One **master seed**, sealed once; the encryption and signing keys are derived from it | `keygen` writes one secret and two public files, so there is a single backup and a single passphrase, and neither derived key reveals the other | A key-file format change, and old keys cannot sign |
 | D9 | Key file typing | A **purpose byte**, key format version 2 | A signing key and an encryption key were byte-indistinguishable, so the wrong file could be used silently | Another format version to keep readable |
 | D10 | Detached signatures | Sign **SHA-256 of the file**, with its own context label | One streaming pass, no buffering, and consistent with the container transcript | The signature does not carry the file, so it must be kept beside it |
+| D11 | ssh-agent wire format | **Hand-rolled**, no `ssh-key` crate | ~60 lines, not cryptography, and it keeps a release-candidate dependency out of a tree that pins exact versions | Ours to maintain if OpenSSH extends the protocol |
+| D12 | Agent transport | std on Unix, **`interprocess` on Windows only** | Windows agents are named pipes, which need `unsafe` — forbidden workspace-wide — or a crate | One dependency, confined behind `cfg(windows)` |
+| D13 | Signing confirmation | **Ask every time**, `--no-confirm` opts out | A reachable agent is a signing oracle; silence should be requested, not assumed | Unattended use needs an explicit flag |
 
 ### The constraint that shapes D2
 
@@ -225,6 +228,39 @@ later "simplifies" it believing it load-bearing.
 
 The lesson generalises: a surviving mutation means *either* a missing test *or*
 a redundant defence, and deciding which requires an experiment, not a guess.
+
+### P4 — `hide agent`
+
+133 workspace tests, clippy clean, 6/6 mutations detected.
+
+**What SSH can and cannot carry.** OpenSSH user authentication accepts only
+`ssh-ed25519`, `sk-*` and RSA; post-quantum algorithms exist there solely in
+key exchange. So the agent offers the Ed25519 half of an identity and the
+ML-DSA half goes unused. The honest claim is "one sealed identity instead of a
+plaintext key in `~/.ssh`", never "post-quantum SSH", and the README says so.
+
+**Hand-rolled framing, one dependency for transport.** The wire format is
+~60 lines and is not cryptography, so `ssh-key` (still a release candidate)
+stays out of the tree. The transport could not follow: Windows agents are named
+pipes, which need either `unsafe` — forbidden workspace-wide — or a crate.
+`interprocess` is therefore a Windows-only dependency, while Unix uses std.
+
+**Verified by OpenSSH itself, not by our own tests.** `ssh-keygen -l` computes
+the same fingerprint from our exported line; `ssh-add -l` lists the key through
+the running agent; `ssh-keygen -Y sign` obtains a signature via SIGN_REQUEST
+and `-Y verify` then reports `Good "file" signature`. Refusing the confirmation
+prompt yields `agent refused operation` and no signature file.
+
+A `ssh localhost` login was attempted and failed — but it also fails with the
+agent stopped, because this machine authorises no key for this account. That is
+the environment, not the agent, and it is why the evidence above uses OpenSSH's
+own signing tools, which exercise the identical code path.
+
+**Two mutation survivors that WERE gaps.** Unlike P3, both were real. The tests
+asserted the right outcome through the wrong code path: an over-long string
+prefix was caught later by the key comparison, and an absurd framed length was
+caught by end-of-file rather than by the bound. Naming the cause in the
+assertion, and testing the reader directly, killed both.
 
 ---
 

@@ -20,6 +20,11 @@ hide-object = { path = "../../crates/hide-object" }
 clap.workspace = true
 tempfile.workspace = true
 zeroize.workspace = true
+ed25519-dalek.workspace = true
+sha2.workspace = true
+
+[target.'cfg(windows)'.dependencies]
+interprocess.workspace = true
 
 [lints]
 workspace = true

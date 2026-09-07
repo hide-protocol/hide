@@ -23,6 +23,12 @@ rather than opening them with the signature silently ignored.
   an explicit reminder that a key is not a person.
 - **`hide info`** recognises signing keys, detached signatures, and signed
   containers.
+- **`hide agent`** serves an identity to OpenSSH over the ssh-agent protocol —
+  a Unix socket, or a named pipe on Windows — so the key that logs you in is
+  never written to disk in the clear. Every signature asks for confirmation
+  unless `--no-confirm` is passed.
+- **`hide ssh-key`** prints the OpenSSH public line for `authorized_keys` or
+  GitHub.
 
 ### Changed
 
@@ -36,6 +42,14 @@ rather than opening them with the signature silently ignored.
 
 ### Security
 
+- **SSH authentication is not post-quantum, and the README says so.** OpenSSH
+  accepts only `ssh-ed25519`, `sk-*` and RSA for user authentication, so the
+  agent offers the Ed25519 half of an identity and the ML-DSA half goes unused.
+  What this buys is a sealed key instead of a plaintext one, not quantum
+  resistance.
+- **The agent asks before every signature by default.** Anything that can reach
+  the endpoint can request one, so silence has to be asked for explicitly. On
+  Unix the socket is created with mode `0600`.
 - A signature commits to the **plaintext**, not merely the header. Binding only
   the header would have been forgeable by any recipient: they hold the content
   key and the payload salt is public, so they could re-encrypt different content

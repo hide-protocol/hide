@@ -14,6 +14,9 @@ use hide_sign::{SigningIdentity, VerifyingIdentity};
 use tempfile::NamedTempFile;
 use zeroize::Zeroizing;
 
+mod agent;
+mod transport;
+
 type Result<T> = std::result::Result<T, Box<dyn Error>>;
 
 const IO_BUFFER: usize = 1 << 20;
@@ -151,6 +154,29 @@ enum Command {
         #[arg(long, help = "The signature file; defaults to <input>.hide-sig")]
         signature: Option<PathBuf>,
     },
+    #[command(
+        about = "Print the OpenSSH public key line for an identity, to paste into authorized_keys or GitHub"
+    )]
+    SshKey {
+        #[arg(long, help = "Your identity key")]
+        secret: PathBuf,
+        #[arg(long, help = "The comment to place at the end of the line")]
+        comment: Option<String>,
+    },
+    #[command(about = "Serve this identity to OpenSSH as an ssh-agent, without writing a key file")]
+    Agent {
+        #[arg(long, help = "Your identity key")]
+        secret: PathBuf,
+        #[arg(
+            long,
+            help = "Where to listen; a socket on Unix, a named pipe on Windows"
+        )]
+        endpoint: Option<String>,
+        #[arg(long, help = "Sign without asking; every request then signs silently")]
+        no_confirm: bool,
+        #[arg(long, help = "The comment to advertise with the key")]
+        comment: Option<String>,
+    },
 }
 
 fn main() -> ExitCode {
@@ -227,6 +253,13 @@ fn run(arguments: Arguments) -> Result<()> {
             signer,
             signature,
         } => verify_file(&input, &signer, signature.as_deref()),
+        Command::SshKey { secret, comment } => print_ssh_key(&secret, comment.as_deref()),
+        Command::Agent {
+            secret,
+            endpoint,
+            no_confirm,
+            comment,
+        } => run_agent(&secret, endpoint.as_deref(), no_confirm, comment.as_deref()),
     }
 }
 
@@ -633,6 +666,60 @@ fn verify_file(input: &Path, signer_path: &Path, signature: Option<&Path>) -> Re
     );
     eprintln!("This proves possession of that key, not the identity of a person.");
     Ok(())
+}
+
+/// The Ed25519 half only. OpenSSH user authentication accepts `ssh-ed25519`,
+/// `sk-*` and RSA; post-quantum algorithms exist there only in key exchange,
+/// so the ML-DSA half of a HIDE identity cannot be offered to a server.
+fn ssh_agent_for(secret_path: &Path, comment: Option<&str>) -> Result<agent::Agent> {
+    let identity = load_signing_identity(secret_path)?;
+    let comment = comment
+        .map(str::to_string)
+        .unwrap_or_else(|| format!("hide:{}", secret_path.display()));
+    Ok(agent::Agent::new(&identity, comment))
+}
+
+fn print_ssh_key(secret_path: &Path, comment: Option<&str>) -> Result<()> {
+    let agent = ssh_agent_for(secret_path, comment)?;
+    println!(
+        "{}",
+        agent::authorized_key_line(agent.public(), agent.comment())
+    );
+    eprintln!(
+        "This is the Ed25519 half of your identity ({}).",
+        agent::fingerprint(agent.public())
+    );
+    eprintln!("SSH cannot carry the post-quantum half, so this key is not post-quantum.");
+    Ok(())
+}
+
+fn run_agent(
+    secret_path: &Path,
+    endpoint: Option<&str>,
+    no_confirm: bool,
+    comment: Option<&str>,
+) -> Result<()> {
+    let agent = ssh_agent_for(secret_path, comment)?;
+    let endpoint = endpoint
+        .map(str::to_string)
+        .unwrap_or_else(transport::default_endpoint);
+
+    let mut ask;
+    let mut always;
+    let approver: &mut dyn agent::Approver = if no_confirm {
+        always = agent::ApproveEverything;
+        &mut always
+    } else {
+        ask = agent::AskOnTerminal;
+        &mut ask
+    };
+
+    eprintln!("hide agent: serving {}", agent::fingerprint(agent.public()));
+    eprintln!("hide agent: {}", transport::advice(&endpoint));
+    if no_confirm {
+        eprintln!("hide agent: --no-confirm is set; anything reaching this endpoint can sign.");
+    }
+    transport::listen(&agent, &endpoint, approver)
 }
 
 fn seal_message(

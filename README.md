@@ -56,8 +56,14 @@ Being explicit here matters more than the feature list.
   ciphertext size are visible, and metadata is encrypted rather than hidden. A *public* signature also
   reveals the signer's key to anyone holding the file; the confidential placement avoids this.
 - **Signing is not streaming.** A signature commits to the plaintext, so signing buffers the payload.
+- **SSH authentication is not post-quantum.** `hide agent` offers the Ed25519 half of an identity and
+  nothing more. OpenSSH accepts only `ssh-ed25519`, `sk-*` and RSA for user authentication;
+  post-quantum algorithms exist there only in key exchange. What this buys is one sealed identity
+  instead of a plaintext private key sitting in `~/.ssh`, not quantum resistance.
+- **An agent is a signing oracle.** Anything that can reach the endpoint can ask for a signature.
+  That is why confirmation is the default and `--no-confirm` must be asked for.
 - Not yet built: identity state, device enrollment, recovery, revocation, key transparency,
-  SSH authentication, MLS messaging.
+  MLS messaging.
 
 ## Download
 
@@ -156,6 +162,26 @@ before signatures existed still decrypts; signing with it fails and says so.
 
 A signature proves possession of a key. HIDE has no directory or transparency log, so nothing ties that
 key to a person — compare a signer's key against one you already trust.
+
+### Logging in over SSH
+
+The same identity can act as an ssh-agent, so the key that authenticates you is never written to disk
+in the clear.
+
+```powershell
+# Print the public line to paste into ~/.ssh/authorized_keys or github.com/settings/keys.
+cargo run -p hide-cli -- --experimental ssh-key --secret alice.hide-key
+
+# Serve it. Every signature asks for confirmation unless you pass --no-confirm.
+cargo run -p hide-cli -- --experimental agent --secret alice.hide-key
+```
+
+Then point SSH at it — `export SSH_AUTH_SOCK=/tmp/hide-agent.sock` on Unix, or
+`ssh -o IdentityAgent=\\.\pipe\hide-agent` on Windows.
+
+This offers the Ed25519 half of the identity only. SSH cannot carry the post-quantum half, so an SSH
+login is not post-quantum; what it avoids is a plaintext private key on disk. Treat the endpoint as
+sensitive: anything that can reach it can ask for a signature.
 
 ### Building the desktop application
 
