@@ -7,6 +7,78 @@ use std::{
     process::Command,
 };
 
+/// The C round-trip needs a compiler and is skipped where none exists, so the
+/// constants are also checked here: this runs everywhere, and a header that
+/// disagrees with Rust would otherwise mislead every binding that reads it.
+#[test]
+fn the_header_constants_match_the_rust_ones() {
+    let header = fs::read_to_string(
+        Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("include")
+            .join("hide.h"),
+    )
+    .expect("the header ships with the crate");
+
+    let defined = |name: &str| -> i64 {
+        header
+            .lines()
+            .find_map(|line| {
+                let rest = line.strip_prefix("#define ")?;
+                let (found, value) = rest.split_once(char::is_whitespace)?;
+                (found == name).then(|| value.trim().parse::<i64>().ok())?
+            })
+            .unwrap_or_else(|| panic!("{name} is not defined in hide.h"))
+    };
+
+    for (name, rust) in [
+        ("HIDE_OK", hide_ffi::HIDE_OK as i64),
+        (
+            "HIDE_ERR_INVALID_ARGUMENT",
+            hide_ffi::HIDE_ERR_INVALID_ARGUMENT as i64,
+        ),
+        (
+            "HIDE_ERR_WRONG_PASSPHRASE",
+            hide_ffi::HIDE_ERR_WRONG_PASSPHRASE as i64,
+        ),
+        ("HIDE_ERR_NOT_A_KEY", hide_ffi::HIDE_ERR_NOT_A_KEY as i64),
+        (
+            "HIDE_ERR_AUTHENTICATION",
+            hide_ffi::HIDE_ERR_AUTHENTICATION as i64,
+        ),
+        (
+            "HIDE_ERR_NO_MATCHING_RECIPIENT",
+            hide_ffi::HIDE_ERR_NO_MATCHING_RECIPIENT as i64,
+        ),
+        ("HIDE_ERR_MALFORMED", hide_ffi::HIDE_ERR_MALFORMED as i64),
+        ("HIDE_ERR_TOO_LARGE", hide_ffi::HIDE_ERR_TOO_LARGE as i64),
+        (
+            "HIDE_ERR_CHALLENGE_EXPIRED",
+            hide_ffi::HIDE_ERR_CHALLENGE_EXPIRED as i64,
+        ),
+        (
+            "HIDE_ERR_CHALLENGE_REPLAYED",
+            hide_ffi::HIDE_ERR_CHALLENGE_REPLAYED as i64,
+        ),
+        ("HIDE_ERR_PANIC", hide_ffi::HIDE_ERR_PANIC as i64),
+        ("HIDE_ERR_INTERNAL", hide_ffi::HIDE_ERR_INTERNAL as i64),
+        ("HIDE_KEY_RAW", hide_ffi::HIDE_KEY_RAW as i64),
+        ("HIDE_KEY_PROTECTED", hide_ffi::HIDE_KEY_PROTECTED as i64),
+        ("HIDE_PUBLIC_KEY_LEN", hide_ffi::HIDE_PUBLIC_KEY_LEN as i64),
+        (
+            "HIDE_MIN_PASSPHRASE_LEN",
+            hide_ffi::HIDE_MIN_PASSPHRASE_LEN as i64,
+        ),
+        ("HIDE_SIGNATURE_LEN", hide_ffi::HIDE_SIGNATURE_LEN as i64),
+        (
+            "HIDE_VERIFYING_KEY_LEN",
+            hide_ffi::HIDE_VERIFYING_KEY_LEN as i64,
+        ),
+        ("HIDE_NONCE_LEN", hide_ffi::HIDE_NONCE_LEN as i64),
+    ] {
+        assert_eq!(defined(name), rust, "hide.h disagrees with Rust on {name}");
+    }
+}
+
 /// Picks a compiler that can actually link the library we build.
 ///
 /// On an MSVC toolchain the staticlib is MSVC-ABI, and MinGW `gcc` cannot link

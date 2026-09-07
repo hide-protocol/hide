@@ -15,6 +15,7 @@ crate-type = ["cdylib", "staticlib", "rlib"]
 hide-crypto = { path = "../hide-crypto" }
 hide-keyring = { path = "../hide-keyring" }
 hide-object = { path = "../hide-object" }
+hide-sign = { path = "../hide-sign" }
 zeroize.workspace = true
 
 [lints.rust]

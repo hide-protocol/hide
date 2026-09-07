@@ -152,6 +152,8 @@ pub extern "C" fn hide_error_message(code: i32) -> *const c_char {
         HIDE_ERR_NO_MATCHING_RECIPIENT => b"no matching recipient for this key\0",
         HIDE_ERR_MALFORMED => b"malformed or corrupt input\0",
         HIDE_ERR_TOO_LARGE => b"input is too large\0",
+        HIDE_ERR_CHALLENGE_EXPIRED => b"the challenge expired before it was answered\0",
+        HIDE_ERR_CHALLENGE_REPLAYED => b"this challenge was already answered\0",
         HIDE_ERR_PANIC => b"internal error (panic)\0",
         _ => b"internal error\0",
     };
@@ -497,6 +499,313 @@ pub unsafe extern "C" fn hide_public_key_dearmor(text: *const c_char, out: *mut 
     })
 }
 
+/// A hybrid signature: Ed25519 followed by ML-DSA-65.
+pub const HIDE_SIGNATURE_LEN: usize = hide_sign::SIGNATURE_LENGTH;
+/// A hybrid verifying key.
+pub const HIDE_VERIFYING_KEY_LEN: usize = hide_sign::VERIFYING_KEY_LENGTH;
+/// A challenge nonce.
+pub const HIDE_NONCE_LEN: usize = hide_sign::NONCE_LENGTH;
+
+/// Reasons a challenge answer was refused, beyond the generic codes above.
+pub const HIDE_ERR_CHALLENGE_EXPIRED: i32 = 8;
+pub const HIDE_ERR_CHALLENGE_REPLAYED: i32 = 9;
+
+/// An opaque signing identity. As with secret keys, no function exports the
+/// seed: a binding can sign, and cannot leak.
+pub struct HideSigningIdentity(hide_sign::SigningIdentity);
+
+/// The verifier's record of answered challenges. Replay can only be detected
+/// by the verifier, so this must outlive a single request.
+pub struct HideSpentNonces(hide_sign::SpentNonces);
+
+/// Loads a signing identity from a key file's bytes.
+///
+/// A key file written before signatures existed carries no signing seed, and
+/// fails here rather than being silently downgraded.
+///
+/// # Safety
+/// `data` must be valid for `len` bytes; `passphrase` must be null or a valid
+/// C string.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn hide_signing_identity_open(
+    data: *const u8,
+    len: usize,
+    passphrase: *const c_char,
+    out_identity: *mut *mut HideSigningIdentity,
+) -> i32 {
+    guard(|| {
+        if out_identity.is_null() {
+            return HIDE_ERR_INVALID_ARGUMENT;
+        }
+        let Some(bytes) = (unsafe { borrow(data, len, MAX_KEY_FILE) }) else {
+            return HIDE_ERR_INVALID_ARGUMENT;
+        };
+        let Some(passphrase) = (unsafe { borrow_str(passphrase) }) else {
+            return HIDE_ERR_INVALID_ARGUMENT;
+        };
+
+        let seed = match hide_keyring::inspect(bytes) {
+            KeyFormat::Raw => {
+                if bytes.len() != 32 {
+                    return HIDE_ERR_NOT_A_KEY;
+                }
+                let mut seed = Zeroizing::new([0_u8; 32]);
+                seed.copy_from_slice(bytes);
+                hide_keyring::Identity::from_seed(seed).signing_seed()
+            }
+            KeyFormat::Protected => {
+                let Some(passphrase) = passphrase else {
+                    return HIDE_ERR_INVALID_ARGUMENT;
+                };
+                match hide_keyring::unprotect_seed(bytes, passphrase) {
+                    Ok((seed, hide_keyring::KeyPurpose::Identity)) => {
+                        hide_keyring::Identity::from_seed(seed).signing_seed()
+                    }
+                    // Encryption-only: predates signatures, so there is no
+                    // signing seed to derive and inventing one is not an option.
+                    Ok(_) => return HIDE_ERR_NOT_A_KEY,
+                    Err(error) => return keyring_error_code(&error),
+                }
+            }
+        };
+
+        match hide_sign::SigningIdentity::from_bytes(&seed[..]) {
+            Ok(identity) => {
+                unsafe { *out_identity = Box::into_raw(Box::new(HideSigningIdentity(identity))) };
+                HIDE_OK
+            }
+            Err(_) => HIDE_ERR_NOT_A_KEY,
+        }
+    })
+}
+
+/// The shareable verifying key for a signing identity.
+///
+/// # Safety
+/// `identity` must come from this library.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn hide_signing_identity_public(
+    identity: *const HideSigningIdentity,
+    out: *mut HideBuffer,
+) -> i32 {
+    guard(|| {
+        if identity.is_null() || out.is_null() {
+            return HIDE_ERR_INVALID_ARGUMENT;
+        }
+        let identity = unsafe { &*identity };
+        let public = identity.0.verifying_key().to_bytes();
+        unsafe { *out = HideBuffer::from_vec(public.to_vec()) };
+        HIDE_OK
+    })
+}
+
+/// Releases a signing identity, zeroizing the seed.
+///
+/// # Safety
+/// `identity` must come from this library and must not be freed twice.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn hide_signing_identity_free(identity: *mut HideSigningIdentity) {
+    if identity.is_null() {
+        return;
+    }
+    drop(unsafe { Box::from_raw(identity) });
+}
+
+/// Signs a message under a caller-chosen context.
+///
+/// The context separates uses of one identity: a signature made for one
+/// purpose must not verify as another. Bindings should pass the same context
+/// they will verify with, and never let a remote party choose it.
+///
+/// # Safety
+/// All pointers must be valid for the stated lengths.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn hide_sign_message(
+    identity: *const HideSigningIdentity,
+    context: *const u8,
+    context_len: usize,
+    message: *const u8,
+    message_len: usize,
+    out: *mut HideBuffer,
+) -> i32 {
+    guard(|| {
+        if identity.is_null() || out.is_null() {
+            return HIDE_ERR_INVALID_ARGUMENT;
+        }
+        let Some(context) = (unsafe { borrow(context, context_len, MAX_KEY_FILE) }) else {
+            return HIDE_ERR_INVALID_ARGUMENT;
+        };
+        let Some(message) = (unsafe { borrow(message, message_len, MAX_INPUT) }) else {
+            return HIDE_ERR_INVALID_ARGUMENT;
+        };
+        let identity = unsafe { &*identity };
+        let signature = identity.0.sign(context, message);
+        unsafe { *out = HideBuffer::from_vec(signature.to_vec()) };
+        HIDE_OK
+    })
+}
+
+/// Verifies a signature. Returns `HIDE_OK` only if **both** halves verify.
+///
+/// # Safety
+/// All pointers must be valid for the stated lengths.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn hide_verify_message(
+    public_key: *const u8,
+    public_key_len: usize,
+    context: *const u8,
+    context_len: usize,
+    message: *const u8,
+    message_len: usize,
+    signature: *const u8,
+    signature_len: usize,
+) -> i32 {
+    guard(|| {
+        let Some(public_key) = (unsafe { borrow(public_key, public_key_len, MAX_KEY_FILE) }) else {
+            return HIDE_ERR_INVALID_ARGUMENT;
+        };
+        let Some(context) = (unsafe { borrow(context, context_len, MAX_KEY_FILE) }) else {
+            return HIDE_ERR_INVALID_ARGUMENT;
+        };
+        let Some(message) = (unsafe { borrow(message, message_len, MAX_INPUT) }) else {
+            return HIDE_ERR_INVALID_ARGUMENT;
+        };
+        let Some(signature) = (unsafe { borrow(signature, signature_len, MAX_KEY_FILE * 4) })
+        else {
+            return HIDE_ERR_INVALID_ARGUMENT;
+        };
+        let Ok(verifying) = hide_sign::VerifyingIdentity::from_bytes(public_key) else {
+            return HIDE_ERR_NOT_A_KEY;
+        };
+        match verifying.verify(context, message, signature) {
+            Ok(()) => HIDE_OK,
+            Err(_) => HIDE_ERR_AUTHENTICATION,
+        }
+    })
+}
+
+/// Creates a challenge for a prover to answer. The encoded challenge is not
+/// secret and is handed to the prover as-is.
+///
+/// # Safety
+/// `audience` must be a valid C string; `out` must be non-null.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn hide_challenge_new(
+    audience: *const c_char,
+    now: u64,
+    valid_for: u64,
+    out: *mut HideBuffer,
+) -> i32 {
+    guard(|| {
+        if out.is_null() {
+            return HIDE_ERR_INVALID_ARGUMENT;
+        }
+        let Some(Some(audience)) = (unsafe { borrow_str(audience) }) else {
+            return HIDE_ERR_INVALID_ARGUMENT;
+        };
+        match hide_sign::Challenge::new(audience, now, valid_for) {
+            Ok(challenge) => {
+                unsafe { *out = HideBuffer::from_vec(challenge.encode()) };
+                HIDE_OK
+            }
+            Err(_) => HIDE_ERR_INTERNAL,
+        }
+    })
+}
+
+/// Answers a challenge, producing a signature over it.
+///
+/// # Safety
+/// All pointers must be valid for the stated lengths.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn hide_challenge_answer(
+    identity: *const HideSigningIdentity,
+    challenge: *const u8,
+    challenge_len: usize,
+    out: *mut HideBuffer,
+) -> i32 {
+    guard(|| {
+        if identity.is_null() || out.is_null() {
+            return HIDE_ERR_INVALID_ARGUMENT;
+        }
+        let Some(bytes) = (unsafe { borrow(challenge, challenge_len, MAX_KEY_FILE) }) else {
+            return HIDE_ERR_INVALID_ARGUMENT;
+        };
+        let Ok(challenge) = hide_sign::Challenge::decode(bytes) else {
+            return HIDE_ERR_MALFORMED;
+        };
+        let identity = unsafe { &*identity };
+        unsafe { *out = HideBuffer::from_vec(challenge.answer(&identity.0).to_vec()) };
+        HIDE_OK
+    })
+}
+
+/// Creates the verifier's record of spent nonces.
+#[unsafe(no_mangle)]
+pub extern "C" fn hide_spent_nonces_new() -> *mut HideSpentNonces {
+    Box::into_raw(Box::new(HideSpentNonces(hide_sign::SpentNonces::new())))
+}
+
+/// Releases the record of spent nonces.
+///
+/// # Safety
+/// `spent` must come from this library and must not be freed twice.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn hide_spent_nonces_free(spent: *mut HideSpentNonces) {
+    if spent.is_null() {
+        return;
+    }
+    drop(unsafe { Box::from_raw(spent) });
+}
+
+/// Accepts a challenge answer exactly once. A valid signature replayed a
+/// second time returns `HIDE_ERR_CHALLENGE_REPLAYED`, which is the entire
+/// reason this call takes a `spent` record rather than being a pure function.
+///
+/// # Safety
+/// All pointers must be valid for the stated lengths.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn hide_challenge_accept(
+    spent: *mut HideSpentNonces,
+    challenge: *const u8,
+    challenge_len: usize,
+    signature: *const u8,
+    signature_len: usize,
+    public_key: *const u8,
+    public_key_len: usize,
+    now: u64,
+) -> i32 {
+    guard(|| {
+        if spent.is_null() {
+            return HIDE_ERR_INVALID_ARGUMENT;
+        }
+        let Some(challenge_bytes) = (unsafe { borrow(challenge, challenge_len, MAX_KEY_FILE) })
+        else {
+            return HIDE_ERR_INVALID_ARGUMENT;
+        };
+        let Some(signature) = (unsafe { borrow(signature, signature_len, MAX_KEY_FILE * 4) })
+        else {
+            return HIDE_ERR_INVALID_ARGUMENT;
+        };
+        let Some(public_key) = (unsafe { borrow(public_key, public_key_len, MAX_KEY_FILE) }) else {
+            return HIDE_ERR_INVALID_ARGUMENT;
+        };
+        let Ok(challenge) = hide_sign::Challenge::decode(challenge_bytes) else {
+            return HIDE_ERR_MALFORMED;
+        };
+        let Ok(prover) = hide_sign::VerifyingIdentity::from_bytes(public_key) else {
+            return HIDE_ERR_NOT_A_KEY;
+        };
+        let spent = unsafe { &mut *spent };
+        match spent.0.accept(&challenge, signature, &prover, now) {
+            Ok(()) => HIDE_OK,
+            Err(hide_sign::ChallengeError::Expired) => HIDE_ERR_CHALLENGE_EXPIRED,
+            Err(hide_sign::ChallengeError::Replayed) => HIDE_ERR_CHALLENGE_REPLAYED,
+            Err(hide_sign::ChallengeError::NotSigned) => HIDE_ERR_AUTHENTICATION,
+        }
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use std::ffi::CString;
@@ -808,6 +1117,300 @@ mod tests {
             hide_buffer_free(&mut armored);
             hide_buffer_free(&mut public);
             hide_secret_key_free(secret);
+        }
+    }
+
+    /// A sealed identity file, the way a real caller would have one on disk.
+    fn identity_file(passphrase: &str) -> Vec<u8> {
+        let identity = hide_keyring::Identity::generate().expect("randomness");
+        hide_keyring::protect_identity(identity.expose_seed_for_sealing(), passphrase)
+            .expect("sealing works")
+    }
+
+    unsafe fn open_identity(file: &[u8], passphrase: &CString) -> *mut HideSigningIdentity {
+        let mut identity = ptr::null_mut();
+        assert_eq!(
+            unsafe {
+                hide_signing_identity_open(
+                    file.as_ptr(),
+                    file.len(),
+                    passphrase.as_ptr(),
+                    &mut identity,
+                )
+            },
+            HIDE_OK
+        );
+        identity
+    }
+
+    #[test]
+    fn signs_and_verifies_across_the_boundary() {
+        unsafe {
+            let passphrase = CString::new("correct horse battery staple").unwrap();
+            let file = identity_file(passphrase.to_str().unwrap());
+            let identity = open_identity(&file, &passphrase);
+
+            let mut public = hide_buffer_empty();
+            assert_eq!(hide_signing_identity_public(identity, &mut public), HIDE_OK);
+            assert_eq!(public.len, HIDE_VERIFYING_KEY_LEN);
+
+            let context = b"HIDE/0.5 ffi test";
+            let message = b"the message that crossed the boundary";
+            let mut signature = hide_buffer_empty();
+            assert_eq!(
+                hide_sign_message(
+                    identity,
+                    context.as_ptr(),
+                    context.len(),
+                    message.as_ptr(),
+                    message.len(),
+                    &mut signature,
+                ),
+                HIDE_OK
+            );
+            assert_eq!(signature.len, HIDE_SIGNATURE_LEN);
+
+            assert_eq!(
+                hide_verify_message(
+                    public.data,
+                    public.len,
+                    context.as_ptr(),
+                    context.len(),
+                    message.as_ptr(),
+                    message.len(),
+                    signature.data,
+                    signature.len,
+                ),
+                HIDE_OK
+            );
+
+            // A different context must not verify, or the separation the C API
+            // advertises would be decorative.
+            let other = b"HIDE/0.5 something else";
+            assert_eq!(
+                hide_verify_message(
+                    public.data,
+                    public.len,
+                    other.as_ptr(),
+                    other.len(),
+                    message.as_ptr(),
+                    message.len(),
+                    signature.data,
+                    signature.len,
+                ),
+                HIDE_ERR_AUTHENTICATION
+            );
+
+            let altered = b"the message that crossed the boundaryX";
+            assert_eq!(
+                hide_verify_message(
+                    public.data,
+                    public.len,
+                    context.as_ptr(),
+                    context.len(),
+                    altered.as_ptr(),
+                    altered.len(),
+                    signature.data,
+                    signature.len,
+                ),
+                HIDE_ERR_AUTHENTICATION
+            );
+
+            hide_buffer_free(&mut signature);
+            hide_buffer_free(&mut public);
+            hide_signing_identity_free(identity);
+        }
+    }
+
+    /// A key file that predates signatures has no signing seed, and inventing
+    /// one would silently sign under a key nobody expects.
+    #[test]
+    fn an_encryption_only_key_cannot_sign() {
+        unsafe {
+            let passphrase = CString::new("correct horse battery staple").unwrap();
+            let secret = hide_crypto::RecipientSecret::generate().expect("randomness");
+            let file =
+                hide_keyring::protect(&secret, passphrase.to_str().unwrap()).expect("sealing");
+
+            let mut identity = ptr::null_mut();
+            assert_eq!(
+                hide_signing_identity_open(
+                    file.as_ptr(),
+                    file.len(),
+                    passphrase.as_ptr(),
+                    &mut identity,
+                ),
+                HIDE_ERR_NOT_A_KEY
+            );
+            assert!(identity.is_null());
+        }
+    }
+
+    #[test]
+    fn a_wrong_passphrase_is_named_as_such() {
+        unsafe {
+            let file = identity_file("correct horse battery staple");
+            let wrong = CString::new("not the passphrase at all").unwrap();
+            let mut identity = ptr::null_mut();
+            assert_eq!(
+                hide_signing_identity_open(
+                    file.as_ptr(),
+                    file.len(),
+                    wrong.as_ptr(),
+                    &mut identity
+                ),
+                HIDE_ERR_WRONG_PASSPHRASE
+            );
+        }
+    }
+
+    #[test]
+    fn a_challenge_is_answered_once_and_then_refused() {
+        unsafe {
+            let passphrase = CString::new("correct horse battery staple").unwrap();
+            let file = identity_file(passphrase.to_str().unwrap());
+            let identity = open_identity(&file, &passphrase);
+
+            let mut public = hide_buffer_empty();
+            assert_eq!(hide_signing_identity_public(identity, &mut public), HIDE_OK);
+
+            let audience = CString::new("ssh://host.example").unwrap();
+            let mut challenge = hide_buffer_empty();
+            assert_eq!(
+                hide_challenge_new(audience.as_ptr(), 1_000, 60, &mut challenge),
+                HIDE_OK
+            );
+
+            let mut answer = hide_buffer_empty();
+            assert_eq!(
+                hide_challenge_answer(identity, challenge.data, challenge.len, &mut answer),
+                HIDE_OK
+            );
+
+            let spent = hide_spent_nonces_new();
+            assert_eq!(
+                hide_challenge_accept(
+                    spent,
+                    challenge.data,
+                    challenge.len,
+                    answer.data,
+                    answer.len,
+                    public.data,
+                    public.len,
+                    1_000,
+                ),
+                HIDE_OK
+            );
+            // The same valid answer, a second time.
+            assert_eq!(
+                hide_challenge_accept(
+                    spent,
+                    challenge.data,
+                    challenge.len,
+                    answer.data,
+                    answer.len,
+                    public.data,
+                    public.len,
+                    1_000,
+                ),
+                HIDE_ERR_CHALLENGE_REPLAYED
+            );
+
+            hide_spent_nonces_free(spent);
+            hide_buffer_free(&mut answer);
+            hide_buffer_free(&mut challenge);
+            hide_buffer_free(&mut public);
+            hide_signing_identity_free(identity);
+        }
+    }
+
+    #[test]
+    fn an_answer_after_the_window_is_refused_across_the_boundary() {
+        unsafe {
+            let passphrase = CString::new("correct horse battery staple").unwrap();
+            let file = identity_file(passphrase.to_str().unwrap());
+            let identity = open_identity(&file, &passphrase);
+
+            let mut public = hide_buffer_empty();
+            assert_eq!(hide_signing_identity_public(identity, &mut public), HIDE_OK);
+
+            let audience = CString::new("ssh://host.example").unwrap();
+            let mut challenge = hide_buffer_empty();
+            assert_eq!(
+                hide_challenge_new(audience.as_ptr(), 1_000, 60, &mut challenge),
+                HIDE_OK
+            );
+            let mut answer = hide_buffer_empty();
+            assert_eq!(
+                hide_challenge_answer(identity, challenge.data, challenge.len, &mut answer),
+                HIDE_OK
+            );
+
+            let spent = hide_spent_nonces_new();
+            assert_eq!(
+                hide_challenge_accept(
+                    spent,
+                    challenge.data,
+                    challenge.len,
+                    answer.data,
+                    answer.len,
+                    public.data,
+                    public.len,
+                    1_100,
+                ),
+                HIDE_ERR_CHALLENGE_EXPIRED
+            );
+
+            hide_spent_nonces_free(spent);
+            hide_buffer_free(&mut answer);
+            hide_buffer_free(&mut challenge);
+            hide_buffer_free(&mut public);
+            hide_signing_identity_free(identity);
+        }
+    }
+
+    /// Null and absurd lengths must be refused, not dereferenced.
+    #[test]
+    fn the_signing_boundary_refuses_nulls_without_crashing() {
+        unsafe {
+            let mut out = hide_buffer_empty();
+            assert_eq!(
+                hide_sign_message(ptr::null(), ptr::null(), 0, ptr::null(), 0, &mut out),
+                HIDE_ERR_INVALID_ARGUMENT
+            );
+            assert_eq!(
+                hide_verify_message(
+                    ptr::null(),
+                    0,
+                    ptr::null(),
+                    0,
+                    ptr::null(),
+                    0,
+                    ptr::null(),
+                    0
+                ),
+                HIDE_ERR_NOT_A_KEY
+            );
+            assert_eq!(
+                hide_challenge_answer(ptr::null(), ptr::null(), 0, &mut out),
+                HIDE_ERR_INVALID_ARGUMENT
+            );
+            assert_eq!(
+                hide_challenge_accept(
+                    ptr::null_mut(),
+                    ptr::null(),
+                    0,
+                    ptr::null(),
+                    0,
+                    ptr::null(),
+                    0,
+                    0
+                ),
+                HIDE_ERR_INVALID_ARGUMENT
+            );
+            // Freeing null is a no-op, not a crash.
+            hide_signing_identity_free(ptr::null_mut());
+            hide_spent_nonces_free(ptr::null_mut());
         }
     }
 }

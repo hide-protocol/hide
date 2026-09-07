@@ -36,7 +36,7 @@ P4.8,4,task,Verified against GitHub with a real account,blocked,P4.5,apps/hide-c
 P5.1,5,task,"Challenge: random nonce, audience, expiry",done,P1.4,crates/hide-sign,cargo test -p hide-sign (15 challenge tests),32-byte nonce; every field length-prefixed
 P5.2,5,task,Domain separation so a challenge cannot be replayed as a container signature,done,P1.4,crates/hide-sign,Tested both ways: detached sig is not an answer and an answer is not a detached sig,
 P5.3,5,task,Reject a stale or reused challenge,done,P1.4,crates/hide-sign,9/9 mutations detected,An expired answer must not spend the nonce
-P6.1,6,task,"C ABI: sign, verify, identity handles",not-started,P5.3,crates/hide-ffi,,Panic-safe boundary as with the rest
+P6.1,6,task,"C ABI: sign, verify, identity handles",done,P5.3,crates/hide-ffi,cargo test -p hide-ffi (13 unit + 2 C ABI tests),"Opaque handles; header drift is now asserted in Rust, not only via the C compiler"
 P6.2,6,task,Python binding,not-started,P6.1,sdk/python,,
 P6.3,6,task,Node binding,not-started,P6.1,sdk/node,,
 P6.4,6,task,Go binding,not-started,P6.1,sdk/go,,

@@ -37,6 +37,8 @@ extern "C" {
 #define HIDE_ERR_NO_MATCHING_RECIPIENT 5
 #define HIDE_ERR_MALFORMED             6
 #define HIDE_ERR_TOO_LARGE             7
+#define HIDE_ERR_CHALLENGE_EXPIRED     8
+#define HIDE_ERR_CHALLENGE_REPLAYED    9
 #define HIDE_ERR_PANIC                98
 #define HIDE_ERR_INTERNAL             99
 
@@ -45,6 +47,10 @@ extern "C" {
 
 #define HIDE_PUBLIC_KEY_LEN     1216
 #define HIDE_MIN_PASSPHRASE_LEN 8
+
+#define HIDE_SIGNATURE_LEN      3373
+#define HIDE_VERIFYING_KEY_LEN  1984
+#define HIDE_NONCE_LEN            32
 
 /* An owned byte buffer. Free with hide_buffer_free. */
 typedef struct {
@@ -106,6 +112,57 @@ int32_t hide_encrypt(const uint8_t *plaintext, size_t plaintext_len,
 int32_t hide_decrypt(const uint8_t *container, size_t container_len,
                      const HideSecretKey *secret, HideBuffer *out,
                      HideBuffer *out_filename, HideBuffer *out_media_type);
+
+/* An opaque signing identity. As with secret keys, no function exports the
+ * seed: a caller can sign, and cannot leak. */
+typedef struct HideSigningIdentity HideSigningIdentity;
+
+/* The verifier's record of answered challenges. Replay is only detectable by
+ * the verifier, so this must outlive a single request. */
+typedef struct HideSpentNonces HideSpentNonces;
+
+/* Loads a signing identity. A key file written before signatures existed
+ * carries no signing seed and fails with HIDE_ERR_NOT_A_KEY rather than being
+ * silently downgraded. Pass passphrase = NULL for a raw key file. */
+int32_t hide_signing_identity_open(const uint8_t *data, size_t len,
+                                   const char *passphrase,
+                                   HideSigningIdentity **out_identity);
+int32_t hide_signing_identity_public(const HideSigningIdentity *identity,
+                                     HideBuffer *out);
+void hide_signing_identity_free(HideSigningIdentity *identity);
+
+/* context separates uses of one identity: a signature made for one purpose
+ * must not verify as another. Never let a remote party choose it. */
+int32_t hide_sign_message(const HideSigningIdentity *identity,
+                          const uint8_t *context, size_t context_len,
+                          const uint8_t *message, size_t message_len,
+                          HideBuffer *out);
+
+/* Returns HIDE_OK only if BOTH the Ed25519 and ML-DSA halves verify. */
+int32_t hide_verify_message(const uint8_t *public_key, size_t public_key_len,
+                            const uint8_t *context, size_t context_len,
+                            const uint8_t *message, size_t message_len,
+                            const uint8_t *signature, size_t signature_len);
+
+/* A challenge proves possession to a live verifier: a detached signature
+ * proves it at some point, to nobody in particular, and can be replayed. */
+int32_t hide_challenge_new(const char *audience, uint64_t now,
+                           uint64_t valid_for, HideBuffer *out);
+int32_t hide_challenge_answer(const HideSigningIdentity *identity,
+                              const uint8_t *challenge, size_t challenge_len,
+                              HideBuffer *out);
+
+HideSpentNonces *hide_spent_nonces_new(void);
+void hide_spent_nonces_free(HideSpentNonces *spent);
+
+/* Accepts an answer exactly once. A valid signature presented a second time
+ * returns HIDE_ERR_CHALLENGE_REPLAYED, which is why this takes a record
+ * rather than being a pure function. */
+int32_t hide_challenge_accept(HideSpentNonces *spent,
+                              const uint8_t *challenge, size_t challenge_len,
+                              const uint8_t *signature, size_t signature_len,
+                              const uint8_t *public_key, size_t public_key_len,
+                              uint64_t now);
 
 #ifdef __cplusplus
 } /* extern "C" */

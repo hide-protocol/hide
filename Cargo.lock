@@ -504,6 +504,7 @@ dependencies = [
  "hide-crypto",
  "hide-keyring",
  "hide-object",
+ "hide-sign",
  "zeroize",
 ]
 
