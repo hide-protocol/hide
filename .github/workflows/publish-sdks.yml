@@ -94,7 +94,8 @@ jobs:
               else
                 echo "$out"
               fi
-            elif cargo search "$crate" --limit 1 | grep -q "^$crate = \"${{ inputs.version }}\""; then
+            elif found=$(cargo search "$crate" --limit 1 || true); \
+                 case "$found" in "$crate = \"${{ inputs.version }}\""*) true ;; *) false ;; esac; then
               echo "::notice::$crate ${{ inputs.version }} is already on crates.io, skipping"
             else
               # crates.io permits one NEW crate per 10 minutes. A set this size

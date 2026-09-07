@@ -453,6 +453,29 @@ must be able to continue rather than start again.
 **RubyGems requires the owner to have MFA enabled** before a new version can be
 pushed. Nothing in the repository can fix that.
 
+### P8.6 — `grep -q` is not safe under `pipefail`
+
+The rerun failed on the first crate: `hide-format@0.5.0 already exists`. The
+skip added in P8.5 had not matched, and the reason was not the pattern.
+
+`cargo search | grep -q` exits as soon as grep finds a match, which can SIGPIPE
+the writer; with `set -o pipefail` the pipeline then reports failure even though
+the match succeeded. Reproduced directly: identical input, identical pattern,
+`MATCH` without `pipefail` and `MISS` with it, but only once the output is large
+enough for the race to occur — at one line it passes either way. A test written
+against a small fixture would have called this fixed.
+
+The first attempted fix — capturing into `$(...)` and piping that — still
+failed, because the pipeline was still there. The check now matches with `case`
+on the captured string, which involves no pipeline at all, and is verified
+against five inputs including the 20 000-line one that broke `grep`.
+
+**npm and RubyGems are both blocked on account 2FA**, not on anything in the
+repository. `--provenance` now works (the statement reached the transparency
+log), and the upload was refused for a one-time password: the granular token
+does not have "bypass 2FA" set. RubyGems requires the owner to enable MFA.
+Trusted Publishing would remove the token from both, as it already has for PyPI.
+
 ---
 
 ## Rules that apply to this milestone
