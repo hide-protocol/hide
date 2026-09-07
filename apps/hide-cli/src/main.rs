@@ -8,6 +8,8 @@ use std::{
 
 use clap::{Parser, Subcommand};
 use hide_crypto::{RecipientPublic, RecipientSecret};
+use hide_epoch::EpochChain;
+use hide_identity::IdentityLog;
 use hide_keyring::{Identity, KeyFormat, KeyPurpose, MIN_PASSPHRASE_LEN};
 use hide_object::{Metadata, SignaturePlacement};
 use hide_sign::{SigningIdentity, VerifyingIdentity};
@@ -177,6 +179,60 @@ enum Command {
         #[arg(long, help = "The comment to advertise with the key")]
         comment: Option<String>,
     },
+    #[command(about = "Create an identity log: a device history that can be audited")]
+    IdentityCreate {
+        #[arg(long, help = "The founding device's identity key")]
+        secret: PathBuf,
+        #[arg(long, help = "The offline recovery key's public half")]
+        recovery: PathBuf,
+        #[arg(long, help = "A label for the founding device")]
+        label: String,
+        #[arg(long, help = "Where to write the log")]
+        output: PathBuf,
+    },
+    #[command(about = "Add a device to an identity log")]
+    IdentityEnrol {
+        #[arg(long, help = "The log to append to")]
+        log: PathBuf,
+        #[arg(long, help = "An already-trusted device's identity key")]
+        secret: PathBuf,
+        #[arg(long, help = "The new device's signing public key")]
+        device: PathBuf,
+        #[arg(long, help = "A label for the new device")]
+        label: String,
+        #[arg(long, help = "The offline recovery key's public half")]
+        recovery: PathBuf,
+    },
+    #[command(about = "Remove a device from an identity log")]
+    IdentityRevoke {
+        #[arg(long, help = "The log to append to")]
+        log: PathBuf,
+        #[arg(long, help = "An already-trusted device's identity key")]
+        secret: PathBuf,
+        #[arg(long, help = "The signing public key of the device to remove")]
+        device: PathBuf,
+        #[arg(long, help = "The offline recovery key's public half")]
+        recovery: PathBuf,
+    },
+    #[command(about = "Replay an identity log and list the devices it trusts now")]
+    IdentityShow {
+        #[arg(long, help = "The log to replay")]
+        log: PathBuf,
+        #[arg(long, help = "The offline recovery key's public half")]
+        recovery: PathBuf,
+    },
+    #[command(
+        about = "Create an epoch chain: rotating keys you can erase to make old files unreadable"
+    )]
+    EpochInit {
+        #[arg(long, help = "Where to write the public epoch history")]
+        output: PathBuf,
+    },
+    #[command(about = "Describe an epoch history without needing any secret")]
+    EpochShow {
+        #[arg(long, help = "The published epoch history")]
+        chain: PathBuf,
+    },
 }
 
 fn main() -> ExitCode {
@@ -229,6 +285,28 @@ fn run(arguments: Arguments) -> Result<()> {
             sign.as_deref(),
             public_signature,
         ),
+        Command::IdentityCreate {
+            secret,
+            recovery,
+            label,
+            output,
+        } => identity_create(&secret, &recovery, &label, &output),
+        Command::IdentityEnrol {
+            log,
+            secret,
+            device,
+            label,
+            recovery,
+        } => identity_enrol(&log, &secret, &device, &label, &recovery),
+        Command::IdentityRevoke {
+            log,
+            secret,
+            device,
+            recovery,
+        } => identity_revoke(&log, &secret, &device, &recovery),
+        Command::IdentityShow { log, recovery } => identity_show(&log, &recovery),
+        Command::EpochInit { output } => epoch_init(&output),
+        Command::EpochShow { chain } => epoch_show(&chain),
         Command::Open {
             input,
             secret,
@@ -935,4 +1013,125 @@ fn change_passphrase(secret_path: &Path) -> Result<()> {
     staging.persist(secret_path)?;
     eprintln!("Passphrase changed.");
     Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// Identity logs and epoch chains
+// ---------------------------------------------------------------------------
+
+/// Identity logs and epoch chains are public, so a generous ceiling is fine;
+/// the point is only to refuse a file that could exhaust memory.
+const MAX_LOG_FILE: usize = 16 * 1024 * 1024;
+
+fn read_public_file(path: &Path) -> Result<Vec<u8>> {
+    Ok(read_bounded(path, MAX_LOG_FILE)?.to_vec())
+}
+
+/// Writes a log or chain, replacing it if present. Unlike a container, an
+/// append-only log is expected to grow in place, so refusing to overwrite would
+/// make it impossible to append at all. Staged and renamed so a crash mid-write
+/// cannot leave a truncated history.
+fn write_public_file(path: &Path, bytes: &[u8]) -> Result<()> {
+    let parent = path
+        .parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+        .unwrap_or(Path::new("."));
+    let mut staging = tempfile::Builder::new()
+        .prefix(".hide-log-")
+        .tempfile_in(parent)?;
+    staging.write_all(bytes)?;
+    staging.flush()?;
+    staging.as_file().sync_all()?;
+    staging.persist(path)?;
+    Ok(())
+}
+
+fn load_identity_log(log: &Path, recovery: &Path) -> Result<(IdentityLog, VerifyingIdentity)> {
+    let recovery_key = load_verifying_identity(recovery)?;
+    let entries = hide_identity::decode(&read_public_file(log)?)?;
+    // Verify before trusting, exactly as a stranger would.
+    IdentityLog::verify(&entries, &recovery_key)?;
+    Ok((
+        IdentityLog::from_entries(entries, recovery_key.clone())?,
+        recovery_key,
+    ))
+}
+
+fn identity_create(secret: &Path, recovery: &Path, label: &str, output: &Path) -> Result<()> {
+    let founder = load_signing_identity(secret)?;
+    let recovery_key = load_verifying_identity(recovery)?;
+    let log = IdentityLog::create(&founder, label, &recovery_key)?;
+    write_public_file(output, &hide_identity::encode(log.entries())?)?;
+    eprintln!(
+        "Identity created with one device. Head {}.",
+        short_hex(&log.head())
+    );
+    Ok(())
+}
+
+fn identity_enrol(
+    log_path: &Path,
+    secret: &Path,
+    device: &Path,
+    label: &str,
+    recovery: &Path,
+) -> Result<()> {
+    let (mut log, _) = load_identity_log(log_path, recovery)?;
+    let author = load_signing_identity(secret)?;
+    let new_device = load_verifying_identity(device)?;
+    let at = log.enrol(&author, &new_device, label)?;
+    write_public_file(log_path, &hide_identity::encode(log.entries())?)?;
+    eprintln!("Enrolled at entry {at}. Head {}.", short_hex(&log.head()));
+    Ok(())
+}
+
+fn identity_revoke(log_path: &Path, secret: &Path, device: &Path, recovery: &Path) -> Result<()> {
+    let (mut log, _) = load_identity_log(log_path, recovery)?;
+    let author = load_signing_identity(secret)?;
+    let target = hide_identity::device_id(&load_verifying_identity(device)?);
+    let at = log.revoke(&author, target)?;
+    write_public_file(log_path, &hide_identity::encode(log.entries())?)?;
+    eprintln!("Revoked at entry {at}. Containers that device already holds stay readable to it.");
+    Ok(())
+}
+
+fn identity_show(log_path: &Path, recovery: &Path) -> Result<()> {
+    let (log, _) = load_identity_log(log_path, recovery)?;
+    let membership = log.membership();
+    println!("head    {}", short_hex(&log.head()));
+    println!("entries {}", log.entries().len());
+    println!("devices {}", membership.len());
+    for device in membership.devices() {
+        println!(
+            "  {}  {}  enrolled at {}",
+            short_hex(&device.id),
+            device.label,
+            device.enrolled_at
+        );
+    }
+    Ok(())
+}
+
+fn epoch_init(output: &Path) -> Result<()> {
+    let chain = EpochChain::new()?;
+    write_public_file(output, &hide_epoch::encode_records(chain.records())?)?;
+    eprintln!(
+        "Epoch 0 created. The secret exists only in this process and was not written: \
+         this command publishes the history, and a persistent store is not implemented yet."
+    );
+    Ok(())
+}
+
+fn epoch_show(chain: &Path) -> Result<()> {
+    let records = hide_epoch::decode_records(&read_public_file(chain)?)?;
+    EpochChain::verify(&records)?;
+    println!("epochs {}", records.len());
+    for record in &records {
+        println!("  {}  link {}", record.number, short_hex(&record.link));
+    }
+    Ok(())
+}
+
+fn short_hex(bytes: &[u8]) -> String {
+    bytes.iter().take(8).map(|b| format!("{b:02x}")).collect()
 }

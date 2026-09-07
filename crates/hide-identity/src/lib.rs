@@ -328,6 +328,16 @@ impl IdentityLog {
         )
     }
 
+    /// Rebuilds a log from entries received elsewhere. Verified first, so an
+    /// invalid history can never become an appendable one.
+    pub fn from_entries(
+        entries: Vec<Entry>,
+        recovery: VerifyingIdentity,
+    ) -> Result<Self, IdentityError> {
+        replay(&entries, &recovery)?;
+        Ok(Self { entries, recovery })
+    }
+
     pub fn entries(&self) -> &[Entry] {
         &self.entries
     }
