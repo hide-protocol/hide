@@ -91,12 +91,14 @@ jobs:
           for crate in hide-format hide-crypto hide-sign hide-transparency hide-epoch hide-identity hide-mls hide-keyring hide-object hide-ffi hide-cli; do
             echo "::group::$crate"
             if [ "${{ inputs.dry_run }}" = "true" ]; then
-              # Until the first real publish, a dependent cannot resolve its
-              # sibling: the version exists only in this checkout. That one
-              # error is expected; every other one still fails the job.
+              # A dependent cannot resolve its sibling during a dry run: the
+              # new version exists only in this checkout. That shows up either
+              # as a missing crate (before its first publish) or as a missing
+              # version (every release after). Both are expected; every other
+              # error still fails the job.
               if ! out=$(cargo publish $flags -p "$crate" 2>&1); then
                 echo "$out"
-                echo "$out" | grep -q "no matching package named .hide-" \
+                echo "$out" | grep -Eq "no matching package named .hide-|failed to select a version for the requirement .hide-" \
                   || { echo "::error::$crate failed for a reason other than an unpublished sibling"; exit 1; }
                 echo "::notice::$crate: sibling not on crates.io yet, expected before the first publish"
               else
