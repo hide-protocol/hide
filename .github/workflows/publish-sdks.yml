@@ -94,20 +94,23 @@ jobs:
               else
                 echo "$out"
               fi
-            elif found=$(cargo search "$crate" --limit 1 || true); \
-                 case "$found" in "$crate = \"${{ inputs.version }}\""*) true ;; *) false ;; esac; then
-              echo "::notice::$crate ${{ inputs.version }} is already on crates.io, skipping"
             else
-              # crates.io permits one NEW crate per 10 minutes. A set this size
-              # cannot be published in one pass without waiting it out, and a
-              # half-published set cannot be undone.
+              # crates.io permits one NEW crate per 10 minutes, so a set this
+              # size cannot go out in one pass. A half-published set cannot be
+              # undone, so a rerun must skip what is already up rather than
+              # start over: cargo's own error is the authority on that.
               for attempt in 1 2 3 4 5 6 7; do
                 if out=$(cargo publish $flags -p "$crate" 2>&1); then
                   echo "$out"; break
                 fi
                 echo "$out"
-                echo "$out" | grep -q '429 Too Many Requests' \
-                  || { echo "::error::$crate failed for a reason other than the rate limit"; exit 1; }
+                case "$out" in
+                  *"already exists on crates.io index"*)
+                    echo "::notice::$crate ${{ inputs.version }} is already published, skipping"
+                    break ;;
+                  *"429 Too Many Requests"*) ;;
+                  *) echo "::error::$crate failed for a reason other than the rate limit"; exit 1 ;;
+                esac
                 echo "::notice::rate limited on $crate, waiting 10 minutes (attempt $attempt)"
                 [ "$attempt" = 7 ] && { echo "::error::still rate limited after 7 attempts"; exit 1; }
                 sleep 620
