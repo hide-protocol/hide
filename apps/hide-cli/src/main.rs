@@ -8,8 +8,9 @@ use std::{
 
 use clap::{Parser, Subcommand};
 use hide_crypto::{RecipientPublic, RecipientSecret};
-use hide_keyring::{KeyFormat, MIN_PASSPHRASE_LEN};
-use hide_object::Metadata;
+use hide_keyring::{Identity, KeyFormat, KeyPurpose, MIN_PASSPHRASE_LEN};
+use hide_object::{Metadata, SignaturePlacement};
+use hide_sign::{SigningIdentity, VerifyingIdentity};
 use tempfile::NamedTempFile;
 use zeroize::Zeroizing;
 
@@ -18,6 +19,13 @@ type Result<T> = std::result::Result<T, Box<dyn Error>>;
 const IO_BUFFER: usize = 1 << 20;
 const PUBLIC_KEY_LEN: usize = 1216;
 const MAX_KEY_FILE: usize = 4096;
+const SIGNING_PUBLIC_LEN: usize = hide_sign::VERIFYING_KEY_LENGTH;
+const MAX_SIGNING_KEY_FILE: usize = 8192;
+/// Distinct from the container context. This is belt-and-braces: the two signed
+/// messages already differ structurally (a container transcript binds the
+/// recipient set and metadata, which a detached signature has no room for), so
+/// removing this label alone does not enable a cross-domain forgery.
+const DETACHED_CONTEXT: &[u8] = b"HIDE/0.5 detached";
 
 #[derive(Parser)]
 #[command(
@@ -53,6 +61,11 @@ enum Command {
         insecure_plaintext: bool,
         #[arg(long, help = "Also print the public key in a pasteable text form")]
         armor: bool,
+        #[arg(
+            long,
+            help = "Where to write the shareable signing public key; defaults to <public>.sign"
+        )]
+        signing_public: Option<PathBuf>,
     },
     #[command(
         name = "test-keygen",
@@ -77,6 +90,13 @@ enum Command {
         recipient: Vec<PathBuf>,
         #[arg(short, long)]
         output: PathBuf,
+        #[arg(long, help = "Sign the container with your identity key")]
+        sign: Option<PathBuf>,
+        #[arg(
+            long,
+            help = "Put the signature in the clear, visible to anyone holding the file"
+        )]
+        public_signature: bool,
     },
     #[command(about = "Decrypt to an explicit new file; does not launch or execute the result")]
     Open {
@@ -111,6 +131,26 @@ enum Command {
         #[arg(long)]
         secret: PathBuf,
     },
+    #[command(about = "Sign a file, writing a detached signature alongside it")]
+    Sign {
+        input: PathBuf,
+        #[arg(long, help = "Your identity key")]
+        secret: PathBuf,
+        #[arg(
+            short,
+            long,
+            help = "Where to write the signature; defaults to <input>.hide-sig"
+        )]
+        output: Option<PathBuf>,
+    },
+    #[command(about = "Check a detached signature against a signer's public key")]
+    Verify {
+        input: PathBuf,
+        #[arg(long, help = "The signer's public signing key")]
+        signer: PathBuf,
+        #[arg(long, help = "The signature file; defaults to <input>.hide-sig")]
+        signature: Option<PathBuf>,
+    },
 }
 
 fn main() -> ExitCode {
@@ -138,16 +178,31 @@ fn run(arguments: Arguments) -> Result<()> {
             public,
             insecure_plaintext,
             armor,
-        } => keygen(&secret, &public, insecure_plaintext, armor),
+            signing_public,
+        } => keygen(
+            &secret,
+            &public,
+            insecure_plaintext,
+            armor,
+            signing_public.as_deref(),
+        ),
         Command::TestKeygen { secret, public } => {
             eprintln!("note: `test-keygen` is deprecated; use `keygen --insecure-plaintext`");
-            keygen(&secret, &public, true, false)
+            keygen(&secret, &public, true, false, None)
         }
         Command::Encrypt {
             input,
             recipient,
             output,
-        } => encrypt_file(&input, &recipient, &output),
+            sign,
+            public_signature,
+        } => encrypt_file(
+            &input,
+            &recipient,
+            &output,
+            sign.as_deref(),
+            public_signature,
+        ),
         Command::Open {
             input,
             secret,
@@ -162,6 +217,16 @@ fn run(arguments: Arguments) -> Result<()> {
         Command::Info { path } => describe(&path),
         Command::Share { public } => share(&public),
         Command::Passwd { secret } => change_passphrase(&secret),
+        Command::Sign {
+            input,
+            secret,
+            output,
+        } => sign_file(&input, &secret, output.as_deref()),
+        Command::Verify {
+            input,
+            signer,
+            signature,
+        } => verify_file(&input, &signer, signature.as_deref()),
     }
 }
 
@@ -221,15 +286,69 @@ fn prompt_new_passphrase() -> Result<Zeroizing<String>> {
     Ok(first)
 }
 
-fn load_secret(path: &Path) -> Result<RecipientSecret> {
+/// A raw file has no purpose byte. Treating it as an identity is what makes
+/// `keygen --insecure-plaintext` usable for signing too, and an old raw
+/// encryption seed still decrypts because that is a separate code path.
+enum LoadedKey {
+    Identity(Identity),
+    EncryptionOnly(RecipientSecret),
+}
+
+fn load_key(path: &Path) -> Result<LoadedKey> {
     let bytes = read_bounded(path, MAX_KEY_FILE)?;
     match hide_keyring::inspect(&bytes) {
-        KeyFormat::Raw => Ok(RecipientSecret::from_bytes(&bytes)?),
+        KeyFormat::Raw => {
+            let mut seed = Zeroizing::new([0u8; 32]);
+            if bytes.len() != seed.len() {
+                return Err(format!("{} is not a HIDE secret key", path.display()).into());
+            }
+            seed.copy_from_slice(&bytes);
+            Ok(LoadedKey::Identity(Identity::from_seed(seed)))
+        }
         KeyFormat::Protected => {
             let passphrase = prompt_passphrase("Passphrase: ")?;
-            Ok(hide_keyring::unprotect(&bytes, &passphrase)?)
+            let (seed, purpose) = hide_keyring::unprotect_seed(&bytes, &passphrase)?;
+            Ok(match purpose {
+                KeyPurpose::Identity => LoadedKey::Identity(Identity::from_seed(seed)),
+                KeyPurpose::Encryption => {
+                    LoadedKey::EncryptionOnly(RecipientSecret::from_bytes(&seed[..])?)
+                }
+            })
         }
     }
+}
+
+fn load_secret(path: &Path) -> Result<RecipientSecret> {
+    match load_key(path)? {
+        LoadedKey::Identity(identity) => Ok(identity.recipient_secret()?),
+        LoadedKey::EncryptionOnly(secret) => Ok(secret),
+    }
+}
+
+/// Signing needs the master seed. A key file that predates signatures does not
+/// carry one, and no amount of derivation can invent it.
+fn load_signing_identity(path: &Path) -> Result<SigningIdentity> {
+    match load_key(path)? {
+        LoadedKey::Identity(identity) => Ok(SigningIdentity::from_bytes(&*identity.signing_seed())?),
+        LoadedKey::EncryptionOnly(_) => Err(format!(
+            "{} predates signatures and holds no signing key; create a new identity with `hide keygen`",
+            path.display()
+        )
+        .into()),
+    }
+}
+
+fn load_verifying_identity(path: &Path) -> Result<VerifyingIdentity> {
+    let bytes = read_bounded(path, MAX_SIGNING_KEY_FILE)?;
+    if bytes.len() != SIGNING_PUBLIC_LEN {
+        return Err(format!(
+            "{} is not a HIDE signing public key ({} bytes, expected {SIGNING_PUBLIC_LEN})",
+            path.display(),
+            bytes.len()
+        )
+        .into());
+    }
+    Ok(VerifyingIdentity::from_bytes(&bytes)?)
 }
 
 fn load_recipients(paths: &[PathBuf]) -> Result<Vec<RecipientPublic>> {
@@ -261,24 +380,49 @@ fn load_recipients(paths: &[PathBuf]) -> Result<Vec<RecipientPublic>> {
         .collect()
 }
 
-fn keygen(secret_path: &Path, public_path: &Path, plaintext: bool, armor: bool) -> Result<()> {
+fn keygen(
+    secret_path: &Path,
+    public_path: &Path,
+    plaintext: bool,
+    armor: bool,
+    signing_public_path: Option<&Path>,
+) -> Result<()> {
     if secret_path == public_path {
         return Err("secret and public paths must differ".into());
     }
+    let signing_public_path = signing_public_path
+        .map(PathBuf::from)
+        .unwrap_or_else(|| append_extension(public_path, "sign"));
+    if signing_public_path == secret_path || signing_public_path == public_path {
+        return Err("signing public key path must differ from the other two".into());
+    }
+
     let mut secret_file = new_output(secret_path)?;
     let mut public_file = new_output(public_path)?;
-    let secret = RecipientSecret::generate()?;
+    let mut signing_file = new_output(&signing_public_path)?;
+
+    // One master seed, so there is a single thing to back up and a single
+    // passphrase. The two keys derive from it and cannot be computed from
+    // each other.
+    let identity = Identity::generate()?;
+    let secret = identity.recipient_secret()?;
+    let signing = SigningIdentity::from_bytes(&*identity.signing_seed())?;
 
     if plaintext {
-        secret_file.write_all(secret.expose_seed_for_sealing())?;
+        secret_file.write_all(identity.expose_seed_for_sealing())?;
     } else {
         let passphrase = prompt_new_passphrase()?;
-        secret_file.write_all(&hide_keyring::protect(&secret, &passphrase)?)?;
+        secret_file.write_all(&hide_keyring::protect_identity(
+            identity.expose_seed_for_sealing(),
+            &passphrase,
+        )?)?;
     }
     let public = secret.public_key()?.to_bytes();
     public_file.write_all(&public)?;
+    signing_file.write_all(&signing.verifying_key().to_bytes())?;
 
     commit_output(secret_file, secret_path)?;
+    commit_output(signing_file, &signing_public_path)?;
     commit_output(public_file, public_path)?;
 
     if armor {
@@ -290,10 +434,32 @@ fn keygen(secret_path: &Path, public_path: &Path, plaintext: bool, armor: bool) 
         eprintln!("Created keys. The secret is sealed with your passphrase.");
         eprintln!("If you forget it, nothing encrypted to this key can be recovered.");
     }
+    eprintln!(
+        "Signing public key written to {}. Share it so others can check your signatures.",
+        signing_public_path.display()
+    );
     Ok(())
 }
 
-fn encrypt_file(input: &Path, recipients: &[PathBuf], output: &Path) -> Result<()> {
+/// Appends a suffix rather than replacing one, so `alice.hide-pub` becomes
+/// `alice.hide-pub.sign` instead of losing the original extension.
+fn append_extension(path: &Path, suffix: &str) -> PathBuf {
+    let mut name = path.as_os_str().to_os_string();
+    name.push(".");
+    name.push(suffix);
+    PathBuf::from(name)
+}
+
+fn encrypt_file(
+    input: &Path,
+    recipients: &[PathBuf],
+    output: &Path,
+    sign_with: Option<&Path>,
+    public_signature: bool,
+) -> Result<()> {
+    if public_signature && sign_with.is_none() {
+        return Err("--public-signature needs --sign".into());
+    }
     let recipients = load_recipients(recipients)?;
     let mut source = BufReader::with_capacity(IO_BUFFER, File::open(input)?);
     let staging = new_output(output)?;
@@ -307,12 +473,40 @@ fn encrypt_file(input: &Path, recipients: &[PathBuf], output: &Path) -> Result<(
         signature: None,
     };
     let mut buffered = BufWriter::with_capacity(IO_BUFFER, staging);
-    let written = hide_object::encrypt(&mut source, &mut buffered, &recipients, &metadata)?;
+    let written = match sign_with {
+        None => hide_object::encrypt(&mut source, &mut buffered, &recipients, &metadata)?,
+        Some(path) => {
+            let identity = load_signing_identity(path)?;
+            let placement = if public_signature {
+                SignaturePlacement::Public
+            } else {
+                SignaturePlacement::Confidential
+            };
+            hide_object::encrypt_signed(
+                &mut source,
+                &mut buffered,
+                &recipients,
+                &metadata,
+                &identity,
+                placement,
+            )?
+        }
+    };
     commit_output(buffered.into_inner()?, output)?;
     eprintln!(
         "Encrypted {written} bytes for {} recipient(s).",
         recipients.len()
     );
+    if sign_with.is_some() {
+        eprintln!(
+            "Signed. The signature is {}.",
+            if public_signature {
+                "visible to anyone holding the file"
+            } else {
+                "readable only by the recipients"
+            }
+        );
+    }
     Ok(())
 }
 
@@ -320,14 +514,126 @@ fn open_file(input: &Path, secret_path: &Path, output: &Path) -> Result<()> {
     let secret = load_secret(secret_path)?;
     let mut source = BufReader::with_capacity(IO_BUFFER, File::open(input)?);
     let mut buffered = BufWriter::with_capacity(IO_BUFFER, new_output(output)?);
-    hide_object::decrypt_to_staging(&mut source, &mut buffered, &secret)?;
+    let verified = hide_object::decrypt_to_staging(&mut source, &mut buffered, &secret)?;
     commit_output(buffered.into_inner()?, output)?;
-    eprintln!("Decrypted file written; integrity verified. Sender is not authenticated.");
+    match verified.signer {
+        None => {
+            eprintln!("Decrypted file written; integrity verified. Sender is not authenticated.")
+        }
+        Some(signer) => {
+            eprintln!("Decrypted file written; integrity verified.");
+            eprintln!("Signed by key {}.", fingerprint(&signer));
+            // A signature proves possession of a key, and nothing more: there is
+            // no directory tying that key to a person.
+            eprintln!("Check that key against one you already trust; HIDE does not.");
+        }
+    }
     Ok(())
+}
+
+/// A short, comparable form of a signing key. Not a security boundary on its
+/// own: compare the full key when it matters.
+fn fingerprint(identity: &VerifyingIdentity) -> String {
+    let digest = hide_crypto::hash(&[&identity.to_bytes()]);
+    digest[..8]
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect::<Vec<_>>()
+        .join("")
 }
 
 const MESSAGE_HEADER: &str = "----- BEGIN HIDE MESSAGE -----";
 const MESSAGE_FOOTER: &str = "----- END HIDE MESSAGE -----";
+
+/// Signs the file's hash rather than its bytes, so signing a large file costs
+/// one streaming pass and no buffering. The length is redundant against
+/// SHA-256 and is included only to keep the message self-describing.
+fn detached_message(digest: &[u8; 32], length: u64) -> Vec<u8> {
+    [
+        b"HIDE/0.5 detached-file".as_slice(),
+        digest,
+        &length.to_be_bytes(),
+    ]
+    .concat()
+}
+
+fn hash_file(path: &Path) -> Result<([u8; 32], u64)> {
+    let mut file = BufReader::with_capacity(IO_BUFFER, File::open(path)?);
+    let mut hasher = hide_crypto::Hasher::new();
+    let mut buffer = vec![0; IO_BUFFER];
+    let mut length = 0u64;
+    loop {
+        let read = file.read(&mut buffer)?;
+        if read == 0 {
+            break;
+        }
+        hasher.update(&buffer[..read]);
+        length += read as u64;
+    }
+    Ok((hasher.finish(), length))
+}
+
+fn signature_path(input: &Path, explicit: Option<&Path>) -> PathBuf {
+    explicit
+        .map(PathBuf::from)
+        .unwrap_or_else(|| append_extension(input, "hide-sig"))
+}
+
+fn sign_file(input: &Path, secret_path: &Path, output: Option<&Path>) -> Result<()> {
+    let output = signature_path(input, output);
+    let identity = load_signing_identity(secret_path)?;
+    let mut staging = new_output(&output)?;
+    let (digest, length) = hash_file(input)?;
+    let signature = identity.sign(DETACHED_CONTEXT, &detached_message(&digest, length));
+
+    // The verifying key travels with the signature so `verify` can report which
+    // key signed even when the caller supplies the wrong one.
+    staging.write_all(&identity.verifying_key().to_bytes())?;
+    staging.write_all(&signature)?;
+    commit_output(staging, &output)?;
+
+    eprintln!("Signature written to {}.", output.display());
+    eprintln!(
+        "Anyone checking it needs your signing public key ({}).",
+        fingerprint(&identity.verifying_key())
+    );
+    Ok(())
+}
+
+fn verify_file(input: &Path, signer_path: &Path, signature: Option<&Path>) -> Result<()> {
+    let signature_file = signature_path(input, signature);
+    let expected = load_verifying_identity(signer_path)?;
+    let bytes = read_bounded(&signature_file, MAX_SIGNING_KEY_FILE)?;
+    if bytes.len() != SIGNING_PUBLIC_LEN + hide_sign::SIGNATURE_LENGTH {
+        return Err(format!("{} is not a HIDE signature", signature_file.display()).into());
+    }
+    let (embedded, signature) = bytes.split_at(SIGNING_PUBLIC_LEN);
+
+    // Check the key first: a valid signature by the wrong signer is a failure,
+    // and saying so is more useful than "signature did not verify".
+    if embedded != expected.to_bytes() {
+        return Err(format!(
+            "signature is by key {}, not {}",
+            fingerprint(&VerifyingIdentity::from_bytes(embedded)?),
+            fingerprint(&expected)
+        )
+        .into());
+    }
+
+    let (digest, length) = hash_file(input)?;
+    expected.verify(
+        DETACHED_CONTEXT,
+        &detached_message(&digest, length),
+        signature,
+    )?;
+    eprintln!(
+        "Signature is valid for {}, by key {}.",
+        input.display(),
+        fingerprint(&expected)
+    );
+    eprintln!("This proves possession of that key, not the identity of a person.");
+    Ok(())
+}
 
 fn seal_message(
     message: Option<&str>,
@@ -387,7 +693,7 @@ fn unseal_message(input: Option<&Path>, secret_path: &Path) -> Result<()> {
 
     // Buffered in memory so nothing is printed before the FINAL record authenticates.
     let mut plaintext = Zeroizing::new(Vec::new());
-    hide_object::decrypt_to_staging(&mut &*container, &mut *plaintext, &secret)?;
+    let verified = hide_object::decrypt_to_staging(&mut &*container, &mut *plaintext, &secret)?;
     let plaintext = String::from_utf8(plaintext.to_vec())
         .map_err(|_| "message decrypted but is not valid UTF-8; use `open` instead")?;
 
@@ -395,7 +701,16 @@ fn unseal_message(input: Option<&Path>, secret_path: &Path) -> Result<()> {
     if !plaintext.ends_with('\n') {
         println!();
     }
-    eprintln!("Integrity verified. Sender is NOT authenticated.");
+    match verified.signer {
+        None => eprintln!("Integrity verified. Sender is NOT authenticated."),
+        Some(signer) => {
+            eprintln!(
+                "Integrity verified. Signed by key {}.",
+                fingerprint(&signer)
+            );
+            eprintln!("Check that key against one you already trust; HIDE does not.");
+        }
+    }
     Ok(())
 }
 
@@ -432,7 +747,8 @@ fn dearmor_message(text: &str) -> Result<Vec<u8>> {
 }
 
 fn describe(path: &Path) -> Result<()> {
-    if let Ok(bytes) = read_bounded(path, MAX_KEY_FILE) {
+    // Large enough for a detached signature, which is the biggest key-ish file.
+    if let Ok(bytes) = read_bounded(path, MAX_SIGNING_KEY_FILE) {
         match hide_keyring::inspect(&bytes) {
             KeyFormat::Protected => {
                 println!("{}: HIDE secret key, passphrase-protected", path.display());
@@ -447,6 +763,21 @@ fn describe(path: &Path) -> Result<()> {
             }
             KeyFormat::Raw if bytes.len() == PUBLIC_KEY_LEN => {
                 println!("{}: HIDE public key (shareable)", path.display());
+                return Ok(());
+            }
+            KeyFormat::Raw if bytes.len() == SIGNING_PUBLIC_LEN => {
+                println!("{}: HIDE signing public key (shareable)", path.display());
+                if let Ok(identity) = VerifyingIdentity::from_bytes(&bytes) {
+                    println!("  fingerprint: {}", fingerprint(&identity));
+                }
+                return Ok(());
+            }
+            KeyFormat::Raw if bytes.len() == SIGNING_PUBLIC_LEN + hide_sign::SIGNATURE_LENGTH => {
+                println!("{}: HIDE detached signature", path.display());
+                if let Ok(identity) = VerifyingIdentity::from_bytes(&bytes[..SIGNING_PUBLIC_LEN]) {
+                    println!("  signed by key: {}", fingerprint(&identity));
+                }
+                println!("  verify it with `hide verify <file> --signer <key>`");
                 return Ok(());
             }
             KeyFormat::Raw => {}
@@ -464,6 +795,15 @@ fn describe(path: &Path) -> Result<()> {
     println!("{}: HIDE container", path.display());
     println!("  format version: {}.{}", preamble[8], preamble[9]);
     println!("  container size: {size} bytes");
+    // Minor 2 is the signed form; the signer is only knowable after decryption.
+    println!(
+        "  signed: {}",
+        if preamble[9] >= 2 {
+            "yes; open it to learn who signed"
+        } else {
+            "no"
+        }
+    );
     println!("  recipients, filename and contents are encrypted; open it to learn more");
     Ok(())
 }

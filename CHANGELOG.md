@@ -3,6 +3,45 @@
 This project is pre-1.0. The wire format may change while the version is 0.x,
 and a format change is always called out here explicitly.
 
+## Unreleased
+
+**The container format gains signatures.** Unsigned containers are unchanged
+byte for byte, and the frozen 0.1.0 vectors still pass. Signed containers
+advertise preamble minor `2`, so a reader that predates signatures refuses them
+rather than opening them with the signature silently ignored.
+
+### Added
+
+- **Hybrid Ed25519 + ML-DSA-65 signatures** (`hide-sign`). Both halves must
+  verify; neither alone is accepted.
+- **`hide sign` and `hide verify`** for detached signatures, written as
+  `<file>.hide-sig` beside the file.
+- **`hide encrypt --sign`**, which signs the container as it is written. The
+  signature is readable only by the recipients unless `--public-signature` puts
+  it in the clear, where it identifies the signer to anyone holding the file.
+- **`hide open` and `hide unseal` report the signer**, as a key fingerprint and
+  an explicit reminder that a key is not a person.
+- **`hide info`** recognises signing keys, detached signatures, and signed
+  containers.
+
+### Changed
+
+- **`hide keygen` now creates an identity**: one sealed master seed, plus an
+  encryption public key and a signing public key (`<public>.sign`) derived from
+  it. One backup, one passphrase, and neither derived key reveals the other.
+- **Key files carry a purpose byte** (format version 2), so a signing key can no
+  longer be used silently where an encryption key was meant. Version 1 files
+  still open and are treated as encryption-only; signing with one fails with a
+  message naming the fix.
+
+### Security
+
+- A signature commits to the **plaintext**, not merely the header. Binding only
+  the header would have been forgeable by any recipient: they hold the content
+  key and the payload salt is public, so they could re-encrypt different content
+  under an unchanged header and the original signature would still verify.
+  Signing therefore buffers the payload and is not a one-pass stream.
+
 ## 0.4.0
 
 The container format is **unchanged**: 0.1.0 containers still open, and the

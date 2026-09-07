@@ -130,6 +130,14 @@ cargo run -p hide-cli -- --experimental keygen --secret alice.hide-key --public 
 cargo run -p hide-cli -- --experimental encrypt report.pdf --recipient alice.hide-pub --output report.pdf.hide
 cargo run -p hide-cli -- --experimental open report.pdf.hide --secret alice.hide-key --output report.pdf
 
+# Sign as you encrypt. The signature is readable only by the recipients unless
+# you pass --public-signature.
+cargo run -p hide-cli -- --experimental encrypt report.pdf --recipient alice.hide-pub --output report.pdf.hide --sign alice.hide-key
+
+# Or sign a file in place, leaving report.pdf.hide-sig beside it.
+cargo run -p hide-cli -- --experimental sign report.pdf --secret alice.hide-key
+cargo run -p hide-cli -- --experimental verify report.pdf --signer alice.hide-pub.sign
+
 # Text messages, as a block you can paste into email or chat.
 cargo run -p hide-cli -- --experimental seal "meet at six" --recipient alice.hide-pub
 cargo run -p hide-cli -- --experimental unseal message.txt --secret alice.hide-key
@@ -140,6 +148,14 @@ cargo run -p hide-cli -- --experimental info report.pdf.hide
 
 The CLI never overwrites an existing file, writes plaintext to private staging first, and publishes the
 result only after authentication succeeds. `--experimental` is mandatory, so the risk is acknowledged explicitly.
+
+`keygen` writes three files: one secret master seed, and two shareable public keys — `alice.hide-pub`
+for encryption and `alice.hide-pub.sign` for checking signatures. Both derive from the master seed, so
+there is a single thing to back up, and neither can be computed from the other. A key file created
+before signatures existed still decrypts; signing with it fails and says so.
+
+A signature proves possession of a key. HIDE has no directory or transparency log, so nothing ties that
+key to a person — compare a signer's key against one you already trust.
 
 ### Building the desktop application
 

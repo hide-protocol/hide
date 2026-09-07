@@ -14,17 +14,24 @@ use chacha20poly1305::{
     aead::{Aead, Payload},
 };
 use hide_crypto::{CryptoError, RecipientSecret};
+use hkdf::Hkdf;
+use sha2::Sha256;
 use thiserror::Error;
 use zeroize::Zeroizing;
 
 const MAGIC: &[u8] = b"HIDE-KEY";
-const FORMAT_VERSION: u8 = 1;
+/// Version 1 sealed a bare recipient seed. Version 2 adds a purpose byte, so a
+/// signing key and an encryption key are no longer byte-indistinguishable.
+const FORMAT_VERSION: u8 = 2;
+const LEGACY_VERSION: u8 = 1;
 const SALT_LEN: usize = 16;
 const NONCE_LEN: usize = 12;
 const SEED_LEN: usize = 32;
 const TAG_LEN: usize = 16;
-const HEADER_LEN: usize = 8 + 1 + 1 + 4 + 4 + SALT_LEN + NONCE_LEN;
+const LEGACY_HEADER_LEN: usize = 8 + 1 + 1 + 4 + 4 + SALT_LEN + NONCE_LEN;
+const HEADER_LEN: usize = LEGACY_HEADER_LEN + 1;
 const SEALED_LEN: usize = HEADER_LEN + SEED_LEN + TAG_LEN;
+const LEGACY_SEALED_LEN: usize = LEGACY_HEADER_LEN + SEED_LEN + TAG_LEN;
 
 /// OWASP's 2024 baseline for Argon2id. Stored per file so raising these later
 /// does not orphan existing keys.
@@ -50,8 +57,49 @@ pub enum KeyringError {
     WrongPassphrase,
     #[error("passphrase must be at least {0} characters")]
     PassphraseTooShort(usize),
+    #[error("this is a {found} key, but a {expected} key is required")]
+    WrongPurpose {
+        expected: KeyPurpose,
+        found: KeyPurpose,
+    },
     #[error("cryptographic operation failed: {0}")]
     Crypto(String),
+}
+
+/// What a sealed seed is for. Stored in the file so the wrong key cannot be
+/// used silently against the right command.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum KeyPurpose {
+    /// A master seed from which both the encryption and signing keys derive.
+    Identity,
+    /// A bare recipient seed, as written by v0.4.0 and earlier.
+    Encryption,
+}
+
+impl KeyPurpose {
+    fn tag(self) -> u8 {
+        match self {
+            Self::Identity => 1,
+            Self::Encryption => 2,
+        }
+    }
+
+    fn from_tag(tag: u8) -> Option<Self> {
+        match tag {
+            1 => Some(Self::Identity),
+            2 => Some(Self::Encryption),
+            _ => None,
+        }
+    }
+}
+
+impl core::fmt::Display for KeyPurpose {
+    fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        formatter.write_str(match self {
+            Self::Identity => "HIDE identity",
+            Self::Encryption => "encryption-only",
+        })
+    }
 }
 
 impl From<CryptoError> for KeyringError {
@@ -77,10 +125,30 @@ pub fn inspect(bytes: &[u8]) -> KeyFormat {
     }
 }
 
-/// Seals `secret` under `passphrase`.
+/// Seals `secret` under `passphrase` as an encryption-only key.
 pub fn protect(secret: &RecipientSecret, passphrase: &str) -> Result<Vec<u8>, KeyringError> {
+    protect_seed(
+        secret.expose_seed_for_sealing(),
+        passphrase,
+        KeyPurpose::Encryption,
+    )
+}
+
+/// Seals a master identity seed, from which both keys derive.
+pub fn protect_identity(seed: &[u8; SEED_LEN], passphrase: &str) -> Result<Vec<u8>, KeyringError> {
+    protect_seed(seed, passphrase, KeyPurpose::Identity)
+}
+
+fn protect_seed(
+    seed: &[u8],
+    passphrase: &str,
+    purpose: KeyPurpose,
+) -> Result<Vec<u8>, KeyringError> {
     if passphrase.chars().count() < MIN_PASSPHRASE_LEN {
         return Err(KeyringError::PassphraseTooShort(MIN_PASSPHRASE_LEN));
+    }
+    if seed.len() != SEED_LEN {
+        return Err(KeyringError::Malformed);
     }
 
     let mut salt = [0u8; SALT_LEN];
@@ -96,6 +164,7 @@ pub fn protect(secret: &RecipientSecret, passphrase: &str) -> Result<Vec<u8>, Ke
     header.extend_from_slice(&ITERATIONS.to_be_bytes());
     header.extend_from_slice(&salt);
     header.extend_from_slice(&nonce);
+    header.push(purpose.tag());
     debug_assert_eq!(header.len(), HEADER_LEN);
 
     let wrapping = derive(passphrase, &salt, MEMORY_KIB, ITERATIONS, PARALLELISM)?;
@@ -104,7 +173,7 @@ pub fn protect(secret: &RecipientSecret, passphrase: &str) -> Result<Vec<u8>, Ke
         .encrypt(
             (&nonce).into(),
             Payload {
-                msg: secret.expose_seed_for_sealing(),
+                msg: seed,
                 aad: &header,
             },
         )
@@ -126,16 +195,80 @@ pub fn open(bytes: &[u8], passphrase: Option<&str>) -> Result<RecipientSecret, K
     }
 }
 
+/// A master seed, and the two independent keys derived from it.
+///
+/// Derivation is one-way and domain-separated, so recovering the signing key
+/// from the encryption key (or the reverse) is not possible without the master.
+pub struct Identity {
+    seed: Zeroizing<[u8; SEED_LEN]>,
+}
+
+const ENCRYPTION_INFO: &[u8] = b"HIDE/0.5 identity encryption";
+const SIGNING_INFO: &[u8] = b"HIDE/0.5 identity signing";
+
+impl Identity {
+    pub fn generate() -> Result<Self, KeyringError> {
+        let mut seed = Zeroizing::new([0u8; SEED_LEN]);
+        getrandom::fill(&mut *seed).map_err(|error| KeyringError::Crypto(error.to_string()))?;
+        Ok(Self { seed })
+    }
+
+    pub fn from_seed(seed: Zeroizing<[u8; SEED_LEN]>) -> Self {
+        Self { seed }
+    }
+
+    pub fn expose_seed_for_sealing(&self) -> &[u8; SEED_LEN] {
+        &self.seed
+    }
+
+    pub fn recipient_secret(&self) -> Result<RecipientSecret, KeyringError> {
+        let seed = self.derive(ENCRYPTION_INFO);
+        Ok(RecipientSecret::from_bytes(&seed[..])?)
+    }
+
+    pub fn signing_seed(&self) -> Zeroizing<[u8; SEED_LEN]> {
+        self.derive(SIGNING_INFO)
+    }
+
+    fn derive(&self, info: &[u8]) -> Zeroizing<[u8; SEED_LEN]> {
+        let mut out = Zeroizing::new([0u8; SEED_LEN]);
+        Hkdf::<Sha256>::from_prk(&*self.seed)
+            .expect("32 bytes is a valid PRK for SHA-256")
+            .expand(info, &mut *out)
+            .expect("32 bytes is a valid HKDF output length");
+        out
+    }
+}
+
 pub fn unprotect(bytes: &[u8], passphrase: &str) -> Result<RecipientSecret, KeyringError> {
+    let (seed, purpose) = unprotect_seed(bytes, passphrase)?;
+    // A v1 file has no purpose byte and predates signing, so it is encryption-only.
+    if purpose != KeyPurpose::Encryption {
+        return Err(KeyringError::WrongPurpose {
+            expected: KeyPurpose::Encryption,
+            found: purpose,
+        });
+    }
+    Ok(RecipientSecret::from_bytes(&seed[..])?)
+}
+
+/// Opens a sealed seed and reports what it is for, so a caller can refuse a key
+/// of the wrong purpose with a message that names the mismatch.
+pub fn unprotect_seed(
+    bytes: &[u8],
+    passphrase: &str,
+) -> Result<(Zeroizing<[u8; SEED_LEN]>, KeyPurpose), KeyringError> {
     if !bytes.starts_with(MAGIC) {
         return Err(KeyringError::NotAKeyFile);
     }
-    if bytes.len() != SEALED_LEN {
+    let version = *bytes.get(8).ok_or(KeyringError::Malformed)?;
+    let (header_len, expected_len) = match version {
+        FORMAT_VERSION => (HEADER_LEN, SEALED_LEN),
+        LEGACY_VERSION => (LEGACY_HEADER_LEN, LEGACY_SEALED_LEN),
+        other => return Err(KeyringError::UnsupportedVersion(other)),
+    };
+    if bytes.len() != expected_len {
         return Err(KeyringError::Malformed);
-    }
-    let version = bytes[8];
-    if version != FORMAT_VERSION {
-        return Err(KeyringError::UnsupportedVersion(version));
     }
 
     let parallelism = u32::from(bytes[9]);
@@ -154,9 +287,15 @@ pub fn unprotect(bytes: &[u8], passphrase: &str) -> Result<RecipientSecret, Keyr
         return Err(KeyringError::UnreasonableParameters);
     }
 
+    let purpose = if version == LEGACY_VERSION {
+        KeyPurpose::Encryption
+    } else {
+        KeyPurpose::from_tag(bytes[LEGACY_HEADER_LEN]).ok_or(KeyringError::Malformed)?
+    };
+
     let salt = &bytes[18..18 + SALT_LEN];
-    let nonce = &bytes[18 + SALT_LEN..HEADER_LEN];
-    let header = &bytes[..HEADER_LEN];
+    let nonce = &bytes[18 + SALT_LEN..18 + SALT_LEN + NONCE_LEN];
+    let header = &bytes[..header_len];
 
     let wrapping = derive(passphrase, salt, memory, iterations, parallelism)?;
     let cipher = ChaCha20Poly1305::new((&*wrapping).into());
@@ -165,14 +304,15 @@ pub fn unprotect(bytes: &[u8], passphrase: &str) -> Result<RecipientSecret, Keyr
         .decrypt(
             (&nonce).into(),
             Payload {
-                msg: &bytes[HEADER_LEN..],
+                msg: &bytes[header_len..],
                 aad: header,
             },
         )
         .map_err(|_| KeyringError::WrongPassphrase)?;
 
-    let seed = Zeroizing::new(seed);
-    Ok(RecipientSecret::from_bytes(&seed)?)
+    let mut out = Zeroizing::new([0u8; SEED_LEN]);
+    out.copy_from_slice(&Zeroizing::new(seed)[..]);
+    Ok((out, purpose))
 }
 
 /// Base64 wrapper so a public key can be pasted into a message or a chat.
@@ -315,6 +455,99 @@ mod tests {
             error_of(open(&protect(&secret(), "correct horse battery")?, None)),
             KeyringError::WrongPassphrase
         );
+        Ok(())
+    }
+
+    /// A key file written by v0.4.0 has no purpose byte. It must still open, or
+    /// every existing user loses access to their encrypted data.
+    #[test]
+    fn v1_key_files_still_open_and_read_as_encryption_only() -> Result<(), KeyringError> {
+        // Rebuild a v1 file exactly as the previous release wrote it.
+        let seed = [0x31; SEED_LEN];
+        let salt = [0x32; SALT_LEN];
+        let nonce = [0x33; NONCE_LEN];
+        let mut header = Vec::new();
+        header.extend_from_slice(MAGIC);
+        header.push(LEGACY_VERSION);
+        header.push(PARALLELISM as u8);
+        header.extend_from_slice(&MEMORY_KIB.to_be_bytes());
+        header.extend_from_slice(&ITERATIONS.to_be_bytes());
+        header.extend_from_slice(&salt);
+        header.extend_from_slice(&nonce);
+        assert_eq!(header.len(), LEGACY_HEADER_LEN);
+
+        let wrapping = derive(
+            "correct horse battery",
+            &salt,
+            MEMORY_KIB,
+            ITERATIONS,
+            PARALLELISM,
+        )?;
+        let sealed = ChaCha20Poly1305::new((&*wrapping).into())
+            .encrypt(
+                (&nonce).into(),
+                Payload {
+                    msg: &seed,
+                    aad: &header,
+                },
+            )
+            .map_err(|_| CryptoError::Authentication)?;
+        let mut file = header;
+        file.extend_from_slice(&sealed);
+        assert_eq!(file.len(), LEGACY_SEALED_LEN);
+
+        let (opened, purpose) = unprotect_seed(&file, "correct horse battery")?;
+        assert_eq!(&opened[..], &seed);
+        assert_eq!(purpose, KeyPurpose::Encryption);
+        // And through the typed path that predates this change.
+        unprotect(&file, "correct horse battery")?;
+        Ok(())
+    }
+
+    #[test]
+    fn an_identity_key_is_refused_where_an_encryption_key_is_required() -> Result<(), KeyringError>
+    {
+        let identity = Identity::generate()?;
+        let file = protect_identity(identity.expose_seed_for_sealing(), "correct horse battery")?;
+        assert_eq!(
+            error_of(unprotect(&file, "correct horse battery")),
+            KeyringError::WrongPurpose {
+                expected: KeyPurpose::Encryption,
+                found: KeyPurpose::Identity,
+            }
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn an_identity_round_trips_and_derives_stable_keys() -> Result<(), KeyringError> {
+        let identity = Identity::generate()?;
+        let file = protect_identity(identity.expose_seed_for_sealing(), "correct horse battery")?;
+        let (seed, purpose) = unprotect_seed(&file, "correct horse battery")?;
+        assert_eq!(purpose, KeyPurpose::Identity);
+
+        let reopened = Identity::from_seed(seed);
+        assert_eq!(
+            reopened.recipient_secret()?.public_key()?.to_bytes(),
+            identity.recipient_secret()?.public_key()?.to_bytes()
+        );
+        assert_eq!(&*reopened.signing_seed(), &*identity.signing_seed());
+        Ok(())
+    }
+
+    /// The point of deriving both from one master: neither derived key may equal
+    /// the master, or each other, or the whole separation is decorative.
+    #[test]
+    fn the_two_derived_keys_are_independent_of_each_other_and_the_master()
+    -> Result<(), KeyringError> {
+        let identity = Identity::generate()?;
+        let master = *identity.expose_seed_for_sealing();
+        let signing = identity.signing_seed();
+        let encryption = identity.derive(ENCRYPTION_INFO);
+
+        assert_ne!(&*signing, &master);
+        assert_ne!(&*encryption, &master);
+        assert_ne!(&*signing, &*encryption);
         Ok(())
     }
 

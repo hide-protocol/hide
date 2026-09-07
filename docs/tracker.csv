@@ -19,10 +19,12 @@ P2.3,2,task,Verify before any plaintext is published,done,P2.2,crates/hide-objec
 P2.4,2,task,An unsigned container still opens,done,P2.3,crates/hide-object,cargo test -p hide-object --test vectors (4 passed); hello.hide and empty.hide unchanged in git,v0.1 vectors regenerate byte-identically
 P2.5,2,task,spec/hide-0.1.md documents the signature stanza,done,P2.4,spec,spec/hide-0.1.md sections 7 7.1 7.2,Documents why the plaintext hash is mandatory
 P2.6,2,task,Independent Node verifier checks signatures,done,P2.5,conformance/node,node verify.mjs (5 PASS lines),Independent Ed25519 via node:crypto and ML-DSA-65 via @noble/post-quantum
-P3.1,3,task,hide keygen also produces a signing identity,not-started,P2.4,apps/hide-cli,,
-P3.2,3,task,hide sign and hide verify for detached signatures,not-started,P3.1,apps/hide-cli,,
-P3.3,3,task,hide encrypt --sign,not-started,P3.1,apps/hide-cli,,
-P3.4,3,task,hide open reports the signer,not-started,P3.3,apps/hide-cli,,Must not imply identity binding
+P3.1,3,task,hide keygen also produces a signing identity,done,P2.4,apps/hide-cli,cargo test -p hide-cli --test signing (12 passed); keygen writes 32/1216/1984 byte files,"One master seed derives both keys; see D8"
+P3.2,3,task,hide sign and hide verify for detached signatures,done,P3.1,apps/hide-cli,cargo test -p hide-cli --test signing,Signs SHA-256 of the file; signature carries the verifying key so verify can name the wrong signer
+P3.3,3,task,hide encrypt --sign,done,P3.1,apps/hide-cli,cargo test -p hide-cli --test signing encrypt_sign_and_open_reports_the_signer,Confidential by default; --public-signature opts into visibility
+P3.4,3,task,hide open reports the signer,done,P3.3,apps/hide-cli,cargo test -p hide-cli --test signing,"Prints a fingerprint plus 'check that key against one you already trust; HIDE does not'"
+P3.5,3,task,Key files carry a purpose byte,done,P3.1,crates/hide-keyring,cargo test -p hide-keyring (11 passed),Format v2; v1 files still open as encryption-only
+P3.6,3,task,info reports signing keys signatures and signed containers,done,P3.4,apps/hide-cli,cargo test -p hide-cli --test signing info_recognises_signing_keys_signatures_and_signed_containers,
 P4.1,4,task,ssh-agent protocol: request and response framing,not-started,P1.4,apps/hide-cli,,ssh-encoding 0.3.0
 P4.2,4,task,REQUEST_IDENTITIES and SIGN_REQUEST over Ed25519,not-started,P4.1,apps/hide-cli,,
 P4.3,4,task,Unix socket and Windows named pipe transport,not-started,P4.2,apps/hide-cli,,

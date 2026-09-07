@@ -13,6 +13,7 @@ path = "src/main.rs"
 [dependencies]
 hide-crypto = { path = "../../crates/hide-crypto" }
 hide-keyring = { path = "../../crates/hide-keyring" }
+hide-sign = { path = "../../crates/hide-sign" }
 base64.workspace = true
 rpassword.workspace = true
 hide-object = { path = "../../crates/hide-object" }

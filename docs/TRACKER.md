@@ -47,6 +47,9 @@ raise it if you disagree.
 | D5 | What a signature covers | A **transcript** binding suite, object id, recipient set, metadata and `SHA-256(plaintext)` | Signing the header alone is forgeable: every recipient holds the CEK and the payload salt is public, so a recipient can re-encrypt different content under an unchanged header and the signature still verifies | Signing buffers the payload, so it is no longer one-pass |
 | D6 | Signature placement | **Both**, chosen per container: public in the header, or confidential inside the encrypted metadata | Public attestation and private mail are genuinely different needs; a header signature is visible to storage providers and network observers | Two code paths and two spec sections for every SDK |
 | D7 | Version signalling | Signed containers advertise preamble minor **2** | A v0.1 reader refuses a signed container instead of opening it and silently ignoring the signature | Signed files are unreadable by older readers, deliberately |
+| D8 | Identity on disk | One **master seed**, sealed once; the encryption and signing keys are derived from it | `keygen` writes one secret and two public files, so there is a single backup and a single passphrase, and neither derived key reveals the other | A key-file format change, and old keys cannot sign |
+| D9 | Key file typing | A **purpose byte**, key format version 2 | A signing key and an encryption key were byte-indistinguishable, so the wrong file could be used silently | Another format version to keep readable |
+| D10 | Detached signatures | Sign **SHA-256 of the file**, with its own context label | One streaming pass, no buffering, and consistent with the container transcript | The signature does not carry the file, so it must be kept beside it |
 
 ### The constraint that shapes D2
 
@@ -190,6 +193,38 @@ and then has its stanza removed, which is what
 byte* for a `Map` — it truncates. The existing verifier already had a probe
 guarding against this for its own encoder; the signature path had to use the
 same async encoder.
+
+---
+
+### P3 — signing from the CLI
+
+131 workspace tests, clippy clean, 9/9 mutations detected.
+
+**The problem that shaped the key format.** `RecipientSecret` and
+`SigningIdentity` are *both* 32-byte seeds, and the keyring sealed any 32-byte
+seed under the same `HIDE-KEY` magic with no type tag — so a sealed signing key
+and a sealed encryption key were byte-indistinguishable. Feeding the wrong file
+to the wrong command would have failed confusingly or, worse, succeeded against
+a key derived for another purpose. Key files now carry a purpose byte at format
+version 2, and version 1 files still open as encryption-only.
+
+`keygen` writes one master seed and derives both keys from it with
+domain-separated HKDF, so there is a single backup and a single passphrase.
+A pre-signature key still decrypts; signing with it fails and names the fix.
+
+**Two mutation survivors that were NOT gaps.** `detached message drops the
+length` and `detached context equals container context` both survived, and the
+instinct was to write tests until they died. They survived because the defences
+are genuinely redundant: SHA-256 already detects truncation, so the length is
+decorative, and a container transcript binds the recipient set and metadata
+while a detached message binds a file digest — the two can never collide
+whatever the context label says. Verified by removing *both* separation layers
+at once and watching the cross-domain test still pass. The mutations were
+removed from the suite and the redundancy documented in the code, so nobody
+later "simplifies" it believing it load-bearing.
+
+The lesson generalises: a surviving mutation means *either* a missing test *or*
+a redundant defence, and deciding which requires an experiment, not a guess.
 
 ---
 
