@@ -476,6 +476,43 @@ log), and the upload was refused for a one-time password: the granular token
 does not have "bypass 2FA" set. RubyGems requires the owner to enable MFA.
 Trusted Publishing would remove the token from both, as it already has for PyPI.
 
+### P8.11 — every registry on OIDC, and no secrets left
+
+All five registries carry 0.5.0, and the repository holds **zero** publishing
+secrets: `gh secret list` reports none, and no `secrets.*` reference remains in
+the workflow. Each registry mints a short-lived token from the run's own
+identity, scoped to the package.
+
+The gem is the proof: it published with no credential configured anywhere.
+
+**Two of the three actions in the research were wrong for this repository.**
+`rubygems/release-gem` is the documented one, but it drives `rake release`,
+and this gem is built with `gem build`; the credentials-only
+`rubygems/configure-rubygems-credentials` is the right fit. The first name I
+wrote, `rubygems/configure-trusted-publisher`, does not exist at all — the real
+one is named in the RubyGems API reference, not in the trusted-publishing guide.
+Every action and tag was checked against the GitHub API before use.
+
+**The NuGet policy already existed and pointed at the wrong workflow**
+(`publish-packages.yml`), so it could never have matched a run of
+`publish-sdks.yml`. It also had no environment. Both corrected.
+
+**Node 22 bundles npm 10.x**, below the 11.5.1 that OIDC requires, so the npm
+job moves to Node 24. Under trusted publishing provenance is automatic, so
+`--provenance` and `NODE_AUTH_TOKEN` both go.
+
+**npm cannot bootstrap itself.** Its trusted-publisher configuration lives in
+*package* settings, which exist only once the package does, so the first publish
+of a never-published package cannot use OIDC — confirmed by
+`404 PUT /@hide-protocol%2fwasm`. The `@hide-protocol` npm organisation did not
+exist either. Both packages were published once by hand, then bound to the
+workflow; every later version goes through OIDC.
+
+A false alarm worth remembering: `npm view` returned 404 for a package that had
+just published successfully. The registry's own org listing showed it, and the
+404 cleared within a minute — CDN cache, not a failed publish. Checking a second
+source before concluding cost one command and avoided republishing.
+
 ---
 
 ## Rules that apply to this milestone
