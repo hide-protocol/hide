@@ -26,7 +26,7 @@ Gem::Specification.new do |spec|
   spec.files =
     Dir["lib/**/*.rb"] +
     Dir["lib/hide_protocol/*.{so,dylib,dll}"] +
-    ["README.md"]
+    Dir["{README.md,LICENSE}"]
   spec.require_paths = ["lib"]
 
   spec.add_development_dependency "minitest", "~> 5.0"

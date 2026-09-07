@@ -115,6 +115,11 @@ jobs:
 
       - run: cargo build --release --locked -p hide-ffi
 
+      # pyproject declares a readme; without this the build fails outright.
+      - name: Stage the readme and licence
+        shell: bash
+        run: cp README.md LICENSE sdk/python/
+
       # The wheel carries the compiled core, so installing it needs no
       # toolchain on the user's machine.
       - name: Bundle the native library into the package
@@ -137,9 +142,22 @@ jobs:
           python -m pip install -e .
           python -m pytest -q
 
+      # hatchling has no idea the package became platform-specific when the
+      # native library was copied in, so it tags the wheel py3-none-any. All
+      # three builds would then share one filename and PyPI would serve
+      # whichever landed first to every platform. Retag with the real one.
       - name: Build the wheel
+        shell: bash
         working-directory: sdk/python
-        run: python -m build --wheel
+        run: |
+          set -euo pipefail
+          python -m pip install --upgrade wheel
+          python -m build --wheel
+          python -m wheel tags --remove \
+            --platform-tag ${{ matrix.wheel }} \
+            dist/*-py3-none-any.whl
+          test -f dist/hide_protocol-${{ inputs.version }}-py3-none-${{ matrix.wheel }}.whl
+          ls -la dist
 
       - uses: actions/upload-artifact@v7
         with:
@@ -190,6 +208,11 @@ jobs:
             --out-dir sdk/wasm --target web
           cp LICENSE sdk/wasm/
 
+      # package.json lists both in "files"; npm omits a missing file silently,
+      # which would publish a package with a blank page on the registry.
+      - name: Stage the readme and licence
+        run: cp README.md LICENSE sdk/node/
+
       - name: Build and test the Node package
         run: |
           set -euo pipefail
@@ -233,6 +256,9 @@ jobs:
           cd sdk/ruby
           HIDE_LIBRARY=$PWD/../../target/release/libhide_ffi.so \
             ruby -Ilib -Itest test/test_hide.rb
+
+      - name: Stage the licence
+        run: cp LICENSE sdk/ruby/
 
       # Pure Ruby via fiddle, so one gem serves every platform. The user
       # supplies the native library, as the README explains.

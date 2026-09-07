@@ -369,6 +369,35 @@ CLI/desktop interoperability now runs once, on Linux, in the release profile.
 how the build matrix gets exercised without cutting a tag; without a guard on
 the publish job, that test would have created a release named after the branch.
 
+### P8.3 — the publish workflow had never been run
+
+Nothing has ever reached crates.io, PyPI, npm, RubyGems or NuGet. Building the
+packages locally before creating any registry token found three faults that a
+dry run would have reported as success, because two of them are silent.
+
+**Every platform wheel would have had the same filename.** `hatchling` cannot
+know the package became platform-specific when the native library was copied
+in, so it tags the wheel `py3-none-any`. The three matrix legs — Linux, Windows
+and macOS — would each have produced
+`hide_protocol-0.5.0-py3-none-any.whl`, and PyPI would have accepted whichever
+uploaded first and then served that platform's binary to every user. The matrix
+already carried the correct tag in an unused `wheel:` key; the build now retags
+with it and asserts the expected filename exists.
+
+**The Python build was broken outright**: `pyproject.toml` declares
+`readme = "README.md"` and no such file exists in `sdk/python`, so
+`python -m build` fails with `Readme file does not exist`. The one loud fault
+of the three.
+
+**npm omits a missing file from `files` without a warning.** `sdk/node`
+declares `README.md` and `LICENSE`; `npm pack --dry-run` listed seven files,
+neither of them, and reported no error. That publishes a package whose registry
+page is blank and which carries no licence text. The gem had the same gap.
+
+Registry uploads are irreversible — a name is claimed permanently and a version
+can only be yanked, never replaced. That is the argument for building every
+artifact locally and inspecting its contents before a token exists at all.
+
 ---
 
 ## Rules that apply to this milestone
