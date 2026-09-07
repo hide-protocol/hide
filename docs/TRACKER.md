@@ -331,6 +331,16 @@ the crates directly and cannot. Each keeps its own language's conventions —
 `error` returns in Go — rather than transliterating the Python shape. `verify`
 throws everywhere instead of returning a boolean a caller can forget to check.
 
+**A third surface was broken and nobody could see it.** `apps/hide-desktop` is
+deliberately excluded from the cargo workspace, because it needs a built
+frontend. That also means `cargo test --workspace` never compiles it — so it
+stopped building in P2, when `Metadata` gained a signature field, and stayed
+broken through P3, P4 and P5 while every local gate reported green. CI was the
+first thing to notice. It carried the key-convention bug too, and both of its
+CLI-interoperability tests failed the moment it compiled again. `pre-push` now
+lints and tests it explicitly: a crate outside the build graph is invisible to
+every command that looks exhaustive.
+
 The header is hand-written, so a Rust test now reads `hide.h` and asserts every
 constant against the Rust definition. The C round-trip only covers constants it
 happens to exercise, and is skipped where no C compiler exists.
