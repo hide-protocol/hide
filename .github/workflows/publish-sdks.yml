@@ -276,6 +276,9 @@ jobs:
               ;;
             x86_64-unknown-linux-musl)
               sudo apt-get install -y --no-install-recommends musl-tools musl-dev
+              # musl defaults to crt-static, and a cdylib cannot be statically
+              # linked: the target builds cleanly and emits no .so at all.
+              echo 'RUSTFLAGS=-C target-feature=-crt-static' >> "$GITHUB_ENV"
               ;;
           esac
 
