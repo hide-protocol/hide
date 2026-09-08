@@ -16,14 +16,14 @@ name = "hide"
 path = "src/main.rs"
 
 [dependencies]
-hide-crypto = { path = "../../crates/hide-crypto", version = "0.6.1" }
-hide-keyring = { path = "../../crates/hide-keyring", version = "0.6.1" }
-hide-sign = { path = "../../crates/hide-sign", version = "0.6.1" }
+hide-crypto = { path = "../../crates/hide-crypto", version = "0.6.2" }
+hide-keyring = { path = "../../crates/hide-keyring", version = "0.6.2" }
+hide-sign = { path = "../../crates/hide-sign", version = "0.6.2" }
 base64.workspace = true
 rpassword.workspace = true
-hide-object = { path = "../../crates/hide-object", version = "0.6.1" }
-hide-identity = { path = "../../crates/hide-identity", version = "0.6.1" }
-hide-epoch = { path = "../../crates/hide-epoch", version = "0.6.1" }
+hide-object = { path = "../../crates/hide-object", version = "0.6.2" }
+hide-identity = { path = "../../crates/hide-identity", version = "0.6.2" }
+hide-epoch = { path = "../../crates/hide-epoch", version = "0.6.2" }
 clap.workspace = true
 tempfile.workspace = true
 zeroize.workspace = true

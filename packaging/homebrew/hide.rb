@@ -5,7 +5,7 @@
 class Hide < Formula
   desc "Experimental hybrid post-quantum file and message encryption (unaudited)"
   homepage "https://github.com/hide-protocol/hide"
-  version "0.6.1"
+  version "0.6.2"
   license "Apache-2.0"
 
   on_macos do

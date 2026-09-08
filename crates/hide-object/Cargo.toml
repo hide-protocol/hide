@@ -19,9 +19,9 @@ name = "generate_vectors"
 required-features = ["test-vectors"]
 
 [dependencies]
-hide-format = { path = "../hide-format", version = "0.6.1" }
-hide-crypto = { path = "../hide-crypto", version = "0.6.1" }
-hide-sign = { path = "../hide-sign", version = "0.6.1" }
+hide-format = { path = "../hide-format", version = "0.6.2" }
+hide-crypto = { path = "../hide-crypto", version = "0.6.2" }
+hide-sign = { path = "../hide-sign", version = "0.6.2" }
 thiserror.workspace = true
 zeroize.workspace = true
 

@@ -3,6 +3,23 @@
 This project is pre-1.0. The wire format may change while the version is 0.x,
 and a format change is always called out here explicitly.
 
+## 0.6.2
+
+No format, API or packaging change. This release exists to prove the
+publishing path needs no credential: every crate and every npm package now
+authenticates to its registry with an OIDC token minted for the run.
+
+### Changed
+
+- Trusted publishing is configured for all 11 crates and all 8 npm packages,
+  including the seven platform packages. A registry name can only be *created*
+  with a real credential, so each of those needed exactly one manual publish;
+  from here on, none do.
+- The Node package is installed with `npm install` rather than `npm ci` during
+  publishing. The lockfile cannot pin a platform package at a version the same
+  run has not uploaded yet, and npm records such an optional dependency with an
+  empty version that `npm ci` then refuses.
+
 ## 0.6.1
 
 **`npm install hide-protocol` now works.** No format change, no API change:
