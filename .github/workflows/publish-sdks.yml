@@ -400,15 +400,26 @@ jobs:
         run: |
           set -euo pipefail
           npm --version
-          npm publish --access public ./sdk/wasm
+          # A rerun after a partial failure must not stop at the packages that
+          # already went out. Without ./ npm reads a bare relative path as a
+          # git shorthand and tries to clone it over ssh.
+          publish() {
+            if out=$(npm publish --access public "$1" 2>&1); then
+              echo "$out"
+            else
+              echo "$out"
+              echo "$out" | grep -q "cannot publish over the previously published" \
+                || { echo "::error::$1 failed for a reason other than being already published"; exit 1; }
+              echo "::notice::$1 is already on npm at this version"
+            fi
+          }
+          publish ./sdk/wasm
           # The platform packages must exist before the package that depends on
           # them, or the first install of hide-protocol resolves nothing.
           for dir in platform-packages/*; do
-            # Without ./ npm reads "platform-packages/darwin-arm64" as a git
-            # shorthand and tries to clone it over ssh.
-            npm publish --access public "./$dir"
+            publish "./$dir"
           done
-          npm publish --access public ./sdk/node
+          publish ./sdk/node
 
   rubygems:
     needs: [verify, native]
