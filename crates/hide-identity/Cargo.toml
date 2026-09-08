@@ -15,7 +15,7 @@ publish.workspace = true
 description = "Device enrollment, revocation and recovery for a HIDE identity. Experimental, unaudited."
 
 [dependencies]
-hide-sign = { path = "../hide-sign", version = "0.6.2" }
+hide-sign = { path = "../hide-sign", version = "0.7.0" }
 sha2.workspace = true
 zeroize.workspace = true
 thiserror.workspace = true

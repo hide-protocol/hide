@@ -15,8 +15,8 @@ publish.workspace = true
 description = "Group messaging for HIDE identities over MLS (RFC 9420). Experimental, unaudited."
 
 [dependencies]
-hide-identity = { path = "../hide-identity", version = "0.6.2" }
-hide-sign = { path = "../hide-sign", version = "0.6.2" }
+hide-identity = { path = "../hide-identity", version = "0.7.0" }
+hide-sign = { path = "../hide-sign", version = "0.7.0" }
 mls-rs.workspace = true
 mls-rs-core.workspace = true
 mls-rs-crypto-rustcrypto.workspace = true

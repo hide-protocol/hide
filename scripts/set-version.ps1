@@ -53,6 +53,7 @@ $targets = @(
     @{ Path = 'packaging/aur/PKGBUILD'; Pattern = '(?m)^pkgver=(.+)$' }
     @{ Path = 'packaging/scoop/hide.json'; Pattern = '"version": "([^"]+)"' }
     @{ Path = 'packaging/homebrew/hide.rb'; Pattern = 'version "([^"]+)"' }
+    @{ Path = 'site/index.html'; Pattern = '"softwareVersion": "([^"]+)"' }
 )
 
 # The version internal dependencies must point at. In -Check mode this is

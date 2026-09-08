@@ -1,6 +1,6 @@
 {
   "name": "@hide-protocol/wasm",
-  "version": "0.6.2",
+  "version": "0.7.0",
   "description": "HIDE in the browser via WebAssembly: hybrid post-quantum encryption (X25519 + ML-KEM-768). Experimental, unaudited.",
   "type": "module",
   "license": "Apache-2.0",

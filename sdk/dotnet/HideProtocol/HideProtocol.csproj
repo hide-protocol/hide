@@ -11,7 +11,7 @@
 
   <PropertyGroup>
     <PackageId>HideProtocol</PackageId>
-    <Version>0.6.2</Version>
+    <Version>0.7.0</Version>
     <Description>.NET binding to HIDE: hybrid post-quantum file and message encryption (X25519 + ML-KEM-768, Ed25519 + ML-DSA-65). Experimental, unaudited.</Description>
     <Authors>HIDE contributors</Authors>
     <Copyright>Copyright HIDE contributors</Copyright>

@@ -19,13 +19,13 @@ name = "hide_ffi"
 crate-type = ["cdylib", "staticlib", "rlib"]
 
 [dependencies]
-hide-crypto = { path = "../hide-crypto", version = "0.6.2" }
-hide-keyring = { path = "../hide-keyring", version = "0.6.2" }
-hide-object = { path = "../hide-object", version = "0.6.2" }
-hide-sign = { path = "../hide-sign", version = "0.6.2" }
-hide-identity = { path = "../hide-identity", version = "0.6.2" }
-hide-epoch = { path = "../hide-epoch", version = "0.6.2" }
-hide-transparency = { path = "../hide-transparency", version = "0.6.2" }
+hide-crypto = { path = "../hide-crypto", version = "0.7.0" }
+hide-keyring = { path = "../hide-keyring", version = "0.7.0" }
+hide-object = { path = "../hide-object", version = "0.7.0" }
+hide-sign = { path = "../hide-sign", version = "0.7.0" }
+hide-identity = { path = "../hide-identity", version = "0.7.0" }
+hide-epoch = { path = "../hide-epoch", version = "0.7.0" }
+hide-transparency = { path = "../hide-transparency", version = "0.7.0" }
 zeroize.workspace = true
 
 [lints.rust]

@@ -2,7 +2,7 @@
 
 Gem::Specification.new do |spec|
   spec.name = "hide-protocol"
-  spec.version = "0.6.2"
+  spec.version = "0.7.0"
   spec.summary = "Experimental hybrid post-quantum file and message encryption. Unaudited."
   spec.description =
     "Ruby bindings to the HIDE core (X25519 + ML-KEM-768). Experimental and " \

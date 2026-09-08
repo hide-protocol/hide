@@ -3,6 +3,74 @@
 This project is pre-1.0. The wire format may change while the version is 0.x,
 and a format change is always called out here explicitly.
 
+## 0.7.0
+
+**An internal security review, and everything it found, fixed.** The container
+format is unchanged for every file HIDE has ever written: all frozen vectors
+still open. Two behaviours are stricter, one API changed, and a development
+override now needs an explicit opt-in — hence a minor, not a patch.
+
+### Security
+
+Found by internal review on 2026-09-08. No third-party audit has taken place;
+see [docs/audit-status.md](docs/audit-status.md).
+
+- **MLS credentials were self-asserted.** A group member could present another
+  device's id and be attributed its messages. The credential is now a
+  HIDE-signed binding of the device id to the MLS key, verified by a custom
+  identity provider ([spec §11](spec/hide-0.1.md)). `hide_mls::client_for` now
+  takes the device's `SigningIdentity`, not its verifying key.
+- **Seven of eight signature stanzas were never verified.** `MAX_SIGNATURES` is
+  now 1 and a second stanza on the wire is refused. No known container carried
+  more than one.
+- The metadata key and its fixed nonce sealed two different plaintexts in the
+  confidential-signature path. No ciphertext was ever disclosed; the path now
+  seals exactly once.
+- Identity log decoding accepted non-canonical bytes, so one history could
+  have many encodings — and many transparency-log leaves. Decoding now
+  re-encodes and compares.
+- Key files with Argon2 memory below 8 MiB opened without complaint. They are
+  now refused.
+- The ML-DSA signing key was not zeroized on drop (`ml-dsa` feature flag).
+- `panic = "abort"` made the FFI's `HIDE_ERR_PANIC` unreachable: a panic killed
+  the host process. Release builds now unwind; verified by loading the shipped
+  library and provoking one.
+- `HIDE_LIBRARY` replaced the cryptographic core from a single environment
+  variable. It is now honoured only with `HIDE_ALLOW_LIBRARY_OVERRIDE=1`.
+- The ssh-agent read its confirmation from stdin, not the terminal; refused to
+  start without a terminal is now the rule. Its Unix socket lives in a 0700
+  directory created atomically; `--no-confirm` is refused on Windows, where
+  the named pipe cannot be restricted to the current user.
+
+### Added
+
+- `fuzz/`: six libfuzzer targets over every parser that sees untrusted bytes,
+  run on every push.
+- Nine frozen rejection vectors under `conformance/vectors/rejections/`, each
+  with its reason, refused by both the Rust and the independent Node
+  implementation.
+- `docs/`: threat model, comparison with age/GPG/libsodium/Signal/Tink/KMS,
+  use cases, FAQ, stability and versioning policy, migration from age,
+  architecture, audit status, advisories. `llms.txt` for AI agents. A GitHub
+  Pages site.
+- A README for every crate and every SDK; complete metadata on every registry.
+- Every GitHub Action pinned to a commit SHA; Dependabot keeps them current.
+
+### Changed
+
+- Signed encryption buffers its plaintext (it always did, to hash it); the
+  buffer is now zeroizing and capped at 1 GiB. The README's constant-memory
+  claim is scoped to unsigned encryption, which is what it was true for.
+- Spec: `sequence` is `u64be` (the code always was; the prose said `u32be`).
+- FFI: a signature or key of the wrong width is `HIDE_ERR_INVALID_ARGUMENT`
+  at the boundary rather than an authentication failure.
+
+### Corrected
+
+- The comparison table said age had no post-quantum option. age has offered
+  hybrid ML-KEM-768 + X25519 recipients since v1.3.0, and has a Trail of Bits
+  audit. If you need post-quantum file encryption to a key, use age.
+
 ## 0.6.2
 
 No format, API or packaging change. This release exists to prove the

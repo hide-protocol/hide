@@ -15,7 +15,7 @@ publish.workspace = true
 description = "Passphrase-sealed key files (Argon2id) and armored public keys for HIDE. Experimental, unaudited."
 
 [dependencies]
-hide-crypto = { path = "../hide-crypto", version = "0.6.2" }
+hide-crypto = { path = "../hide-crypto", version = "0.7.0" }
 hkdf.workspace = true
 sha2.workspace = true
 argon2.workspace = true

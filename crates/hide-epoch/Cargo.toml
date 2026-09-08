@@ -15,7 +15,7 @@ publish.workspace = true
 description = "Forward security by erasure for HIDE: epoch-scoped recipient keys. Experimental, unaudited."
 
 [dependencies]
-hide-crypto = { path = "../hide-crypto", version = "0.6.2" }
+hide-crypto = { path = "../hide-crypto", version = "0.7.0" }
 hkdf.workspace = true
 sha2.workspace = true
 zeroize.workspace = true
