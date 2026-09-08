@@ -34,7 +34,7 @@ These are not audits. They constrain what a bug can look like; they do not show 
 
 - 297 tests, run on Linux, Windows and macOS in CI.
 - Property tests (`proptest`): the parser never panics on arbitrary input; any single-byte mutation of a container fails to decrypt; truncation and appended bytes always fail.
-- Six libFuzzer targets under [../fuzz/fuzz_targets](../fuzz/fuzz_targets) (container header, object open, keyring open, identity log, epoch chain, transparency proofs), run in CI on every push.
+- Six libFuzzer targets under [../fuzz/fuzz_targets](../fuzz/fuzz_targets) (container header, object open, keyring open, identity log, epoch chain, transparency proofs), run in CI on every push and for four hours per target every night with a persistent corpus ([fuzz-nightly.yml](../.github/workflows/fuzz-nightly.yml)). A finding files an issue automatically. Two bugs found so far, both fixed in 0.7.0.
 - Frozen vectors under [../conformance/vectors](../conformance/vectors), including nine rejection vectors; flipping every byte position of the frozen containers is asserted to fail.
 - An independent Node implementation ([../conformance/node/verify.mjs](../conformance/node/verify.mjs)) decrypts the Rust vectors and refuses the rejection vectors.
 - Mutation testing was applied by hand to the signing and keyring code during development; results are recorded in commit messages, not in a report.

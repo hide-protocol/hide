@@ -3,6 +3,13 @@
 This project is pre-1.0. The wire format may change while the version is 0.x,
 and a format change is always called out here explicitly.
 
+## Unreleased
+
+- Nightly fuzzing: every target runs four hours in parallel, the corpus is
+  carried forward night to night and minimised, and a crash or hang files a
+  `fuzz`+`security` issue with the reproducer attached. The per-input timeout
+  is now 60 s on every run; the hang in 0.7.0 took 1201 s to be reported.
+
 ## 0.7.0
 
 **An internal security review, and everything it found, fixed.** The container
