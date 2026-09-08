@@ -404,7 +404,9 @@ jobs:
           # The platform packages must exist before the package that depends on
           # them, or the first install of hide-protocol resolves nothing.
           for dir in platform-packages/*; do
-            npm publish --access public "$dir"
+            # Without ./ npm reads "platform-packages/darwin-arm64" as a git
+            # shorthand and tries to clone it over ssh.
+            npm publish --access public "./$dir"
           done
           npm publish --access public ./sdk/node
 
