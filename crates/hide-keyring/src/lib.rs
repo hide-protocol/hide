@@ -42,6 +42,13 @@ const PARALLELISM: u32 = 1;
 /// Refuse absurd parameters from a malicious file before allocating for them.
 const MAX_MEMORY_KIB: u32 = 4 * 1024 * 1024;
 const MAX_ITERATIONS: u32 = 64;
+/// And refuse parameters so weak the passphrase is effectively unprotected. The
+/// header is authenticated, so this cannot be a downgrade of an honest file;
+/// it stops a file written by a careless or hostile implementation from
+/// opening without complaint. 8 MiB is the Argon2 RFC 9106 second recommended
+/// configuration's floor for memory-constrained environments.
+pub const MIN_MEMORY_KIB: u32 = 8 * 1024;
+pub const MIN_ITERATIONS: u32 = 1;
 
 #[derive(Debug, Error, PartialEq, Eq)]
 pub enum KeyringError {
@@ -300,7 +307,9 @@ pub fn unprotect_seed(
             .try_into()
             .map_err(|_| KeyringError::Malformed)?,
     );
-    if parallelism == 0 || memory > MAX_MEMORY_KIB || iterations == 0 || iterations > MAX_ITERATIONS
+    if parallelism == 0
+        || !(MIN_MEMORY_KIB..=MAX_MEMORY_KIB).contains(&memory)
+        || !(MIN_ITERATIONS..=MAX_ITERATIONS).contains(&iterations)
     {
         return Err(KeyringError::UnreasonableParameters);
     }
@@ -457,6 +466,19 @@ mod tests {
     fn refuses_a_file_demanding_absurd_memory() -> Result<(), KeyringError> {
         let mut sealed = protect(&secret(), "correct horse battery")?;
         sealed[10..14].copy_from_slice(&u32::MAX.to_be_bytes());
+        assert_eq!(
+            error_of(unprotect(&sealed, "correct horse battery")),
+            KeyringError::UnreasonableParameters
+        );
+        Ok(())
+    }
+
+    // The header is authenticated, so an honest file cannot be downgraded; this
+    // catches a file that was WRITTEN weak, which would otherwise open silently.
+    #[test]
+    fn refuses_a_file_written_with_too_little_memory() -> Result<(), KeyringError> {
+        let mut sealed = protect(&secret(), "correct horse battery")?;
+        sealed[10..14].copy_from_slice(&(MIN_MEMORY_KIB - 1).to_be_bytes());
         assert_eq!(
             error_of(unprotect(&sealed, "correct horse battery")),
             KeyringError::UnreasonableParameters

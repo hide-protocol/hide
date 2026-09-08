@@ -49,7 +49,9 @@ byte[] back = Hide.DearmorPublicKey(text);
 
 The managed assembly needs `hide_ffi` at runtime. It is located, in order:
 
-1. the path in the `HIDE_LIBRARY` environment variable, if it names a file;
+1. the path in the `HIDE_LIBRARY` environment variable, if it names a file and
+  `HIDE_ALLOW_LIBRARY_OVERRIDE=1` is also set (development only: it replaces
+  the cryptographic core);
 2. `hide_ffi.dll` / `libhide_ffi.dylib` / `libhide_ffi.so` beside the assembly;
 3. the platform's default probing paths.
 
@@ -58,12 +60,14 @@ To run against a local build:
 ```powershell
 cargo build -p hide-ffi
 $env:HIDE_LIBRARY = 'E:\gh\HIDE\target\debug\hide_ffi.dll'
+$env:HIDE_ALLOW_LIBRARY_OVERRIDE = '1'
 dotnet test
 ```
 
 ```bash
 cargo build -p hide-ffi
 export HIDE_LIBRARY="$PWD/target/debug/libhide_ffi.so"
+export HIDE_ALLOW_LIBRARY_OVERRIDE=1
 dotnet test
 ```
 

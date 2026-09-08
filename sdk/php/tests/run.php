@@ -6,7 +6,8 @@
  * A plain runner rather than PHPUnit: this repository is developed offline and
  * composer cannot fetch a test framework. Run it with
  *
- *     HIDE_LIBRARY=/path/to/libhide_ffi.so php -d ffi.enable=1 tests/run.php
+ *     HIDE_LIBRARY=/path/to/libhide_ffi.so HIDE_ALLOW_LIBRARY_OVERRIDE=1 \
+ *       php -d ffi.enable=1 tests/run.php
  *
  * It prints one line per test and exits non-zero if any of them failed.
  */

@@ -2130,6 +2130,7 @@ dependencies = [
  "pkcs8",
  "shake",
  "signature",
+ "zeroize",
 ]
 
 [[package]]

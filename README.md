@@ -162,8 +162,9 @@ Windows and macOS, so nothing needs a Rust toolchain. Go links it statically.
 
 Java and PHP do not ship a binary yet: build it with
 `cargo build --release -p hide-ffi` and point `HIDE_LIBRARY` (Java also accepts
-`-Dhide.library=`) at the result. The same variable overrides the bundled
-library everywhere, which is what you want when developing against a build tree.
+`-Dhide.library=`) at the result, with `HIDE_ALLOW_LIBRARY_OVERRIDE=1` set as
+well. The same pair overrides the bundled library everywhere; it is a
+development-only override, since it replaces the entire cryptographic core.
 
 Secret keys never cross into the host language: each SDK holds an opaque handle, and there is
 deliberately no function that exports key material.

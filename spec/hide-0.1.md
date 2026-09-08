@@ -31,8 +31,11 @@ stanza    = [ 1, encapsulation(1120), wrapped_cek(48) ]
 signature = [ 1, verifying_key(1984), signature(3373) ]
 ```
 
-Key 5 held an empty array in HIDE/0.1 and now carries public signatures, 0..=8 of them. An unsigned
-header still encodes `5: []`, byte-for-byte as before.
+Key 5 held an empty array in HIDE/0.1 and now carries public signatures, 0 or 1 of them. Exactly one
+signer is verified, so a decoder MUST reject a second stanza rather than skip it: a recipient could
+otherwise append stanzas that nobody checks. (HIDE/0.6 and earlier admitted up to 8 on the wire; no
+known container carries more than one.) An unsigned header still encodes `5: []`, byte-for-byte as
+before.
 
 `object_id` is random, never a hash of the plaintext. Stanzas carry no recipient identifier; a client
 trial-decapsulates and accepts a candidate CEK only after the header MAC verifies.
@@ -83,9 +86,13 @@ plaintext until FINAL verifies; write to private staging and commit atomically.
 
 ## 6. Security notes
 
-Authenticated: container structure, suite, object id, recipient set, metadata, chunk order and count,
-and end-of-stream. Not provided: identity binding, forward secrecy, recipient anonymity against
-traffic analysis, and hiding of file size or recipient count. Sender authentication is available only
+Authenticated against non-recipients: container structure, suite, object id, recipient set, metadata,
+chunk order and count, and end-of-stream. The header MAC key is derived from the CEK, which every
+recipient holds, so any recipient can rewrite the recipient set of an UNSIGNED container and
+recompute a valid MAC. A signature (§7) binds the stanza list into the transcript and closes this. Not
+provided: identity binding, forward secrecy, recipient anonymity against traffic analysis, and hiding
+of file size or recipient count. The 16-byte `payload_salt` is outside every authenticator; altering
+it changes the payload key so every record fails to open, a denial of service and nothing more. Sender authentication is available only
 when the container is signed (§7), and even then a signature attests to a key, not to a person.
 
 ## 7. Signatures (HIDE/0.5, minor 2)
@@ -142,7 +149,7 @@ which HIDE does not yet provide.
 An identity is not a key but an ordered log of events. Entry *n* is:
 
 ```
-signed  = previous(32) || sequence(u32be) || tag(1) || signer(32)
+signed  = previous(32) || sequence(u64be) || tag(1) || signer(32)
           || len(field, u64be) || field ...
 link    = SHA-256("HIDE/0.6 identity link"
                   || len(signed, u64be)    || signed

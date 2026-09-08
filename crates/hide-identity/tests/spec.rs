@@ -75,6 +75,35 @@ fn the_entry_signature_context_matches_the_spec() {
         .expect("the spec's context label and signed layout must verify");
 }
 
+/// §8: `signed = previous(32) || sequence(u64be) || tag(1) || signer(32) || fields`,
+/// each field length-prefixed with a u64be. Recomputed here from the prose, not
+/// from the implementation's own helper, so a width drift in either is caught.
+#[test]
+fn the_signed_layout_matches_the_spec_byte_for_byte() {
+    let laptop = SigningIdentity::generate().unwrap();
+    let recovery = SigningIdentity::generate().unwrap();
+    let log = IdentityLog::create(&laptop, "laptop", &recovery.verifying_key()).unwrap();
+    let entry = &log.entries()[0];
+    let previous = [0u8; 32];
+
+    let mut expected = Vec::new();
+    expected.extend_from_slice(&previous);
+    expected.extend_from_slice(&entry.sequence.to_be_bytes());
+    assert_eq!(expected.len(), 32 + 8, "sequence is u64be, eight bytes");
+    expected.push(1); // Create
+    expected.extend_from_slice(&entry.signer);
+    let (device, label) = match &entry.event {
+        hide_identity::Event::Create { device, label } => (device, label),
+        other => panic!("entry 0 is Create, got {other:?}"),
+    };
+    for field in [device.as_slice(), label.as_bytes()] {
+        expected.extend_from_slice(&(field.len() as u64).to_be_bytes());
+        expected.extend_from_slice(field);
+    }
+
+    assert_eq!(entry.signed_bytes(&previous), expected);
+}
+
 /// §8 claims `previous` is inside the signed bytes, which is what stops an
 /// entry being transplanted. Assert it literally rather than trusting the prose.
 #[test]

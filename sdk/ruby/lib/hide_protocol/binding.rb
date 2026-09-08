@@ -55,7 +55,10 @@ module Hide
       candidates = library_names.map { |name| File.join(here, name) }
 
       override = ENV["HIDE_LIBRARY"]
-      candidates.unshift(override) if override && !override.empty?
+      # HIDE_LIBRARY replaces the whole cryptographic core, so one settable env
+      # var must not be enough: it is honoured only with an explicit second opt-in.
+      allowed = ENV["HIDE_ALLOW_LIBRARY_OVERRIDE"] == "1"
+      candidates.unshift(override) if allowed && override && !override.empty?
 
       candidates.each do |candidate|
         return Fiddle.dlopen(candidate) if File.exist?(candidate)
@@ -66,8 +69,9 @@ module Hide
       rescue Fiddle::DLError
         raise LibraryNotFound,
               "the HIDE native library was not found. Install a gem that " \
-              "bundles it, or set HIDE_LIBRARY to the path of " \
-              "#{library_names.first} built by `cargo build -p hide-ffi`."
+            "bundles it. Developers: set HIDE_LIBRARY to the path of " \
+            "#{library_names.first} built by `cargo build -p hide-ffi` " \
+            "AND HIDE_ALLOW_LIBRARY_OVERRIDE=1."
       end
     end
 

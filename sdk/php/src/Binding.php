@@ -152,14 +152,18 @@ final class Binding
     }
 
     /**
-     * HIDE_LIBRARY first, then beside the package, then the system loader.
+     * HIDE_LIBRARY first (development only, requires HIDE_ALLOW_LIBRARY_OVERRIDE=1),
+     * then beside the package, then the system loader.
      */
     private static function locateLibrary(): string
     {
         $names = self::libraryNames();
 
         $override = getenv('HIDE_LIBRARY');
-        if (is_string($override) && $override !== '') {
+        // HIDE_LIBRARY replaces the whole cryptographic core, so one settable env
+        // var must not be enough: it is honoured only with an explicit second opt-in.
+        $allowed = getenv('HIDE_ALLOW_LIBRARY_OVERRIDE') === '1';
+        if ($allowed && is_string($override) && $override !== '') {
             if (!is_file($override)) {
                 throw new HideException(
                     "HIDE_LIBRARY points at {$override}, which does not exist."

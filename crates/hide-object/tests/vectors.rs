@@ -120,3 +120,47 @@ fn frozen_vectors_reject_truncation_and_tampering() -> Result<(), Box<dyn Error>
     );
     Ok(())
 }
+
+/// The frozen negative vectors: every file that `rejections.txt` names must
+/// fail, and the reason column must stay in step with the files, so an
+/// independent implementation can assert the same list.
+#[test]
+fn every_frozen_rejection_vector_is_refused() -> Result<(), Box<dyn Error>> {
+    let vectors = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../conformance/vectors");
+    let directory = vectors.join("rejections");
+    let secret = RecipientSecret::from_bytes(&fs::read(vectors.join("recipient.test-secret"))?)?;
+
+    let index = fs::read_to_string(directory.join("rejections.txt"))?;
+    let mut listed = 0;
+    for line in index
+        .lines()
+        .filter(|l| !l.starts_with('#') && !l.is_empty())
+    {
+        let (name, reason) = line.split_once('\t').expect("name<TAB>reason");
+        assert!(!reason.is_empty(), "{name} has no reason");
+        listed += 1;
+        if name.ends_with(".test-public") {
+            let bytes = fs::read(directory.join(name))?;
+            assert!(
+                hide_crypto::RecipientPublic::from_bytes(&bytes).is_err(),
+                "{name} must be refused as a recipient key: {reason}"
+            );
+            continue;
+        }
+        let container = fs::read(directory.join(format!("{name}.hide")))?;
+        let mut out = Vec::new();
+        assert!(
+            decrypt_to_staging(&mut container.as_slice(), &mut out, &secret).is_err(),
+            "{name} must be refused: {reason}"
+        );
+    }
+
+    // Every file on disk is listed, so a vector cannot be added without a reason.
+    let on_disk = fs::read_dir(&directory)?
+        .filter_map(Result::ok)
+        .filter(|e| e.file_name() != "rejections.txt")
+        .count();
+    assert_eq!(on_disk, listed, "rejections.txt and the directory disagree");
+    assert!(listed >= 9, "expected the full set of rejection vectors");
+    Ok(())
+}

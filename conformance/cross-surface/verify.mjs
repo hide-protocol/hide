@@ -19,6 +19,7 @@ import { execFileSync } from "node:child_process";
 import { webcrypto } from "node:crypto";
 import { existsSync } from "node:fs";
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
@@ -30,7 +31,9 @@ const root = join(here, "..", "..");
 
 function binary(...names) {
   for (const name of names) {
-    for (const profile of ["debug", "release"]) {
+    // Release first: it is the profile that ships, and the panic check below
+    // only means something against it.
+    for (const profile of ["release", "debug"]) {
       const path = join(root, "target", profile, name);
       if (existsSync(path)) return path;
     }
@@ -61,6 +64,7 @@ await wasm.default({
 });
 
 process.env.HIDE_LIBRARY = ffiPath;
+process.env.HIDE_ALLOW_LIBRARY_OVERRIDE = "1";
 const node = await import(
   pathToFileURL(join(root, "sdk", "node", "dist", "index.js")).href
 );
@@ -75,6 +79,20 @@ const cli = (args, options = {}) =>
 
 const results = [];
 const check = (name, condition) => results.push([name, Boolean(condition)]);
+
+// The published library promises HIDE_ERR_PANIC instead of killing its host.
+// That depends on the release profile unwinding, which `cargo test` cannot
+// see: the test harness builds its own profile. Loading the shipped artifact
+// and provoking a panic is the only check that exercises what users get.
+// A wrong profile does not fail this check — it aborts this process.
+if (ffiPath.includes("release")) {
+  const koffi = createRequire(import.meta.url)(
+    join(root, "sdk", "node", "node_modules", "koffi"),
+  );
+  const lib = koffi.load(ffiPath);
+  const panic = lib.func("int hide_test_panic()");
+  check("a panic in the release library returns HIDE_ERR_PANIC", panic() === 98);
+}
 
 // Adapters expose one interface: `<runtime> <adapter> <encrypt|decrypt> key in out`.
 // A language is exercised when its runtime is on PATH; naming it in
@@ -289,7 +307,7 @@ try {
     execFileSync(language.command, [...language.args, ...args], {
       cwd: work,
       stdio: ["ignore", "pipe", "pipe"],
-      env: { ...process.env, HIDE_LIBRARY: ffiPath },
+      env: { ...process.env, HIDE_LIBRARY: ffiPath, HIDE_ALLOW_LIBRARY_OVERRIDE: "1" },
     });
 
   for (const language of languages.filter((l) => l.available)) {

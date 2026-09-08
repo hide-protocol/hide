@@ -51,8 +51,11 @@ internal static unsafe partial class Native
         }
 
         // Developers running against a cargo build tree point this at the .dll/.so.
+        // HIDE_LIBRARY replaces the whole cryptographic core, so one settable env
+        // var must not be enough: it is honoured only with an explicit second opt-in.
+        bool allowOverride = Environment.GetEnvironmentVariable("HIDE_ALLOW_LIBRARY_OVERRIDE") == "1";
         string? over = Environment.GetEnvironmentVariable("HIDE_LIBRARY");
-        if (!string.IsNullOrEmpty(over) && File.Exists(over)
+        if (allowOverride && !string.IsNullOrEmpty(over) && File.Exists(over)
             && NativeLibrary.TryLoad(over, out IntPtr handle))
         {
             return handle;

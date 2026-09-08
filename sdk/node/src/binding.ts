@@ -46,9 +46,13 @@ function locate(): string {
       return undefined;
     }
   })();
+  // HIDE_LIBRARY replaces the whole cryptographic core, so one settable env
+  // var must not be enough: it is honoured only with an explicit second opt-in.
+  const override =
+    process.env.HIDE_ALLOW_LIBRARY_OVERRIDE === "1" ? process.env.HIDE_LIBRARY : undefined;
   const candidates = [
     // Set by developers running against a cargo build tree.
-    process.env.HIDE_LIBRARY,
+    override,
     fromPackage,
     join(here, libraryName()),
     join(here, "..", libraryName()),
@@ -60,8 +64,8 @@ function locate(): string {
   }
   throw new Error(
     `the HIDE native library (${libraryName()}) was not found. Install a ` +
-      `platform package (npm i ${platformPackage()}), or set HIDE_LIBRARY to ` +
-      "the path produced by `cargo build -p hide-ffi`.",
+      `platform package (npm i ${platformPackage()}). Developers: set HIDE_LIBRARY to ` +
+      "the path produced by `cargo build -p hide-ffi` AND HIDE_ALLOW_LIBRARY_OVERRIDE=1.",
   );
 }
 

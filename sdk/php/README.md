@@ -24,11 +24,13 @@ ordinary scripts. Either set `ffi.enable=true` in `php.ini`, or pass
 ```sh
 cargo build -p hide-ffi --release
 export HIDE_LIBRARY="$PWD/target/release/libhide_ffi.so"
+export HIDE_ALLOW_LIBRARY_OVERRIDE=1
 ```
 
 The library is located in the same order as the Python binding: `HIDE_LIBRARY`
-if it is set, then a copy sitting beside the package (`src/` or `lib/`), then
-whatever the system loader can find by name.
+if it is set and `HIDE_ALLOW_LIBRARY_OVERRIDE=1` (development only: it replaces
+the cryptographic core), then a copy sitting beside the package (`src/` or
+`lib/`), then whatever the system loader can find by name.
 
 ## Usage
 
@@ -113,7 +115,7 @@ The suite runs against the real native library. PHPUnit is deliberately not a
 dependency, so the tests run with nothing installed:
 
 ```sh
-HIDE_LIBRARY=/path/to/libhide_ffi.so php -d ffi.enable=1 tests/run.php
+HIDE_LIBRARY=/path/to/libhide_ffi.so HIDE_ALLOW_LIBRARY_OVERRIDE=1 php -d ffi.enable=1 tests/run.php
 ```
 
 It prints one line per test and exits non-zero if any failed.

@@ -47,9 +47,9 @@ jobs:
   verify:
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v7
-      - uses: dtolnay/rust-toolchain@stable
-      - uses: Swatinem/rust-cache@v2
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
       - run: cargo test --workspace --all-features
       - name: The version in the tree must match what is being published
         run: |
@@ -70,10 +70,10 @@ jobs:
     permissions:
       id-token: write
     steps:
-      - uses: actions/checkout@v7
-      - uses: dtolnay/rust-toolchain@stable
-      - uses: Swatinem/rust-cache@v2
-      - uses: rust-lang/crates-io-auth-action@v1
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
+      - uses: rust-lang/crates-io-auth-action@c6f97d42243bad5fab37ca0427f495c86d5b1a18 # v1
         id: auth
 
       # Order matters: a crate cannot be published before its dependencies.
@@ -151,9 +151,9 @@ jobs:
             target: aarch64-apple-darwin
             wheel: macosx_11_0_arm64
     steps:
-      - uses: actions/checkout@v7
-      - uses: dtolnay/rust-toolchain@stable
-      - uses: actions/setup-python@v6
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
         with:
           python-version: "3.12"
 
@@ -203,7 +203,7 @@ jobs:
           test -f dist/hide_protocol-${{ inputs.version }}-py3-none-${{ matrix.wheel }}.whl
           ls -la dist
 
-      - uses: actions/upload-artifact@v7
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: wheel-${{ matrix.target }}
           path: sdk/python/dist/*.whl
@@ -217,13 +217,13 @@ jobs:
     permissions:
       id-token: write
     steps:
-      - uses: actions/download-artifact@v8
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
         with:
           pattern: wheel-*
           path: dist
           merge-multiple: true
       - run: ls -la dist
-      - uses: pypa/gh-action-pypi-publish@release/v1
+      - uses: pypa/gh-action-pypi-publish@dc37677b2e1c63e2034f94d8a5b11f265b73ba33 # release/v1
         with:
           packages-dir: dist
 
@@ -255,11 +255,11 @@ jobs:
           - os: macos-15
             target: x86_64-apple-darwin
     steps:
-      - uses: actions/checkout@v7
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable
         with:
           targets: ${{ matrix.target }}
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
         with:
           key: native-${{ matrix.target }}
 
@@ -302,7 +302,7 @@ jobs:
           ls -la out
           test -n "$(ls -A out)"
 
-      - uses: actions/upload-artifact@v7
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: native-${{ matrix.target }}
           path: out/*
@@ -318,12 +318,12 @@ jobs:
       id-token: write
       contents: read
     steps:
-      - uses: actions/checkout@v7
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable
         with:
           targets: wasm32-unknown-unknown
-      - uses: Swatinem/rust-cache@v2
-      - uses: actions/setup-node@v7
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
         with:
           # Trusted publishing needs npm >= 11.5.1; Node 22 still bundles 10.x.
           node-version: 24
@@ -343,7 +343,7 @@ jobs:
       - name: Stage the readme and licence
         run: cp README.md LICENSE sdk/node/
 
-      - uses: actions/download-artifact@v8
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
         with:
           pattern: native-*
           path: native
@@ -372,6 +372,7 @@ jobs:
           npm install --no-audit --no-fund
           npm run build
           HIDE_LIBRARY=$GITHUB_WORKSPACE/native/native-x86_64-unknown-linux-gnu/libhide_ffi.so \
+          HIDE_ALLOW_LIBRARY_OVERRIDE=1 \
             node --test dist/index.test.js
 
       # The published loader must find the published package, not a stray copy
@@ -433,14 +434,14 @@ jobs:
     permissions:
       id-token: write
     steps:
-      - uses: actions/checkout@v7
-      - uses: dtolnay/rust-toolchain@stable
-      - uses: Swatinem/rust-cache@v2
-      - uses: ruby/setup-ruby@v1
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
+      - uses: ruby/setup-ruby@95ef2b042f9d7a56d8268cba8559e2842e2ad01b # v1
         with:
           ruby-version: "3.3"
 
-      - uses: actions/download-artifact@v8
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
         with:
           pattern: native-*
           path: native
@@ -450,6 +451,7 @@ jobs:
           set -euo pipefail
           cd sdk/ruby
           HIDE_LIBRARY=$GITHUB_WORKSPACE/native/native-x86_64-unknown-linux-gnu/libhide_ffi.so \
+          HIDE_ALLOW_LIBRARY_OVERRIDE=1 \
             ruby -Ilib -Itest test/test_hide.rb
 
       - name: Stage the licence
@@ -493,7 +495,7 @@ jobs:
       # Exchanges the run's OIDC identity for a short-lived RubyGems credential
       # and writes it where `gem push` looks. rubygems/release-gem does not fit:
       # it drives `rake release`, and this gem is built with `gem build`.
-      - uses: rubygems/configure-rubygems-credentials@v2.1.0
+      - uses: rubygems/configure-rubygems-credentials@dc5a8d8553e6ee01fc26761a49e99e733d17954a # v2.1.0
         if: '!inputs.dry_run'
       - name: Publish
         if: '!inputs.dry_run'
@@ -512,14 +514,14 @@ jobs:
     permissions:
       id-token: write
     steps:
-      - uses: actions/checkout@v7
-      - uses: dtolnay/rust-toolchain@stable
-      - uses: Swatinem/rust-cache@v2
-      - uses: actions/setup-dotnet@v5
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
+      - uses: actions/setup-dotnet@26b0ec14cb23fa6904739307f278c14f94c95bf1 # v5
         with:
           dotnet-version: "8.0"
 
-      - uses: actions/download-artifact@v8
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
         with:
           pattern: native-*
           path: native
@@ -527,6 +529,7 @@ jobs:
       - name: Run the suite against the built core
         env:
           HIDE_LIBRARY: ${{ github.workspace }}/native/native-x86_64-unknown-linux-gnu/libhide_ffi.so
+          HIDE_ALLOW_LIBRARY_OVERRIDE: "1"
         run: dotnet test sdk/dotnet --verbosity quiet
 
       # NuGet can carry every platform in one package, so unlike npm and
@@ -561,7 +564,7 @@ jobs:
 
       - name: NuGet login (OIDC -> short-lived key)
         if: '!inputs.dry_run'
-        uses: NuGet/login@v1
+        uses: NuGet/login@8d196754b4036150537f80ac539e15c2f1028841 # v1
         id: nuget-login
         with:
           # The nuget.org profile name, not a credential.

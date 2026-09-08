@@ -6,7 +6,10 @@
 //! here. What this buys is not post-quantum SSH; it is one sealed identity
 //! instead of a plaintext key sitting in `~/.ssh`.
 
-use std::io::{self, Read, Write};
+use std::{
+    fs::{File, OpenOptions},
+    io::{self, BufRead, BufReader, IsTerminal, Read, Write},
+};
 
 use ed25519_dalek::{Signer, SigningKey};
 use hide_sign::SigningIdentity;
@@ -93,17 +96,52 @@ pub trait Approver {
     fn approve(&mut self, fingerprint: &str) -> bool;
 }
 
-/// Asks on the terminal. Reads from the tty rather than stdin so that a
-/// process on the far end of the socket cannot answer its own prompt.
+/// Asks on the terminal. Reads from the controlling terminal itself rather
+/// than from standard input, so that a process on the far end of the socket
+/// cannot answer its own prompt by feeding stdin. With no terminal to ask,
+/// the answer is always no.
 pub struct AskOnTerminal;
+
+impl AskOnTerminal {
+    /// Opens the controlling terminal. Fails when the process has none, in
+    /// which case no confirmation can ever be given.
+    pub fn open_terminal() -> io::Result<File> {
+        #[cfg(unix)]
+        let path = "/dev/tty";
+        #[cfg(windows)]
+        let path = "CONIN$";
+        OpenOptions::new().read(true).write(true).open(path)
+    }
+
+    /// Refuses to construct an approver that could never say yes. Checked once
+    /// at startup so the agent fails instead of serving an oracle that denies
+    /// everything while looking healthy.
+    pub fn require_terminal() -> io::Result<Self> {
+        if !io::stdin().is_terminal() {
+            return Err(io::Error::other(
+                "standard input is not a terminal; confirmations cannot be given (pass --no-confirm to sign without asking)",
+            ));
+        }
+        Self::open_terminal().map_err(|error| {
+            io::Error::new(
+                error.kind(),
+                format!("no controlling terminal to confirm signatures on ({error})"),
+            )
+        })?;
+        Ok(Self)
+    }
+}
 
 impl Approver for AskOnTerminal {
     fn approve(&mut self, fingerprint: &str) -> bool {
         eprintln!("hide agent: a signature was requested with {fingerprint}");
         eprint!("Allow it? [y/N] ");
         let _ = io::stderr().flush();
+        let Ok(terminal) = Self::open_terminal() else {
+            return false;
+        };
         let mut answer = String::new();
-        if io::stdin().read_line(&mut answer).is_err() {
+        if BufReader::new(terminal).read_line(&mut answer).is_err() {
             return false;
         }
         matches!(answer.trim(), "y" | "Y" | "yes")

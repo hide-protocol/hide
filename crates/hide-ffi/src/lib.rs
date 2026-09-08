@@ -139,6 +139,16 @@ fn guard(body: impl FnOnce() -> i32) -> i32 {
     catch_unwind(AssertUnwindSafe(body)).unwrap_or(HIDE_ERR_PANIC)
 }
 
+/// Panics on purpose, so a test can prove the guard converts a panic into
+/// `HIDE_ERR_PANIC` in the same build profile that gets published. With
+/// `panic = "abort"` this would kill the test process instead, which is the
+/// exact failure this exists to catch. Not in the header; not for callers.
+#[doc(hidden)]
+#[unsafe(no_mangle)]
+pub extern "C" fn hide_test_panic() -> i32 {
+    guard(|| panic!("deliberate panic for the ABI guard test"))
+}
+
 /// Human-readable text for a status code. The returned string is static and
 /// must not be freed.
 #[unsafe(no_mangle)]
@@ -704,6 +714,11 @@ pub unsafe extern "C" fn hide_verify_message(
         let Some(message) = (unsafe { borrow(message, message_len, MAX_INPUT) }) else {
             return HIDE_ERR_INVALID_ARGUMENT;
         };
+        // Fixed-width inputs are an argument error at the boundary, so a caller
+        // that passed the wrong buffer learns that, not "authentication failed".
+        if signature_len != HIDE_SIGNATURE_LEN || public_key_len != HIDE_VERIFYING_KEY_LEN {
+            return HIDE_ERR_INVALID_ARGUMENT;
+        }
         let Some(signature) = (unsafe { borrow(signature, signature_len, MAX_KEY_FILE * 4) })
         else {
             return HIDE_ERR_INVALID_ARGUMENT;
@@ -817,6 +832,9 @@ pub unsafe extern "C" fn hide_challenge_accept(
         else {
             return HIDE_ERR_INVALID_ARGUMENT;
         };
+        if signature_len != HIDE_SIGNATURE_LEN || public_key_len != HIDE_VERIFYING_KEY_LEN {
+            return HIDE_ERR_INVALID_ARGUMENT;
+        }
         let Some(signature) = (unsafe { borrow(signature, signature_len, MAX_KEY_FILE * 4) })
         else {
             return HIDE_ERR_INVALID_ARGUMENT;
@@ -1027,7 +1045,11 @@ pub unsafe extern "C" fn hide_epoch_public_key(
         if hide_epoch::EpochChain::verify(&records).is_err() {
             return HIDE_ERR_AUTHENTICATION;
         }
-        let Some(record) = records.get(epoch as usize) else {
+        // `as usize` would wrap on a 32-bit target and select the wrong epoch.
+        let Ok(index) = usize::try_from(epoch) else {
+            return HIDE_ERR_INVALID_ARGUMENT;
+        };
+        let Some(record) = records.get(index) else {
             return HIDE_ERR_INVALID_ARGUMENT;
         };
         unsafe { *out = HideBuffer::from_vec(record.public_key.clone()) };
@@ -1720,7 +1742,9 @@ mod tests {
                     ptr::null(),
                     0
                 ),
-                HIDE_ERR_NOT_A_KEY
+                // A key or signature of the wrong width is an argument error,
+                // decided at the boundary before any parsing.
+                HIDE_ERR_INVALID_ARGUMENT
             );
             assert_eq!(
                 hide_challenge_answer(ptr::null(), ptr::null(), 0, &mut out),

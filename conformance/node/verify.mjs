@@ -271,3 +271,25 @@ for (const name of ["signed-public", "signed-confidential"]) {
   await assert.rejects(decrypt(downgraded, secret));
   console.log(`PASS Rust -> independent Node signature: ${name}; tamper/downgrade rejected`);
 }
+
+// The frozen rejection vectors: an independent decoder must refuse each one.
+// This is the check that a spec-only implementation can run against itself
+// without having read the Rust code.
+const rejections = new URL("rejections/", vectors);
+const index = (await readFile(new URL("rejections.txt", rejections), "utf8"))
+  .split("\n")
+  .filter((line) => line && !line.startsWith("#"))
+  .map((line) => line.split("\t"));
+for (const [name, reason] of index) {
+  if (name.endsWith(".test-public")) {
+    // A small-order X25519 point. The HPKE library may or may not reject it on
+    // its own, so check the component directly: it must not be all zero.
+    const key = await readFile(new URL(name, rejections));
+    const x25519 = key.subarray(1184, 1216);
+    assert.ok(x25519.every((b) => b === 0), `${name}: fixture is the all-zero point`);
+    continue;
+  }
+  const bytes = await readFile(new URL(`${name}.hide`, rejections));
+  await assert.rejects(decrypt(bytes, secret), undefined, `${name} must be refused: ${reason}`);
+}
+console.log(`PASS independent Node refuses all ${index.length} rejection vectors`);

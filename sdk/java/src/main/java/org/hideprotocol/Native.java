@@ -174,11 +174,17 @@ final class Native {
     }
 
     private static SymbolLookup load() {
-        String property = System.getProperty("hide.library");
-        String environment = System.getenv("HIDE_LIBRARY");
-        for (String candidate : new String[] { property, environment }) {
-            if (candidate != null && Files.exists(Path.of(candidate))) {
-                return SymbolLookup.libraryLookup(Path.of(candidate), Arena.global());
+                // Either override replaces the whole cryptographic core, so one settable
+                // property or env var must not be enough: both need an explicit second opt-in.
+                boolean allowOverride = "1".equals(System.getenv("HIDE_ALLOW_LIBRARY_OVERRIDE"))
+                                || Boolean.getBoolean("hide.allowLibraryOverride");
+                if (allowOverride) {
+                        String property = System.getProperty("hide.library");
+                        String environment = System.getenv("HIDE_LIBRARY");
+                        for (String candidate : new String[] { property, environment }) {
+                                if (candidate != null && Files.exists(Path.of(candidate))) {
+                                        return SymbolLookup.libraryLookup(Path.of(candidate), Arena.global());
+                                }
             }
         }
         for (String name : libraryNames()) {
@@ -189,8 +195,9 @@ final class Native {
             }
         }
         throw new UnsatisfiedLinkError(
-                "the HIDE native library was not found. Set -Dhide.library=<path> or "
-                        + "HIDE_LIBRARY to the file produced by `cargo build -p hide-ffi`.");
+                "the HIDE native library was not found. Developers: set -Dhide.library=<path> or "
+                        + "HIDE_LIBRARY to the file produced by `cargo build -p hide-ffi` AND "
+                        + "HIDE_ALLOW_LIBRARY_OVERRIDE=1 (or -Dhide.allowLibraryOverride=true).");
     }
 
     private static List<String> libraryNames() {

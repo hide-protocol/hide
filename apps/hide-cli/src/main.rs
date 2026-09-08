@@ -785,10 +785,12 @@ fn run_agent(
     let mut ask;
     let mut always;
     let approver: &mut dyn agent::Approver = if no_confirm {
+        transport::check_no_confirm_allowed()?;
         always = agent::ApproveEverything;
         &mut always
     } else {
-        ask = agent::AskOnTerminal;
+        ask = agent::AskOnTerminal::require_terminal()
+            .map_err(|error| format!("cannot start the agent: {error}"))?;
         &mut ask
     };
 
@@ -1011,7 +1013,20 @@ fn change_passphrase(secret_path: &Path) -> Result<()> {
     staging.flush()?;
     staging.as_file().sync_all()?;
     staging.persist(secret_path)?;
+    sync_directory(parent)?;
     eprintln!("Passphrase changed.");
+    Ok(())
+}
+
+/// Makes a completed rename durable. A renamed entry lives in the directory,
+/// and on Unix the directory has to be fsynced for the rename to survive a
+/// power loss. Windows has no equivalent and refuses to open a directory this
+/// way, so there it is a no-op.
+fn sync_directory(directory: &Path) -> Result<()> {
+    #[cfg(unix)]
+    File::open(directory)?.sync_all()?;
+    #[cfg(not(unix))]
+    let _ = directory;
     Ok(())
 }
 
@@ -1042,7 +1057,9 @@ fn write_public_file(path: &Path, bytes: &[u8]) -> Result<()> {
     staging.write_all(bytes)?;
     staging.flush()?;
     staging.as_file().sync_all()?;
+    // Overwrite is intended: this replaces the previous state of a growing log.
     staging.persist(path)?;
+    sync_directory(parent)?;
     Ok(())
 }
 

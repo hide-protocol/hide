@@ -1,0 +1,11 @@
+# name	reason
+# Every file here MUST fail to decrypt with recipient.test-secret.
+bad-magic	preamble magic does not match
+unsupported-major	major version is not 0
+header-len-overflow	header_len exceeds MAX_HEADER_LEN; refuse before allocating
+header-bit-flipped	header MAC does not verify
+final-record-bit-flipped	FINAL record tag does not verify
+truncated-before-final	stream ends before the FINAL record authenticates; no plaintext may be released
+trailing-bytes-after-final	bytes after FINAL
+payload-salt-altered	payload key derives from the altered salt; first record fails
+small-order.test-public	X25519 component is a small-order point; refuse as a recipient

@@ -2,7 +2,8 @@
 members = ["crates/*", "apps/hide-cli"]
 # The desktop app has its own workspace: it needs a built frontend before it
 # compiles, which would make `cargo test --workspace` in CI depend on Node.
-exclude = ["apps/hide-desktop/src-tauri"]
+# fuzz/ needs nightly and libfuzzer; it is its own workspace too.
+exclude = ["apps/hide-desktop/src-tauri", "fuzz"]
 resolver = "3"
 
 [workspace.package]
@@ -35,7 +36,8 @@ argon2 = { version = "=0.6.0", features = ["alloc"] }
 rpassword = "=7.5.4"
 base64 = "=0.23.1"
 ed25519-dalek = { version = "=3.0.0", default-features = false, features = ["alloc", "fast", "zeroize"] }
-ml-dsa = { version = "=0.1.1", default-features = false, features = ["alloc"] }
+# zeroize: without it the expanded ML-DSA signing key (several KiB) is not wiped on drop.
+ml-dsa = { version = "=0.1.1", default-features = false, features = ["alloc", "zeroize"] }
 interprocess = "=2.4.4"
 # RFC 9420 group messaging. No third-party audit yet, which is stated in the
 # README; HIDE adds no cryptography of its own on top.
@@ -53,7 +55,12 @@ all = "warn"
 lto = "thin"
 overflow-checks = true
 codegen-units = 1
-panic = "abort"
+# Not "abort": hide-ffi is loaded into other people's processes (a PHP worker,
+# a JVM, an IIS pool) and promises HIDE_ERR_PANIC instead of killing the host.
+# catch_unwind can only keep that promise if panics unwind. The CLI would
+# prefer abort, but Cargo has no per-package panic setting, and a smaller
+# binary is not worth an inert safety net in every published library.
+panic = "unwind"
 strip = "symbols"
 
 # Property and vector tests decrypt megabytes; optimize dependencies in debug too.

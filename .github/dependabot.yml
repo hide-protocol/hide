@@ -1,0 +1,20 @@
+# Actions are pinned to commit SHAs so a repointed tag cannot change what runs
+# with id-token: write. Dependabot is what keeps those pins from going stale.
+# Cargo dependencies are pinned with `=` because the wire format depends on
+# them; a bump there is a deliberate, tested change, so it is proposed weekly
+# rather than applied.
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    commit-message:
+      prefix: "ci(deps)"
+  - package-ecosystem: cargo
+    directory: /
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+    commit-message:
+      prefix: "build(deps)"

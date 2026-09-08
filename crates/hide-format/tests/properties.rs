@@ -1,7 +1,7 @@
 use hide_format::{
-    FormatError, MAX_HEADER_LEN, MAX_METADATA_LEN, MAX_RECIPIENTS, Metadata, PREAMBLE_LEN,
-    Preamble, ProtectedHeader, RecipientStanza, SIGNATURE_LEN, SignatureStanza, VERIFYING_KEY_LEN,
-    decode_header, encode_header,
+    FormatError, MAX_HEADER_LEN, MAX_METADATA_LEN, MAX_RECIPIENTS, MAX_SIGNATURES, Metadata,
+    PREAMBLE_LEN, Preamble, ProtectedHeader, RecipientStanza, SIGNATURE_LEN, SignatureStanza,
+    VERIFYING_KEY_LEN, decode_header, encode_header,
 };
 use proptest::prelude::*;
 
@@ -17,7 +17,7 @@ fn header() -> impl Strategy<Value = ProtectedHeader> {
         any::<[u8; 32]>(),
         prop::collection::vec(stanza(), 1..=4),
         16usize..600,
-        prop::collection::vec(signature_stanza(), 0..=2),
+        prop::collection::vec(signature_stanza(), 0..=MAX_SIGNATURES),
     )
         .prop_map(
             |(object_id, recipients, metadata_len, signatures)| ProtectedHeader {

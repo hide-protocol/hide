@@ -50,13 +50,18 @@ def _library_names() -> list[str]:
 
 
 def _load() -> ctypes.CDLL:
-    """Finds the shared library: bundled in the wheel first, then the system."""
+    """Finds the shared library: bundled in the wheel first, then the system.
+
+    HIDE_LIBRARY replaces the cryptographic core, so it is a development
+    override and is ignored unless HIDE_ALLOW_LIBRARY_OVERRIDE=1 is also set.
+    Otherwise anyone who can set one environment variable for this process
+    substitutes a library that sees every passphrase and plaintext.
+    """
     here = Path(__file__).parent
     candidates = [here / name for name in _library_names()]
 
-    # Set by developers running against a cargo build tree.
     override = os.environ.get("HIDE_LIBRARY")
-    if override:
+    if override and os.environ.get("HIDE_ALLOW_LIBRARY_OVERRIDE") == "1":
         candidates.insert(0, Path(override))
 
     for candidate in candidates:
@@ -69,8 +74,9 @@ def _load() -> ctypes.CDLL:
 
     raise ImportError(
         "the HIDE native library was not found. Install a wheel that bundles "
-        "it, or set HIDE_LIBRARY to the path of "
-        f"{_library_names()[0]} built by `cargo build -p hide-ffi`."
+        "it. Developers: set HIDE_LIBRARY to the path of "
+        f"{_library_names()[0]} built by `cargo build -p hide-ffi` AND "
+        "HIDE_ALLOW_LIBRARY_OVERRIDE=1."
     )
 
 

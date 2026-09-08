@@ -653,5 +653,12 @@ pub fn decode(bytes: &[u8]) -> Result<Vec<Entry>, IdentityError> {
     if decoder.position() != bytes.len() {
         return Err(IdentityError::Malformed);
     }
+    // One history, one encoding. A transparency log hashes these exact bytes,
+    // so two encodings of the same entries would be two different leaves. This
+    // also rejects a non-empty label smuggled into a Revoke, which the typed
+    // event has no field for and would otherwise silently drop.
+    if encode(&entries)? != bytes {
+        return Err(IdentityError::Malformed);
+    }
     Ok(entries)
 }

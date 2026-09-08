@@ -229,6 +229,33 @@ fn a_reordered_history_is_refused() {
     assert!(IdentityLog::verify(&entries, &recovery.verifying_key()).is_err());
 }
 
+// A transparency log hashes the encoded bytes, so one history must have one
+// encoding. The Revoke event carries an empty label on the wire that the typed
+// event has no field for; a decoder that accepted any string there would let
+// unlimited distinct encodings stand for the same log.
+#[test]
+fn a_non_canonical_encoding_is_refused() {
+    let (mut log, laptop, phone, _) = two_device_log();
+    log.revoke(&laptop, device_id(&phone.verifying_key()))
+        .unwrap();
+    let bytes = encode(log.entries()).unwrap();
+    assert!(decode(&bytes).is_ok(), "the canonical encoding decodes");
+
+    // The Revoke entry ends with an empty CBOR text string (0x60) right after
+    // the 32-byte device. Replace it with a one-byte string "x" (0x61 0x78).
+    let revoked = device_id(&phone.verifying_key());
+    let at = bytes
+        .windows(revoked.len() + 1)
+        .rposition(|w| w[..revoked.len()] == revoked[..] && w[revoked.len()] == 0x60)
+        .expect("the revoke payload is followed by an empty label")
+        + revoked.len();
+    let mut smuggled = bytes[..at].to_vec();
+    smuggled.extend_from_slice(&[0x61, b'x']);
+    smuggled.extend_from_slice(&bytes[at + 1..]);
+
+    assert_eq!(decode(&smuggled), Err(IdentityError::Malformed));
+}
+
 #[test]
 fn a_removed_entry_is_refused() {
     // Dropping the revocation would silently restore a revoked device.

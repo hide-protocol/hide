@@ -262,6 +262,17 @@ pub fn random_array<const LENGTH: usize>() -> Result<[u8; LENGTH], CryptoError> 
     Ok(*bytes)
 }
 
+/// A purpose-bound key derived from the content key; not Debug or Clone.
+///
+/// ```compile_fail,E0277
+/// fn requires_debug<T: core::fmt::Debug>() {}
+/// requires_debug::<hide_crypto::DerivedKey>();
+/// ```
+///
+/// ```compile_fail,E0277
+/// fn requires_clone<T: Clone>() {}
+/// requires_clone::<hide_crypto::DerivedKey>();
+/// ```
 pub struct DerivedKey(Zeroizing<[u8; KEY_LENGTH]>);
 
 /// Keeps one expanded AEAD instance so streaming does not rekey per chunk.

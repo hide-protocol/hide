@@ -12,7 +12,9 @@ pub const MAX_HEADER_LEN: usize = 1024 * 1024;
 pub const CHUNK_LEN: usize = 65_536;
 pub const SUITE: u16 = 1;
 pub const MAX_RECIPIENTS: usize = 64;
-pub const MAX_SIGNATURES: usize = 8;
+/// Exactly one signer is verified, so exactly one stanza is admitted. Allowing
+/// more would let a recipient append stanzas nobody checks.
+pub const MAX_SIGNATURES: usize = 1;
 pub const MAX_METADATA_LEN: usize = 262_144;
 pub const TAG_LEN: usize = 16;
 

@@ -28,7 +28,7 @@ fn identity() -> (IdentityLog, SigningIdentity, SigningIdentity) {
 #[test]
 fn a_trusted_device_gets_a_client() {
     let (log, laptop, _) = identity();
-    assert!(client_for(&log.membership(), laptop.verifying_key()).is_ok());
+    assert!(client_for(&log.membership(), &laptop).is_ok());
 }
 
 #[test]
@@ -36,7 +36,7 @@ fn a_device_the_identity_does_not_know_is_refused() {
     let (log, _, _) = identity();
     let stranger = key();
     assert!(matches!(
-        client_for(&log.membership(), stranger.verifying_key()),
+        client_for(&log.membership(), &stranger),
         Err(MlsError::UntrustedDevice)
     ));
 }
@@ -48,7 +48,7 @@ fn a_revoked_device_can_no_longer_get_a_client() {
         .unwrap();
 
     assert!(matches!(
-        client_for(&log.membership(), phone.verifying_key()),
+        client_for(&log.membership(), &phone),
         Err(MlsError::UntrustedDevice)
     ));
 }
@@ -56,8 +56,8 @@ fn a_revoked_device_can_no_longer_get_a_client() {
 #[test]
 fn two_devices_exchange_a_message() {
     let (log, laptop, phone) = identity();
-    let alice = client_for(&log.membership(), laptop.verifying_key()).unwrap();
-    let bob = client_for(&log.membership(), phone.verifying_key()).unwrap();
+    let alice = client_for(&log.membership(), &laptop).unwrap();
+    let bob = client_for(&log.membership(), &phone).unwrap();
 
     let mut group = alice
         .create_group(Default::default(), Default::default(), None)
@@ -92,8 +92,8 @@ fn two_devices_exchange_a_message() {
 #[test]
 fn a_revoked_device_is_reported_as_stale_group_membership() {
     let (mut log, laptop, phone) = identity();
-    let alice = client_for(&log.membership(), laptop.verifying_key()).unwrap();
-    let bob = client_for(&log.membership(), phone.verifying_key()).unwrap();
+    let alice = client_for(&log.membership(), &laptop).unwrap();
+    let bob = client_for(&log.membership(), &phone).unwrap();
 
     let mut group = alice
         .create_group(Default::default(), Default::default(), None)
@@ -130,8 +130,8 @@ fn a_revoked_device_is_reported_as_stale_group_membership() {
 #[test]
 fn a_message_from_a_revoked_device_is_rejected() {
     let (mut log, laptop, phone) = identity();
-    let alice = client_for(&log.membership(), laptop.verifying_key()).unwrap();
-    let bob = client_for(&log.membership(), phone.verifying_key()).unwrap();
+    let alice = client_for(&log.membership(), &laptop).unwrap();
+    let bob = client_for(&log.membership(), &phone).unwrap();
 
     let mut group = alice
         .create_group(Default::default(), Default::default(), None)
@@ -173,8 +173,8 @@ fn a_message_from_a_revoked_device_is_rejected() {
 #[test]
 fn the_sender_device_is_recoverable_from_a_message() {
     let (log, laptop, phone) = identity();
-    let alice = client_for(&log.membership(), laptop.verifying_key()).unwrap();
-    let bob = client_for(&log.membership(), phone.verifying_key()).unwrap();
+    let alice = client_for(&log.membership(), &laptop).unwrap();
+    let bob = client_for(&log.membership(), &phone).unwrap();
 
     let mut group = alice
         .create_group(Default::default(), Default::default(), None)
@@ -207,8 +207,8 @@ fn the_sender_device_is_recoverable_from_a_message() {
 #[test]
 fn a_message_round_trips_through_its_encoding() {
     let (log, laptop, phone) = identity();
-    let alice = client_for(&log.membership(), laptop.verifying_key()).unwrap();
-    let bob = client_for(&log.membership(), phone.verifying_key()).unwrap();
+    let alice = client_for(&log.membership(), &laptop).unwrap();
+    let bob = client_for(&log.membership(), &phone).unwrap();
 
     let mut group = alice
         .create_group(Default::default(), Default::default(), None)
@@ -242,8 +242,8 @@ fn a_message_round_trips_through_its_encoding() {
 #[test]
 fn a_corrupted_message_is_refused() {
     let (log, laptop, phone) = identity();
-    let alice = client_for(&log.membership(), laptop.verifying_key()).unwrap();
-    let bob = client_for(&log.membership(), phone.verifying_key()).unwrap();
+    let alice = client_for(&log.membership(), &laptop).unwrap();
+    let bob = client_for(&log.membership(), &phone).unwrap();
 
     let mut group = alice
         .create_group(Default::default(), Default::default(), None)
@@ -281,4 +281,102 @@ fn a_corrupted_message_is_refused() {
 fn the_pq_status_is_stated_and_says_group_messages_are_classical() {
     assert!(hide_mls::PQ_STATUS.contains("not post-quantum"));
     assert!(hide_mls::PQ_STATUS.contains("Internet-Draft"));
+}
+
+/// Builds an MLS client that presents an arbitrary credential, bypassing
+/// `client_for`. This is what an attacker who controls their own client does.
+/// It advertises the HIDE credential type like an honest client would, so the
+/// group cannot refuse it on capabilities alone — only the binding check can.
+fn rogue_client(
+    membership: &hide_identity::Membership,
+    credential: mls_rs::identity::Credential,
+) -> mls_rs::Client<impl mls_rs::client_builder::MlsConfig + use<>> {
+    use mls_rs::{CipherSuite, CryptoProvider};
+    use mls_rs_core::crypto::CipherSuiteProvider;
+    let crypto = mls_rs_crypto_rustcrypto::RustCryptoProvider::default();
+    let suite = CipherSuite::CURVE25519_AES128;
+    let provider = crypto.cipher_suite_provider(suite).unwrap();
+    let (secret, public) = provider.signature_key_generate().unwrap();
+    mls_rs::Client::builder()
+        .identity_provider(hide_mls::HideIdentityProvider::new(membership.clone()))
+        .crypto_provider(crypto)
+        .signing_identity(
+            mls_rs::identity::SigningIdentity::new(credential, public),
+            secret,
+            suite,
+        )
+        .build()
+}
+
+/// The attack this crate must stop: Mallory, who is nobody in the identity,
+/// builds a key package whose credential simply NAMES Alice's laptop. Under a
+/// self-asserted credential she would be admitted and every message she sent
+/// would be attributed to Alice. The binding signature makes that impossible:
+/// she does not hold the laptop's HIDE signing key.
+#[test]
+fn a_credential_that_merely_names_a_trusted_device_is_refused() {
+    let (log, laptop, _) = identity();
+    let alice = client_for(&log.membership(), &laptop).unwrap();
+    let mut group = alice
+        .create_group(Default::default(), Default::default(), None)
+        .unwrap();
+
+    let laptop_id = device_id(&laptop.verifying_key());
+    let mallory = rogue_client(
+        &log.membership(),
+        mls_rs::identity::basic::BasicCredential::new(laptop_id.to_vec()).into_credential(),
+    );
+    let kp = mallory
+        .generate_key_package_message(Default::default(), Default::default(), None)
+        .unwrap();
+
+    // Leaf validation runs when the commit is built, not when the member is
+    // staged; either error is a refusal.
+    let refused = match group.commit_builder().add_member(kp) {
+        Err(_) => true,
+        Ok(builder) => builder.build().is_err(),
+    };
+    assert!(
+        refused,
+        "a bare device id is not a HIDE credential and must not be admitted"
+    );
+}
+
+/// A subtler forgery: Mallory copies Alice's REAL credential bytes (device id,
+/// verifying key, binding signature) out of a key package she has seen, and
+/// attaches them to her own MLS key. The binding signature covers the MLS key,
+/// so it does not verify for hers.
+#[test]
+fn a_real_credential_transplanted_onto_another_mls_key_is_refused() {
+    let (log, laptop, phone) = identity();
+    let alice = client_for(&log.membership(), &laptop).unwrap();
+    let bob = client_for(&log.membership(), &phone).unwrap();
+    let mut group = alice
+        .create_group(Default::default(), Default::default(), None)
+        .unwrap();
+
+    // Bob's genuine credential, as any observer of his key package sees it.
+    let bobs_kp = bob
+        .generate_key_package_message(Default::default(), Default::default(), None)
+        .unwrap();
+    let bobs_credential = bobs_kp
+        .as_key_package()
+        .unwrap()
+        .signing_identity()
+        .credential
+        .clone();
+
+    let mallory = rogue_client(&log.membership(), bobs_credential);
+    let kp = mallory
+        .generate_key_package_message(Default::default(), Default::default(), None)
+        .unwrap();
+
+    let refused = match group.commit_builder().add_member(kp) {
+        Err(_) => true,
+        Ok(builder) => builder.build().is_err(),
+    };
+    assert!(
+        refused,
+        "a binding for one MLS key must not admit a different MLS key"
+    );
 }

@@ -194,6 +194,14 @@ fn a_c_program_links_against_the_header_and_round_trips() {
     );
 }
 
+/// The header promises HIDE_ERR_PANIC rather than a dead host process. That is
+/// only true if panics unwind, which is a profile setting nothing else tests.
+/// Run with `--release` in CI so it checks the profile that gets published.
+#[test]
+fn a_panic_inside_the_library_becomes_an_error_code_not_an_abort() {
+    assert_eq!(hide_ffi::hide_test_panic(), hide_ffi::HIDE_ERR_PANIC);
+}
+
 const PROGRAM: &str = r#"
 #include "hide.h"
 #include <stdio.h>
@@ -249,10 +257,15 @@ int main(void) {
   /* A single flipped byte must be refused, with no plaintext produced. */
   container.data[container.len - 1] ^= 1;
   HideBuffer nothing = hide_buffer_empty();
-  CHECK(hide_decrypt(container.data, container.len, secret, &nothing, NULL,
-                     NULL) != HIDE_OK,
+    HideBuffer no_name = hide_buffer_empty();
+    HideBuffer no_type = hide_buffer_empty();
+    CHECK(hide_decrypt(container.data, container.len, secret, &nothing, &no_name,
+                                         &no_type) != HIDE_OK,
         "tampering accepted");
   CHECK(nothing.data == NULL, "published unverified plaintext");
+    /* The header says every out-param is untouched on error: all three. */
+    CHECK(no_name.data == NULL && no_name.len == 0, "filename written on error");
+    CHECK(no_type.data == NULL && no_type.len == 0, "media type written on error");
 
   /* Protected keys. */
   HideBuffer sealed = hide_buffer_empty();

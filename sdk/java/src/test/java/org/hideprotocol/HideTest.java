@@ -10,7 +10,8 @@ import java.util.List;
  * build tool into the repository. Run with:
  *
  * <pre>
- * java --enable-native-access=ALL-UNNAMED -Dhide.library=&lt;path&gt; HideTest.java
+ * java --enable-native-access=ALL-UNNAMED -Dhide.library=&lt;path&gt; \
+ *      -Dhide.allowLibraryOverride=true HideTest.java
  * </pre>
  */
 public final class HideTest {

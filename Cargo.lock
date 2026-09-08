@@ -1274,6 +1274,7 @@ dependencies = [
  "pkcs8 0.11.0",
  "shake",
  "signature 3.0.0",
+ "zeroize",
 ]
 
 [[package]]

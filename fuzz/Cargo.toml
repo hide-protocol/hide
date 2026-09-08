@@ -1,0 +1,68 @@
+[package]
+name = "hide-fuzz"
+version = "0.0.0"
+publish = false
+edition = "2024"
+
+[package.metadata]
+cargo-fuzz = true
+
+# Deliberately outside the workspace: libfuzzer needs nightly and a sanitizer
+# build, neither of which belongs in `cargo test --workspace`.
+[workspace]
+
+[dependencies]
+libfuzzer-sys = "0.4"
+hide-format = { path = "../crates/hide-format" }
+hide-object = { path = "../crates/hide-object" }
+hide-crypto = { path = "../crates/hide-crypto" }
+hide-keyring = { path = "../crates/hide-keyring" }
+hide-identity = { path = "../crates/hide-identity" }
+hide-sign = { path = "../crates/hide-sign" }
+hide-epoch = { path = "../crates/hide-epoch" }
+hide-transparency = { path = "../crates/hide-transparency" }
+
+[[bin]]
+name = "format_header"
+path = "fuzz_targets/format_header.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "object_open"
+path = "fuzz_targets/object_open.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "keyring_open"
+path = "fuzz_targets/keyring_open.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "identity_log"
+path = "fuzz_targets/identity_log.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "epoch_chain"
+path = "fuzz_targets/epoch_chain.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "transparency_proofs"
+path = "fuzz_targets/transparency_proofs.rs"
+test = false
+doc = false
+bench = false
+
+[profile.release]
+debug = 1

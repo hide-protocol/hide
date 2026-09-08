@@ -430,6 +430,49 @@ mod tests {
         assert_eq!(header.encode(), Err(FormatError::MalformedHeader));
     }
 
+    // Only the first stanza is ever verified, so a second one on the wire would
+    // be a signature nobody checks. The decoder must refuse it, not skip it.
+    #[test]
+    fn a_second_signature_stanza_is_refused_on_the_wire() -> Result<(), FormatError> {
+        let stanza = SignatureStanza {
+            verifying_key: vec![6; VERIFYING_KEY_LEN],
+            signature: vec![7; SIGNATURE_LEN],
+        };
+        let one = ProtectedHeader {
+            signatures: vec![stanza.clone()],
+            ..header()
+        }
+        .encode()?;
+        assert!(ProtectedHeader::decode(&one).is_ok());
+
+        // The signature array is the last field, so its CBOR head is the last
+        // `array(1)` marker before the stanza. Rewrite it to `array(2)` and
+        // append a copy of the stanza, which is what encode() refuses to do.
+        let mut single = Encoder::new(Vec::new());
+        single
+            .array(3)?
+            .u8(1)?
+            .bytes(&stanza.verifying_key)?
+            .bytes(&stanza.signature)?;
+        let encoded_stanza = single.into_writer();
+        let stanza_at = one.len() - encoded_stanza.len();
+        assert_eq!(&one[stanza_at..], encoded_stanza.as_slice());
+        assert_eq!(
+            one[stanza_at - 1],
+            0x81,
+            "array(1) head precedes the stanza"
+        );
+        let mut two = one.clone();
+        two[stanza_at - 1] = 0x82;
+        two.extend_from_slice(&encoded_stanza);
+
+        assert_eq!(
+            ProtectedHeader::decode(&two),
+            Err(FormatError::MalformedHeader)
+        );
+        Ok(())
+    }
+
     #[test]
     fn metadata_has_exact_encoding() -> Result<(), FormatError> {
         let metadata = Metadata {

@@ -15,6 +15,9 @@ use zeroize::Zeroizing;
 const DATA: u8 = 1;
 const FINAL: u8 = 2;
 const MAX_CHUNKS: u64 = 1 << 32;
+/// A signed encrypt must hold the whole plaintext to hash it, so it is the one
+/// path that cannot stream. Unsigned encryption has no such limit.
+pub const MAX_SIGNED_INPUT: u64 = 1 << 30;
 const RECORD_LEN: usize = CHUNK_LEN + TAG_LEN;
 const CHUNK_AAD_LEN: usize = 91;
 const SIGNING_CONTEXT: &[u8] = b"HIDE/0.5 container";
@@ -198,11 +201,17 @@ fn encrypt_inner<R: Read, W: Write>(
 ) -> Result<u64, ObjectError> {
     // Signing needs the plaintext hash, which is only known once the payload has
     // been consumed, so the container is built in memory and written at the end.
-    let mut plaintext = Vec::new();
+    // Bounded, because a signed encrypt is the one path that cannot stream.
+    let mut plaintext = Zeroizing::new(Vec::new());
     let (metadata, plaintext_hash, plaintext_len) = match signer {
         None => (metadata.clone(), None, None),
         Some(_) => {
-            input.read_to_end(&mut plaintext)?;
+            input
+                .take(MAX_SIGNED_INPUT + 1)
+                .read_to_end(&mut plaintext)?;
+            if plaintext.len() as u64 > MAX_SIGNED_INPUT {
+                return Err(ObjectError::ObjectTooLarge);
+            }
             let hash = hide_crypto::hash(&[&plaintext]);
             (metadata.clone(), Some(hash), Some(plaintext.len() as u64))
         }
@@ -211,19 +220,14 @@ fn encrypt_inner<R: Read, W: Write>(
     let metadata_key =
         hide_crypto::derive_key(&material.cek, &material.object_id, b"HIDE/0.1 metadata")?;
 
-    // Built twice when signing: once without the signature to obtain the signing
-    // base, then again with it. The base is what both placements commit to.
+    // The signing base is the metadata without any signature; both placements
+    // commit to it. It is only hashed into the transcript, never sealed on its
+    // own: the metadata key and its fixed nonce must encrypt exactly one thing.
     let base_metadata = Zeroizing::new(metadata.signing_base()?);
-    let base_encrypted_metadata = hide_crypto::seal(
-        &metadata_key,
-        &[0; 12],
-        &metadata_aad(&material.object_id),
-        &base_metadata,
-    )?;
     let mut header = ProtectedHeader {
         object_id: material.object_id,
         recipients,
-        encrypted_metadata: base_encrypted_metadata,
+        encrypted_metadata: Vec::new(),
         signatures: Vec::new(),
     };
 
@@ -242,22 +246,20 @@ fn encrypt_inner<R: Read, W: Write>(
         };
         match placement {
             SignaturePlacement::Public => header.signatures.push(stanza),
-            SignaturePlacement::Confidential => {
-                metadata.signature = Some(stanza);
-                // The metadata changed, so its ciphertext must be rebuilt. The
-                // signing base above deliberately used the unsigned metadata.
-                let sealed = Zeroizing::new(metadata.encode()?);
-                header.encrypted_metadata = hide_crypto::seal(
-                    &metadata_key,
-                    &[0; 12],
-                    &metadata_aad(&material.object_id),
-                    &sealed,
-                )?;
-            }
+            SignaturePlacement::Confidential => metadata.signature = Some(stanza),
             #[cfg(feature = "test-vectors")]
             SignaturePlacement::Stripped => drop(stanza),
         }
     }
+
+    // Exactly one seal under the metadata key, whichever placement was chosen.
+    let final_metadata = Zeroizing::new(metadata.encode()?);
+    header.encrypted_metadata = hide_crypto::seal(
+        &metadata_key,
+        &[0; 12],
+        &metadata_aad(&material.object_id),
+        &final_metadata,
+    )?;
 
     let signed = signer.is_some();
     let protected = header.encode()?;

@@ -24,7 +24,8 @@ installing it needs no compiler and adds no runtime gem dependency.
 
 The native library is found in this order:
 
-1. `HIDE_LIBRARY`, if set — the full path to the shared library.
+1. `HIDE_LIBRARY`, if set AND `HIDE_ALLOW_LIBRARY_OVERRIDE=1` — the full path to
+  the shared library. Development only: it replaces the cryptographic core.
 2. Beside the gem, in `lib/hide_protocol/`, where the release workflow puts it.
 3. The system loader.
 
@@ -37,18 +38,20 @@ Platform names are `hide_ffi.dll` on Windows, `libhide_ffi.dylib` on macOS and
 cargo build -p hide-ffi
 ```
 
-Then point `HIDE_LIBRARY` at the result:
+Then point `HIDE_LIBRARY` at the result and enable the override:
 
 ```sh
 # Linux
 export HIDE_LIBRARY="$PWD/target/debug/libhide_ffi.so"
 # macOS
 export HIDE_LIBRARY="$PWD/target/debug/libhide_ffi.dylib"
+export HIDE_ALLOW_LIBRARY_OVERRIDE=1
 ```
 
 ```powershell
 # Windows
 $env:HIDE_LIBRARY = "$PWD\target\debug\hide_ffi.dll"
+$env:HIDE_ALLOW_LIBRARY_OVERRIDE = "1"
 ```
 
 ## Use
@@ -169,7 +172,7 @@ not a recipient), `NotAKeyError`, `TooLargeError`, `ClosedKeyError`,
 ## Tests
 
 ```sh
-HIDE_LIBRARY=/path/to/libhide_ffi.so ruby -Ilib -Itest test/test_hide.rb
+HIDE_LIBRARY=/path/to/libhide_ffi.so HIDE_ALLOW_LIBRARY_OVERRIDE=1 ruby -Ilib -Itest test/test_hide.rb
 ```
 
 ## Licence

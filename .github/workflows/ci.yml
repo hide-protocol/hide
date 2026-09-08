@@ -26,11 +26,11 @@ jobs:
   lint:
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v7
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable
         with:
           components: clippy, rustfmt
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
       - run: cargo fmt --all --check
       - run: cargo clippy --workspace --all-targets --all-features -- -D warnings
       # The version lives in 22 files across seven ecosystems. A missed manifest
@@ -47,9 +47,9 @@ jobs:
         os: [ubuntu-24.04, windows-2025, macos-15]
     runs-on: ${{ matrix.os }}
     steps:
-      - uses: actions/checkout@v7
-      - uses: dtolnay/rust-toolchain@stable
-      - uses: Swatinem/rust-cache@v2
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
       - run: cargo test --workspace --all-features
 
   # The desktop app is outside the cargo workspace, so it needs its own job.
@@ -59,11 +59,11 @@ jobs:
     needs: lint
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v7
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable
         with:
           components: clippy, rustfmt
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
         with:
           workspaces: apps/hide-desktop/src-tauri
           key: desktop
@@ -96,33 +96,33 @@ jobs:
     needs: lint
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v7
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable
         with:
           targets: wasm32-unknown-unknown
-      - uses: Swatinem/rust-cache@v2
-      - uses: actions/setup-node@v7
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
         with:
           node-version: 22
-      - uses: actions/setup-python@v6
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
         with:
           python-version: "3.12"
-      - uses: actions/setup-go@v6
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
         with:
           go-version: "1.24"
-      - uses: actions/setup-java@v5
+      - uses: actions/setup-java@b6effb05e454b25005698d916606bdc6ffcbf961 # v5
         with:
           distribution: temurin
           java-version: "22"
-      - uses: ruby/setup-ruby@v1
+      - uses: ruby/setup-ruby@95ef2b042f9d7a56d8268cba8559e2842e2ad01b # v1
         with:
           ruby-version: "3.3"
-      - uses: shivammathur/setup-php@v2
+      - uses: shivammathur/setup-php@f3e473d116dcccaddc5834248c87452386958240 # v2
         with:
           php-version: "8.3"
           extensions: ffi
           ini-values: ffi.enable=1
-      - uses: actions/setup-dotnet@v5
+      - uses: actions/setup-dotnet@26b0ec14cb23fa6904739307f278c14f94c95bf1 # v5
         with:
           dotnet-version: "8.0"
 
@@ -132,6 +132,7 @@ jobs:
       - name: Python
         env:
           HIDE_LIBRARY: ${{ github.workspace }}/target/debug/libhide_ffi.so
+          HIDE_ALLOW_LIBRARY_OVERRIDE: "1"
           PYTHONPATH: ${{ github.workspace }}/sdk/python/src
         run: |
           python -m pip install --quiet pytest
@@ -140,6 +141,7 @@ jobs:
       - name: Node
         env:
           HIDE_LIBRARY: ${{ github.workspace }}/target/debug/libhide_ffi.so
+          HIDE_ALLOW_LIBRARY_OVERRIDE: "1"
         working-directory: sdk/node
         run: |
           npm ci
@@ -161,23 +163,27 @@ jobs:
           javac -d target/java-classes $(find sdk/java/src -name '*.java')
           java --enable-native-access=ALL-UNNAMED \
                -Dhide.library="$PWD/target/debug/libhide_ffi.so" \
+               -Dhide.allowLibraryOverride=true \
                -cp target/java-classes org.hideprotocol.HideTest
 
       - name: Ruby
         env:
           HIDE_LIBRARY: ${{ github.workspace }}/target/debug/libhide_ffi.so
+          HIDE_ALLOW_LIBRARY_OVERRIDE: "1"
         working-directory: sdk/ruby
         run: ruby -Ilib -Itest test/test_hide.rb
 
       - name: PHP
         env:
           HIDE_LIBRARY: ${{ github.workspace }}/target/debug/libhide_ffi.so
+          HIDE_ALLOW_LIBRARY_OVERRIDE: "1"
         working-directory: sdk/php
         run: php -d ffi.enable=1 tests/run.php
 
       - name: .NET
         env:
           HIDE_LIBRARY: ${{ github.workspace }}/target/debug/libhide_ffi.so
+          HIDE_ALLOW_LIBRARY_OVERRIDE: "1"
         working-directory: sdk/dotnet
         run: dotnet test --verbosity quiet
 
@@ -211,10 +217,10 @@ jobs:
     needs: lint
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v7
-      - uses: dtolnay/rust-toolchain@stable
-      - uses: Swatinem/rust-cache@v2
-      - uses: actions/setup-node@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
         with:
           node-version: 22
       - run: cargo test -p hide-object --test vectors
@@ -227,9 +233,9 @@ jobs:
     needs: lint
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v7
-      - uses: dtolnay/rust-toolchain@1.85.0
-      - uses: Swatinem/rust-cache@v2
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: dtolnay/rust-toolchain@3230091d7ef9483f601620abacc570c22cf44d22 # 1.85.0
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
         with:
           key: msrv
       - run: cargo check --workspace --all-features
@@ -237,10 +243,52 @@ jobs:
   supply-chain:
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       # rustsec/audit-check compiles cargo-audit from source on every run,
       # which was 189s of the 190s job. This installs a prebuilt binary.
-      - uses: taiki-e/install-action@v2
+      - uses: taiki-e/install-action@d438492cf8a250514fa2d34b30bc3c0dc37c65ff # v2
         with:
           tool: cargo-audit
       - run: cargo audit --deny warnings
+
+  # Coverage-guided fuzzing of every parser that sees attacker bytes. Short on
+  # every push so a regression that panics on malformed input is caught the
+  # same day; the corpus under fuzz/corpus is what makes even 30 s meaningful.
+  fuzz:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable
+        with:
+          toolchain: nightly
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
+        with:
+          workspaces: fuzz
+      - uses: taiki-e/install-action@d438492cf8a250514fa2d34b30bc3c0dc37c65ff # v2
+        with:
+          tool: cargo-fuzz
+      - name: Seed each corpus with the frozen vectors
+        run: |
+          set -euo pipefail
+          mkdir -p fuzz/corpus/{format_header,object_open,keyring_open,identity_log,epoch_chain,transparency_proofs}
+          cp conformance/vectors/*.hide fuzz/corpus/format_header/
+          cp conformance/vectors/*.hide fuzz/corpus/object_open/
+          cp conformance/vectors/*.test-secret conformance/vectors/*.test-seed fuzz/corpus/keyring_open/
+          cp conformance/vectors/subsystems/identity-*.bin fuzz/corpus/identity_log/
+          cp conformance/vectors/subsystems/epoch-*.bin fuzz/corpus/epoch_chain/
+          cp conformance/vectors/subsystems/*root*.bin fuzz/corpus/transparency_proofs/
+      - name: Fuzz every target for 45 seconds
+        working-directory: fuzz
+        run: |
+          set -euo pipefail
+          for target in format_header object_open keyring_open identity_log epoch_chain transparency_proofs; do
+            echo "::group::$target"
+            cargo fuzz run "$target" -- -max_total_time=45 -rss_limit_mb=2048
+            echo "::endgroup::"
+          done
+      - name: Keep any crash as an artifact
+        if: failure()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: fuzz-artifacts
+          path: fuzz/artifacts
