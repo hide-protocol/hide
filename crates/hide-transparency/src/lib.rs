@@ -78,21 +78,20 @@ fn root_of(leaves: &[Hash]) -> Hash {
         0 => Sha256::digest(b"").into(),
         1 => leaves[0],
         n => {
-            let split = largest_power_of_two_below(n);
+            let split = largest_power_of_two_below(n as u64) as usize;
             node_hash(&root_of(&leaves[..split]), &root_of(&leaves[split..]))
         }
     }
 }
 
 /// RFC 6962 splits at the largest power of two strictly less than `n`, which is
-/// what makes a tree's shape depend only on its size.
-fn largest_power_of_two_below(n: usize) -> usize {
+/// what makes a tree's shape depend only on its size. Computed from the bit
+/// length rather than by shifting a probe upward: for `n > 2^63` the probe
+/// wraps to zero and a shift loop never terminates, and `n` comes from an
+/// untrusted proof.
+fn largest_power_of_two_below(n: u64) -> u64 {
     debug_assert!(n > 1);
-    let mut split = 1;
-    while split << 1 < n {
-        split <<= 1;
-    }
-    split
+    1 << (n - 1).ilog2()
 }
 
 /// Proof that one entry is in the log at a given size.
@@ -201,7 +200,7 @@ fn collect_inclusion(leaves: &[Hash], index: usize, path: &mut Vec<Hash>) {
     if leaves.len() <= 1 {
         return;
     }
-    let split = largest_power_of_two_below(leaves.len());
+    let split = largest_power_of_two_below(leaves.len() as u64) as usize;
     if index < split {
         collect_inclusion(&leaves[..split], index, path);
         path.push(root_of(&leaves[split..]));
@@ -220,7 +219,7 @@ fn collect_consistency(leaves: &[Hash], old: usize, complete: bool, path: &mut V
         }
         return;
     }
-    let split = largest_power_of_two_below(leaves.len());
+    let split = largest_power_of_two_below(leaves.len() as u64) as usize;
     if old <= split {
         collect_consistency(&leaves[..split], old, complete, path);
         path.push(root_of(&leaves[split..]));
@@ -250,7 +249,7 @@ pub fn verify_inclusion(proof: &InclusionProof, leaf: &Hash, root: &Hash) -> Res
     let mut index = proof.index;
     let mut size = proof.size;
     while size > 1 {
-        let split = largest_power_of_two_below(size as usize) as u64;
+        let split = largest_power_of_two_below(size);
         if index < split {
             turns.push(true);
             size = split;
@@ -314,7 +313,7 @@ pub fn verify_consistency(
     let mut new_size = proof.new_size;
     let mut complete = true;
     while old_size != new_size {
-        let split = largest_power_of_two_below(new_size as usize) as u64;
+        let split = largest_power_of_two_below(new_size);
         if old_size <= split {
             turns.push(true);
             new_size = split;

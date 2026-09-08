@@ -32,6 +32,12 @@ see [docs/audit-status.md](docs/audit-status.md).
 - Epoch chain decoding had the same gap. **Found by the new fuzz target on its
   first CI run**, from the five-byte input `9a 00 00 00 00`: an empty array
   with a widened length prefix. Same fix; the input is a regression test.
+- **A transparency proof claiming a log size above 2^63 hung the verifier
+  forever.** The RFC 6962 split point was found by shifting a probe upward
+  until it passed the size; above 2^63 the probe wrapped to zero and never
+  did. Found by the fuzzer on its second CI run as a 20-minute timeout. The
+  split is now computed from the bit length, and sizes near `u64::MAX` are a
+  regression test. A log operator is exactly who chooses that number.
 - Key files with Argon2 memory below 8 MiB opened without complaint. They are
   now refused.
 - The ML-DSA signing key was not zeroized on drop (`ml-dsa` feature flag).

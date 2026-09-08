@@ -332,3 +332,32 @@ fn a_checkpoint_binds_the_size() {
     let b = encode_checkpoint(10, &log.root());
     assert_ne!(a, b);
 }
+
+#[test]
+fn a_proof_claiming_an_absurd_size_terminates() {
+    // Found by the fuzzer: a size above 2^63 made the split computation wrap
+    // and loop forever. The verifier must refuse such a proof in bounded time
+    // because the size is chosen by the party being audited.
+    let zero = [0u8; 32];
+    for size in [u64::MAX, 1 << 63, (1 << 63) + 1, u64::MAX - 1] {
+        let proof = InclusionProof {
+            index: size - 1,
+            size,
+            path: vec![zero; 64],
+        };
+        assert!(matches!(
+            verify_inclusion(&proof, &zero, &zero),
+            Err(LogError::BadProof)
+        ));
+
+        let proof = ConsistencyProof {
+            old_size: 1,
+            new_size: size,
+            path: vec![zero; 64],
+        };
+        assert!(matches!(
+            verify_consistency(&proof, &zero, &zero),
+            Err(LogError::BadProof)
+        ));
+    }
+}

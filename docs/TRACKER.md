@@ -33,8 +33,9 @@ done.
   identity-*, epoch-*, ssh-key and an ssh-agent that confirms on the tty.
 - **Desktop** (`apps/hide-desktop`): Tauri app and portable build over the same
   crates; `interop.rs` proves it opens CLI output and vice versa.
-- **Assurance**: 297 tests, six libFuzzer targets in CI, nine frozen rejection
-  vectors shared with the independent Node verifier, cross-surface conformance,
+- **Assurance**: 298 tests, six libFuzzer targets in CI (two real bugs found in
+  their first two runs: P11.3, P11.4), nine frozen rejection vectors shared with
+  the independent Node verifier, cross-surface conformance,
   `unsafe_code = "forbid"` outside `hide-ffi`, every dependency pinned exactly.
 
 ## What does not exist
