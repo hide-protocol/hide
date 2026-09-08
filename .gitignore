@@ -8,6 +8,8 @@ node_modules/
 *.test-secret
 *.hide
 !conformance/vectors/*.hide
+# Rejection vectors are fixtures too: containers that MUST fail to open.
+!conformance/vectors/rejections/*.hide
 
 # The published test vectors are fixtures, not credentials: the "secret" is the
 # fixed all-0x55 seed from generate_vectors.rs and protects nothing.

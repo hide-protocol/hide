@@ -279,11 +279,13 @@ jobs:
           cp conformance/vectors/subsystems/*root*.bin fuzz/corpus/transparency_proofs/
       - name: Fuzz every target for 45 seconds
         working-directory: fuzz
+        # rust-toolchain.toml pins stable for the repo; cargo-fuzz needs
+        # nightly, so it is named explicitly rather than relying on the default.
         run: |
           set -euo pipefail
           for target in format_header object_open keyring_open identity_log epoch_chain transparency_proofs; do
             echo "::group::$target"
-            cargo fuzz run "$target" -- -max_total_time=45 -rss_limit_mb=2048
+            cargo +nightly fuzz run "$target" -- -max_total_time=45 -rss_limit_mb=2048
             echo "::endgroup::"
           done
       - name: Keep any crash as an artifact
