@@ -312,6 +312,13 @@ pub fn decode_records(bytes: &[u8]) -> Result<Vec<EpochRecord>, EpochError> {
     if decoder.position() != bytes.len() {
         return Err(EpochError::Malformed);
     }
+    // One history, one encoding: CBOR admits several byte forms for the same
+    // value (an empty array is 0x80 or 0x9a00000000), and a transparency log
+    // would hash them as different leaves. Found by the epoch_chain fuzz target.
+
+    if encode_records(&records)? != bytes {
+        return Err(EpochError::Malformed);
+    }
     Ok(records)
 }
 
@@ -595,6 +602,27 @@ mod tests {
         let mut encoded = encode_records(chain.records()).unwrap();
         encoded.push(0);
         assert_eq!(decode_records(&encoded).unwrap_err(), EpochError::Malformed);
+    }
+
+    #[test]
+    fn a_non_canonical_encoding_is_refused() {
+        // The exact input the epoch_chain fuzz target found: an empty array
+        // written with a four-byte length (0x9a 00000000) instead of 0x80.
+        // It decoded cleanly and re-encoded to a different byte string.
+        assert_eq!(
+            decode_records(&[0x9a, 0, 0, 0, 0]).unwrap_err(),
+            EpochError::Malformed
+        );
+
+        // The same property on a real chain: widen the outer length prefix.
+        let mut chain = EpochChain::new().unwrap();
+        chain.advance().unwrap();
+        let canonical = encode_records(chain.records()).unwrap();
+        assert_eq!(canonical[0], 0x82, "two records encode as a short array");
+        let mut widened = vec![0x98, 0x02];
+        widened.extend_from_slice(&canonical[1..]);
+        assert_eq!(decode_records(&widened).unwrap_err(), EpochError::Malformed);
+        assert_eq!(decode_records(&canonical).unwrap().len(), 2);
     }
 
     #[test]

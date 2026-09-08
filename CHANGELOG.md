@@ -29,6 +29,9 @@ see [docs/audit-status.md](docs/audit-status.md).
 - Identity log decoding accepted non-canonical bytes, so one history could
   have many encodings — and many transparency-log leaves. Decoding now
   re-encodes and compares.
+- Epoch chain decoding had the same gap. **Found by the new fuzz target on its
+  first CI run**, from the five-byte input `9a 00 00 00 00`: an empty array
+  with a widened length prefix. Same fix; the input is a regression test.
 - Key files with Argon2 memory below 8 MiB opened without complaint. They are
   now refused.
 - The ML-DSA signing key was not zeroized on drop (`ml-dsa` feature flag).
