@@ -227,8 +227,86 @@ jobs:
         with:
           packages-dir: dist
 
-  npm:
+  # One compile of the core per platform, shared by npm, RubyGems and NuGet.
+  # Building it inside each job would give three chances to disagree about
+  # which binary a user gets.
+  native:
     needs: verify
+    if: inputs.npm || inputs.rubygems || inputs.nuget
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-24.04
+            target: x86_64-unknown-linux-gnu
+          - os: ubuntu-24.04
+            target: aarch64-unknown-linux-gnu
+            cross: true
+          - os: ubuntu-24.04
+            target: x86_64-unknown-linux-musl
+            cross: true
+          - os: windows-2025
+            target: x86_64-pc-windows-msvc
+          - os: windows-11-arm
+            target: aarch64-pc-windows-msvc
+          - os: macos-15
+            target: aarch64-apple-darwin
+          - os: macos-15
+            target: x86_64-apple-darwin
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: native-${{ matrix.target }}
+
+      - name: Install a cross linker
+        if: matrix.cross
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          case "${{ matrix.target }}" in
+            aarch64-unknown-linux-gnu)
+              sudo apt-get install -y --no-install-recommends \
+                gcc-aarch64-linux-gnu libc6-dev-arm64-cross
+              echo 'CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER=aarch64-linux-gnu-gcc' >> "$GITHUB_ENV"
+              ;;
+            x86_64-unknown-linux-musl)
+              sudo apt-get install -y --no-install-recommends musl-tools musl-dev
+              ;;
+          esac
+
+      - run: cargo build --release --locked -p hide-ffi --target ${{ matrix.target }}
+
+      # A library that cannot decrypt the frozen vectors is not shippable.
+      # Cross-compiled ones cannot run here, so the check is host-native.
+      - run: cargo test -p hide-object --test vectors --release
+        if: '!matrix.cross'
+
+      - name: Collect
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p out
+          for name in libhide_ffi.so libhide_ffi.dylib hide_ffi.dll; do
+            if [ -f "target/${{ matrix.target }}/release/$name" ]; then
+              cp "target/${{ matrix.target }}/release/$name" out/
+            fi
+          done
+          ls -la out
+          test -n "$(ls -A out)"
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: native-${{ matrix.target }}
+          path: out/*
+          retention-days: 7
+
+  npm:
+    needs: [verify, native]
     if: inputs.npm
     runs-on: ubuntu-24.04
     environment: npm
@@ -262,16 +340,55 @@ jobs:
       - name: Stage the readme and licence
         run: cp README.md LICENSE sdk/node/
 
+      - uses: actions/download-artifact@v8
+        with:
+          pattern: native-*
+          path: native
+
+      # One npm package per platform, each refusing to install on the wrong
+      # machine via os/cpu/libc. hide-protocol lists all seven as optional
+      # dependencies, so exactly one resolves.
+      - name: Build the platform packages
+        run: |
+          set -euo pipefail
+          for dir in native/native-*; do
+            target="${dir#native/native-}"
+            library=$(ls "$dir")
+            node scripts/pack-native.mjs npm "$target" "${{ inputs.version }}" \
+              "$dir/$library" platform-packages
+          done
+          ls -la platform-packages/*
+
       - name: Build and test the Node package
         run: |
           set -euo pipefail
-          cargo build --release --locked -p hide-ffi
-          mkdir -p sdk/node/native
-          cp target/release/libhide_ffi.so sdk/node/native/
           cd sdk/node
           npm ci
           npm run build
-          HIDE_LIBRARY=$PWD/native/libhide_ffi.so node --test dist/index.test.js
+          HIDE_LIBRARY=$GITHUB_WORKSPACE/native/native-x86_64-unknown-linux-gnu/libhide_ffi.so \
+            node --test dist/index.test.js
+
+      # The published loader must find the published package, not a stray copy
+      # left in the build tree. Installing the tarballs into a clean directory
+      # is the only thing that proves it.
+      - name: Prove the platform package resolves with nothing else present
+        run: |
+          set -euo pipefail
+          npm pack --pack-destination "$RUNNER_TEMP" ./sdk/node >/dev/null
+          npm pack --pack-destination "$RUNNER_TEMP" ./platform-packages/linux-x64 >/dev/null
+          work=$(mktemp -d)
+          cd "$work"
+          echo '{"name":"probe","private":true,"type":"module"}' > package.json
+          npm install --silent \
+            "$RUNNER_TEMP"/hide-protocol-${{ inputs.version }}.tgz \
+            "$RUNNER_TEMP"/hide-protocol-linux-x64-${{ inputs.version }}.tgz
+          env -u HIDE_LIBRARY node -e "
+            const m = await import('hide-protocol');
+            const sk = m.SecretKey.generate();
+            const c = m.encrypt(Buffer.from('secret'), [sk.publicKey()]);
+            if (m.decrypt(c, sk).data.toString() !== 'secret') throw new Error('round trip failed');
+            console.log('resolved the platform package with no HIDE_LIBRARY');
+          "
 
       # No NODE_AUTH_TOKEN and no --provenance: the CLI detects OIDC, and
       # provenance is generated automatically under trusted publishing.
@@ -281,13 +398,15 @@ jobs:
           set -euo pipefail
           npm --version
           npm publish --access public ./sdk/wasm
-          # The Node package needs a native library per platform, which npm
-          # cannot express in one tarball; published as source with a clear
-          # error when the library is missing.
+          # The platform packages must exist before the package that depends on
+          # them, or the first install of hide-protocol resolves nothing.
+          for dir in platform-packages/*; do
+            npm publish --access public "$dir"
+          done
           npm publish --access public ./sdk/node
 
   rubygems:
-    needs: verify
+    needs: [verify, native]
     if: inputs.rubygems
     runs-on: ubuntu-24.04
     environment: rubygems
@@ -302,22 +421,55 @@ jobs:
         with:
           ruby-version: "3.3"
 
-      - name: Build the core and run the suite against it
+      - uses: actions/download-artifact@v8
+        with:
+          pattern: native-*
+          path: native
+
+      - name: Run the suite against the built core
         run: |
           set -euo pipefail
-          cargo build --release --locked -p hide-ffi
           cd sdk/ruby
-          HIDE_LIBRARY=$PWD/../../target/release/libhide_ffi.so \
+          HIDE_LIBRARY=$GITHUB_WORKSPACE/native/native-x86_64-unknown-linux-gnu/libhide_ffi.so \
             ruby -Ilib -Itest test/test_hide.rb
 
       - name: Stage the licence
         run: cp LICENSE sdk/ruby/
 
-      # Pure Ruby via fiddle, so one gem serves every platform. The user
-      # supplies the native library, as the README explains.
-      - name: Build the gem
-        working-directory: sdk/ruby
-        run: gem build hide-protocol.gemspec
+      # One gem per platform: `gem install` then fetches only this machine's
+      # binary instead of all seven. The loader looks beside binding.rb, which
+      # is where pack-native.mjs puts it and what the gemspec globs.
+      - name: Build a gem per platform
+        run: |
+          set -euo pipefail
+          mkdir -p gems
+          for dir in native/native-*; do
+            target="${dir#native/native-}"
+            library=$(ls "$dir")
+            rm -f sdk/ruby/lib/hide_protocol/*.so sdk/ruby/lib/hide_protocol/*.dylib \
+                  sdk/ruby/lib/hide_protocol/*.dll
+            platform=$(node scripts/pack-native.mjs gem "$target" "${{ inputs.version }}" "$dir/$library")
+            ( cd sdk/ruby && HIDE_GEM_PLATFORM="$platform" gem build hide-protocol.gemspec )
+            mv sdk/ruby/hide-protocol-${{ inputs.version }}-"$platform".gem gems/
+          done
+          ls -la gems
+
+      # A gem that installs but cannot load its own binary is worse than one
+      # that refuses: prove the vendored library is found with nothing else set.
+      - name: Prove the vendored library loads
+        run: |
+          set -euo pipefail
+          work=$(mktemp -d)
+          gem install --no-document --install-dir "$work" \
+            gems/hide-protocol-${{ inputs.version }}-x86_64-linux.gem
+          env -u HIDE_LIBRARY GEM_HOME="$work" ruby \
+            -I "$work/gems/hide-protocol-${{ inputs.version }}-x86_64-linux/lib" -e '
+              require "hide_protocol"
+              sk = Hide::SecretKey.generate
+              c = Hide.encrypt("secret", recipients: [sk.public_key])
+              raise "round trip failed" unless Hide.decrypt(c, sk).data == "secret"
+              puts "loaded the vendored library with no HIDE_LIBRARY"
+            '
 
       # Exchanges the run's OIDC identity for a short-lived RubyGems credential
       # and writes it where `gem push` looks. rubygems/release-gem does not fit:
@@ -326,11 +478,14 @@ jobs:
         if: '!inputs.dry_run'
       - name: Publish
         if: '!inputs.dry_run'
-        working-directory: sdk/ruby
-        run: gem push hide-protocol-${{ inputs.version }}.gem
+        run: |
+          set -euo pipefail
+          for gem in gems/*.gem; do
+            gem push "$gem"
+          done
 
   nuget:
-    needs: verify
+    needs: [verify, native]
     if: inputs.nuget
     runs-on: ubuntu-24.04
     environment: nuget
@@ -345,16 +500,45 @@ jobs:
         with:
           dotnet-version: "8.0"
 
-      - name: Build the core and run the suite against it
+      - uses: actions/download-artifact@v8
+        with:
+          pattern: native-*
+          path: native
+
+      - name: Run the suite against the built core
         env:
-          HIDE_LIBRARY: ${{ github.workspace }}/target/release/libhide_ffi.so
+          HIDE_LIBRARY: ${{ github.workspace }}/native/native-x86_64-unknown-linux-gnu/libhide_ffi.so
+        run: dotnet test sdk/dotnet --verbosity quiet
+
+      # NuGet can carry every platform in one package, so unlike npm and
+      # RubyGems there is nothing to fan out: the runtime picks the folder.
+      - name: Stage the binaries under their runtime identifiers
         run: |
           set -euo pipefail
-          cargo build --release --locked -p hide-ffi
-          dotnet test sdk/dotnet --verbosity quiet
+          node -e '
+            const {mkdirSync, copyFileSync, readdirSync, readFileSync} = require("node:fs");
+            const {targets} = JSON.parse(readFileSync("sdk/native-targets.json", "utf8"));
+            for (const t of targets) {
+              const from = `native/native-${t.target}`;
+              const dir = `sdk/dotnet/HideProtocol/runtimes/${t.rid}/native`;
+              mkdirSync(dir, {recursive: true});
+              copyFileSync(`${from}/${readdirSync(from)[0]}`, `${dir}/${t.library}`);
+            }
+          '
+          find sdk/dotnet/HideProtocol/runtimes -type f
 
       - name: Pack
         run: dotnet pack sdk/dotnet/HideProtocol/HideProtocol.csproj -c Release -o nupkg
+
+      - name: The package must carry a binary for every runtime
+        run: |
+          set -euo pipefail
+          unzip -l nupkg/HideProtocol.${{ inputs.version }}.nupkg | grep runtimes/
+          for rid in linux-x64 linux-arm64 linux-musl-x64 win-x64 win-arm64 osx-arm64 osx-x64; do
+            unzip -l nupkg/HideProtocol.${{ inputs.version }}.nupkg \
+              | grep -q "runtimes/$rid/native/" \
+              || { echo "::error::the package has no native library for $rid"; exit 1; }
+          done
 
       - name: NuGet login (OIDC -> short-lived key)
         if: '!inputs.dry_run'

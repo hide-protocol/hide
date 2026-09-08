@@ -147,6 +147,24 @@ every other surface can open.
 | PHP | [`sdk/php`](sdk/php) | `ext-ffi` |
 | .NET / C# | [`sdk/dotnet`](sdk/dotnet) | Source-generated `LibraryImport` |
 
+### Installing
+
+```
+pip install hide-protocol
+npm install hide-protocol
+gem install hide-protocol
+dotnet add package HideProtocol
+npm install @hide-protocol/wasm     # browser
+```
+
+Those four carry the compiled core for x86-64 and ARM Linux (glibc and musl),
+Windows and macOS, so nothing needs a Rust toolchain. Go links it statically.
+
+Java and PHP do not ship a binary yet: build it with
+`cargo build --release -p hide-ffi` and point `HIDE_LIBRARY` (Java also accepts
+`-Dhide.library=`) at the result. The same variable overrides the bundled
+library everywhere, which is what you want when developing against a build tree.
+
 Secret keys never cross into the host language: each SDK holds an opaque handle, and there is
 deliberately no function that exports key material.
 

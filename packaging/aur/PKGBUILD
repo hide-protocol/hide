@@ -3,7 +3,7 @@
 # Builds from source rather than shipping the release binary, which is what the
 # AUR expects and lets Arch users read what they are compiling.
 pkgname=hide-protocol
-pkgver=0.6.0
+pkgver=0.6.1
 pkgrel=1
 pkgdesc="Experimental hybrid post-quantum file and message encryption (X25519 + ML-KEM-768). UNAUDITED."
 arch=('x86_64' 'aarch64')

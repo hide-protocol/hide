@@ -1,5 +1,5 @@
 {
-    "version": "0.6.0",
+    "version": "0.6.1",
     "description": "Experimental hybrid post-quantum file and message encryption. UNAUDITED: do not protect data you cannot afford to lose or expose.",
     "homepage": "https://github.com/hide-protocol/hide",
     "license": "Apache-2.0",

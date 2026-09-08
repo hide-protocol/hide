@@ -1,6 +1,6 @@
 {
   "name": "hide-protocol",
-  "version": "0.6.0",
+  "version": "0.6.1",
   "description": "Experimental hybrid post-quantum file and message encryption (X25519 + ML-KEM-768). Unaudited.",
   "type": "module",
   "license": "Apache-2.0",
@@ -28,6 +28,15 @@
   },
   "dependencies": {
     "koffi": "3.2.1"
+  },
+  "optionalDependencies": {
+    "@hide-protocol/darwin-arm64": "0.6.1",
+    "@hide-protocol/darwin-x64": "0.6.1",
+    "@hide-protocol/linux-arm64": "0.6.1",
+    "@hide-protocol/linux-x64": "0.6.1",
+    "@hide-protocol/linux-x64-musl": "0.6.1",
+    "@hide-protocol/win32-arm64": "0.6.1",
+    "@hide-protocol/win32-x64": "0.6.1"
   },
   "devDependencies": {
     "@types/node": "26.4.1",

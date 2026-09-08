@@ -1,4 +1,4 @@
-import { existsSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -18,11 +18,38 @@ function libraryName(): string {
   return "libhide_ffi.so";
 }
 
+// Alpine and other musl distributions cannot load a glibc build, and the two
+// are indistinguishable from process.platform alone.
+function isMusl(): boolean {
+  if (process.platform !== "linux") return false;
+  const report = process.report?.getReport();
+  const header = typeof report === "object" ? (report as { header?: { glibcVersionRuntime?: string } }).header : undefined;
+  if (header) return !header.glibcVersionRuntime;
+  try {
+    return readFileSync("/usr/bin/ldd", "utf8").includes("musl");
+  } catch {
+    return false;
+  }
+}
+
+function platformPackage(): string {
+  const suffix = isMusl() ? "-musl" : "";
+  return `@hide-protocol/${process.platform}-${process.arch}${suffix}`;
+}
+
 function locate(): string {
   const here = dirname(fileURLToPath(import.meta.url));
+  const fromPackage = (() => {
+    try {
+      return require.resolve(`${platformPackage()}/${libraryName()}`);
+    } catch {
+      return undefined;
+    }
+  })();
   const candidates = [
     // Set by developers running against a cargo build tree.
     process.env.HIDE_LIBRARY,
+    fromPackage,
     join(here, libraryName()),
     join(here, "..", libraryName()),
     join(here, "..", "native", libraryName()),
@@ -33,8 +60,8 @@ function locate(): string {
   }
   throw new Error(
     `the HIDE native library (${libraryName()}) was not found. Install a ` +
-      "platform package, or set HIDE_LIBRARY to the path produced by " +
-      "`cargo build -p hide-ffi`.",
+      `platform package (npm i ${platformPackage()}), or set HIDE_LIBRARY to ` +
+      "the path produced by `cargo build -p hide-ffi`.",
   );
 }
 

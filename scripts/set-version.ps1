@@ -137,6 +137,29 @@ foreach ($manifest in $internal) {
     }
 }
 
+# The Node package pins its seven platform packages exactly. A stale pin here
+# resolves to the previous release's binary, or to nothing at all if that
+# version was never published — and npm reports neither, because an optional
+# dependency that fails to resolve is silently skipped.
+$nodeManifest = Join-Path $root 'sdk/node/package.json'
+$content = Get-Content $nodeManifest -Raw
+$updated = [regex]::Replace(
+    $content,
+    '(?m)^(    "@hide-protocol/[a-z0-9-]+": ")[^"]+(",?)$',
+    {
+        param($match)
+        "$($match.Groups[1].Value)$script:targetVersion$($match.Groups[2].Value)"
+    })
+if ($updated -ne $content) {
+    if ($PSCmdlet.ParameterSetName -eq 'Set') {
+        [System.IO.File]::WriteAllText($nodeManifest, $updated)
+        Write-Host '  sdk/node/package.json: platform packages'
+    } else {
+        Write-Host 'the platform packages in sdk/node/package.json disagree'
+        exit 1
+    }
+}
+
 if ($missing.Count -gt 0) {
     Write-Error "these files were not matched, so their version was NOT updated:`n  $($missing -join "`n  ")"
 }

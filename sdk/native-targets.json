@@ -1,0 +1,80 @@
+{
+  "comment": "One table so the loaders, the packaging scripts and the workflow matrix cannot drift apart. Every row must appear in the native matrix of publish-sdks.yml.",
+  "targets": [
+    {
+      "target": "x86_64-unknown-linux-gnu",
+      "os": "ubuntu-24.04",
+      "library": "libhide_ffi.so",
+      "npm": "linux-x64",
+      "nodePlatform": "linux",
+      "nodeArch": "x64",
+      "libc": "glibc",
+      "gem": "x86_64-linux",
+      "rid": "linux-x64"
+    },
+    {
+      "target": "aarch64-unknown-linux-gnu",
+      "os": "ubuntu-24.04",
+      "cross": true,
+      "library": "libhide_ffi.so",
+      "npm": "linux-arm64",
+      "nodePlatform": "linux",
+      "nodeArch": "arm64",
+      "libc": "glibc",
+      "gem": "aarch64-linux",
+      "rid": "linux-arm64"
+    },
+    {
+      "target": "x86_64-unknown-linux-musl",
+      "os": "ubuntu-24.04",
+      "cross": true,
+      "library": "libhide_ffi.so",
+      "npm": "linux-x64-musl",
+      "nodePlatform": "linux",
+      "nodeArch": "x64",
+      "libc": "musl",
+      "gem": "x86_64-linux-musl",
+      "rid": "linux-musl-x64"
+    },
+    {
+      "target": "x86_64-pc-windows-msvc",
+      "os": "windows-2025",
+      "library": "hide_ffi.dll",
+      "npm": "win32-x64",
+      "nodePlatform": "win32",
+      "nodeArch": "x64",
+      "gem": "x64-mingw-ucrt",
+      "rid": "win-x64"
+    },
+    {
+      "target": "aarch64-pc-windows-msvc",
+      "os": "windows-11-arm",
+      "library": "hide_ffi.dll",
+      "npm": "win32-arm64",
+      "nodePlatform": "win32",
+      "nodeArch": "arm64",
+      "gem": "aarch64-mingw-ucrt",
+      "rid": "win-arm64"
+    },
+    {
+      "target": "aarch64-apple-darwin",
+      "os": "macos-15",
+      "library": "libhide_ffi.dylib",
+      "npm": "darwin-arm64",
+      "nodePlatform": "darwin",
+      "nodeArch": "arm64",
+      "gem": "arm64-darwin",
+      "rid": "osx-arm64"
+    },
+    {
+      "target": "x86_64-apple-darwin",
+      "os": "macos-15",
+      "library": "libhide_ffi.dylib",
+      "npm": "darwin-x64",
+      "nodePlatform": "darwin",
+      "nodeArch": "x64",
+      "gem": "x86_64-darwin",
+      "rid": "osx-x64"
+    }
+  ]
+}

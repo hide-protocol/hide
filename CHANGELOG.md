@@ -3,6 +3,30 @@
 This project is pre-1.0. The wire format may change while the version is 0.x,
 and a format change is always called out here explicitly.
 
+## 0.6.1
+
+**`npm install hide-protocol` now works.** No format change, no API change:
+every 0.6.0 container still opens and the frozen 0.1.0 vectors still pass.
+
+### Fixed
+
+- The Node, Ruby and .NET packages shipped without a native library, so they
+  failed at import with an error telling the user to "install a platform
+  package" — packages that did not exist. Only the Python wheel carried its
+  binary. Each ecosystem now ships the compiled core for all seven supported
+  targets: `x86_64`/`aarch64` Linux (glibc), `x86_64` Linux (musl),
+  `x86_64`/`aarch64` Windows, and Apple Silicon/Intel macOS.
+  - **npm**: seven `@hide-protocol/<platform>` packages, declared as optional
+    dependencies and constrained by `os`/`cpu`/`libc`, so exactly one installs.
+    When none matches, the error now names the package to install.
+  - **RubyGems**: a gem per platform, so `gem install` fetches one binary
+    rather than all seven.
+  - **NuGet**: one package carrying every runtime identifier under
+    `runtimes/<rid>/native`.
+- The publish workflow proves each package works before publishing it, by
+  installing it into a clean directory with `HIDE_LIBRARY` unset and running a
+  round trip. That is the check whose absence let 0.6.0 ship broken.
+
 ## 0.6.0
 
 **An identity stops being a single key.** The container format is unchanged:
