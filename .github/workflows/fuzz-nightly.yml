@@ -1,0 +1,138 @@
+name: fuzz-nightly
+
+# The per-push fuzz job runs each target for 45 seconds and found two real bugs
+# in its first two runs. Coverage-guided fuzzing keeps finding things roughly in
+# proportion to time spent, so this runs every target for hours, in parallel,
+# and carries its corpus forward from night to night instead of restarting
+# from the frozen vectors. A finding opens an issue; nobody has to read logs.
+
+on:
+  schedule:
+    - cron: "17 2 * * *"
+  workflow_dispatch:
+    inputs:
+      minutes:
+        description: "Minutes to fuzz each target"
+        default: "240"
+
+permissions:
+  contents: read
+  issues: write
+
+jobs:
+  fuzz:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 300
+    strategy:
+      fail-fast: false
+      matrix:
+        target:
+          - format_header
+          - object_open
+          - keyring_open
+          - identity_log
+          - epoch_chain
+          - transparency_proofs
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable
+        with:
+          toolchain: nightly
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
+        with:
+          workspaces: fuzz
+      - uses: taiki-e/install-action@d438492cf8a250514fa2d34b30bc3c0dc37c65ff # v2
+        with:
+          tool: cargo-fuzz
+
+      # The corpus is the accumulated value of every previous night. A cache
+      # key that always misses on lookup and falls back to the newest prefix
+      # match is how one gets "restore latest, save new" from actions/cache.
+      - name: Restore last night's corpus
+        uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        with:
+          path: fuzz/corpus/${{ matrix.target }}
+          key: fuzz-corpus-${{ matrix.target }}-${{ github.run_id }}
+          restore-keys: fuzz-corpus-${{ matrix.target }}-
+
+      - name: Seed the corpus with the frozen vectors
+        run: |
+          set -euo pipefail
+          d="fuzz/corpus/${{ matrix.target }}"
+          mkdir -p "$d"
+          case "${{ matrix.target }}" in
+            format_header|object_open) cp conformance/vectors/*.hide "$d/" ;;
+            keyring_open) cp conformance/vectors/*.test-secret conformance/vectors/*.test-seed "$d/" ;;
+            identity_log) cp conformance/vectors/subsystems/identity-*.bin "$d/" ;;
+            epoch_chain) cp conformance/vectors/subsystems/epoch-*.bin "$d/" ;;
+            transparency_proofs) cp conformance/vectors/subsystems/*root*.bin "$d/" ;;
+          esac
+          echo "corpus entries: $(ls "$d" | wc -l)"
+
+      - name: Fuzz
+        working-directory: fuzz
+        # -timeout=60: the verifier that hung for 1201 s should have been a
+        # finding at 60. Anything a verifier does on one input is milliseconds.
+        run: |
+          set -euo pipefail
+          minutes="${{ github.event.inputs.minutes || '240' }}"
+          cargo +nightly fuzz run --target x86_64-unknown-linux-gnu "${{ matrix.target }}" -- \
+            -max_total_time=$(( minutes * 60 )) -timeout=60 -rss_limit_mb=2048 \
+            -print_final_stats=1
+
+      - name: Minimise the corpus before saving it
+        if: always()
+        working-directory: fuzz
+        run: |
+          set -euo pipefail
+          d="corpus/${{ matrix.target }}"
+          mv "$d" "$d.full"
+          mkdir -p "$d"
+          cargo +nightly fuzz run --target x86_64-unknown-linux-gnu "${{ matrix.target }}" \
+            "$d" "$d.full" -- -merge=1 -timeout=60 -rss_limit_mb=2048
+          echo "minimised: $(ls "$d.full" | wc -l) -> $(ls "$d" | wc -l)"
+
+      - name: Save the corpus for tomorrow
+        if: always()
+        uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        with:
+          path: fuzz/corpus/${{ matrix.target }}
+          key: fuzz-corpus-${{ matrix.target }}-${{ github.run_id }}
+
+      - name: Keep the reproducer
+        if: failure()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: fuzz-artifacts-${{ matrix.target }}
+          path: fuzz/artifacts/${{ matrix.target }}
+          if-no-files-found: ignore
+
+      - name: Open an issue
+        if: failure()
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TARGET: ${{ matrix.target }}
+          RUN: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -euo pipefail
+          title="fuzz: $TARGET found a crash or hang"
+          existing=$(gh issue list --state open --label fuzz --search "\"$title\" in:title" --json number --jq '.[0].number // empty')
+          {
+            echo "The nightly fuzzer failed on \`$TARGET\`."
+            echo
+            echo "Run: $RUN"
+            echo "Reproducer: artifact \`fuzz-artifacts-$TARGET\` on that run."
+            echo
+            echo "Reproduce locally:"
+            echo '```'
+            echo "cd fuzz"
+            echo "cargo +nightly fuzz run --target x86_64-unknown-linux-gnu $TARGET artifacts/$TARGET/<file>"
+            echo '```'
+            echo
+            echo "Treat as a security finding until shown otherwise: every fuzz target here parses bytes from a party the verifier does not trust."
+          } > body.md
+          if [ -n "$existing" ]; then
+            gh issue comment "$existing" --body "Reproduced again: $RUN"
+          else
+            gh issue create --title "$title" --label fuzz --label security --body-file body.md
+          fi
