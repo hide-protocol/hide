@@ -3,9 +3,16 @@ name = "hide-ffi"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
+authors.workspace = true
 license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+documentation = "https://docs.rs/hide-ffi"
+readme = "README.md"
+keywords = ["ffi", "c-abi", "bindings", "post-quantum", "encryption"]
+categories = ["cryptography", "external-ffi-bindings"]
 publish.workspace = true
-description = "C ABI for the HIDE protocol; the single core every language binding calls"
+description = "C ABI for HIDE: the single core every language binding calls. Experimental, unaudited."
 
 [lib]
 name = "hide_ffi"

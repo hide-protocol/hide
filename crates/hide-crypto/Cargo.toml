@@ -3,13 +3,16 @@ name = "hide-crypto"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
+authors.workspace = true
 license.workspace = true
 repository.workspace = true
 homepage.workspace = true
+documentation = "https://docs.rs/hide-crypto"
+readme = "README.md"
 keywords.workspace = true
 categories.workspace = true
 publish.workspace = true
-description = "Hybrid post-quantum primitives for the HIDE protocol (X25519 + ML-KEM-768)"
+description = "Hybrid post-quantum primitives for HIDE: X25519 + ML-KEM-768 (X-Wing). Experimental, unaudited."
 
 [features]
 test-vectors = []

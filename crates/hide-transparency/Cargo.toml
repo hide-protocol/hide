@@ -3,13 +3,16 @@ name = "hide-transparency"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
+authors.workspace = true
 license.workspace = true
 repository.workspace = true
 homepage.workspace = true
-keywords.workspace = true
-categories.workspace = true
+documentation = "https://docs.rs/hide-transparency"
+readme = "README.md"
+keywords = ["merkle", "transparency-log", "rfc6962", "audit", "append-only"]
+categories = ["cryptography"]
 publish.workspace = true
-description = "Append-only transparency log with inclusion and consistency proofs for HIDE"
+description = "Append-only Merkle log with inclusion and consistency proofs for HIDE. Experimental, unaudited."
 
 [dependencies]
 sha2.workspace = true

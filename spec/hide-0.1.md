@@ -1,4 +1,23 @@
-# HIDE/0.1 wire format (experimental)
+# HIDE wire format — specification
+
+**Status:** experimental. This document covers versions 0.1 (container), 0.5 (signatures),
+0.6 (identity, epoch and transparency) and 0.7 (MLS binding). The filename is historical; this is the
+current specification.
+
+**Change log**
+
+- 0.1 — container: preamble, header, key schedule, metadata, payload (§1–§6).
+- 0.5 — hybrid signatures, public and confidential placement, minor 2 (§7).
+- 0.6 — identity logs, epoch chains, transparency proofs (§8–§10).
+- 0.7 — `MAX_SIGNATURES` reduced from 8 to 1; a second stanza is rejected (§2).
+- 0.7 — MLS credential binding, private-use credential type `0xF01D` (§11).
+- 0.7 — the "Error handling" requirements after §6 are stated normatively.
+
+**Conformance.** The frozen containers under `conformance/vectors/` MUST decrypt byte-identically,
+and every file under `conformance/vectors/rejections/` MUST be refused for the reason recorded in
+`rejections.txt`. An implementation that opens a rejection vector is non-conformant even if it
+opens every valid vector. `conformance/node/verify.mjs` is an independent implementation that
+exercises both sets.
 
 Draft, unaudited, and expected to change. Integers are big-endian. All structural encoding is
 deterministic CBOR (RFC 8949 §4.2); a decoder MUST re-encode and compare bytes, and MUST reject
@@ -94,6 +113,16 @@ provided: identity binding, forward secrecy, recipient anonymity against traffic
 of file size or recipient count. The 16-byte `payload_salt` is outside every authenticator; altering
 it changes the payload key so every record fails to open, a denial of service and nothing more. Sender authentication is available only
 when the container is signed (§7), and even then a signature attests to a key, not to a person.
+
+### Error handling
+
+Implementations MUST distinguish a **malformed** input (a limit exceeded, non-canonical CBOR, an
+unknown suite, a stanza of the wrong length) from an **authentication failure** (a header MAC,
+AEAD tag or signature that does not verify), because the first is a bug in the producer and the
+second may be an attack. Implementations MUST NOT report *which* recipient stanza failed to
+decapsulate, nor whether a stanza decapsulated but the header MAC then failed: every non-recipient
+outcome is the single result "no matching recipient". Any finer distinction lets a holder of the
+file learn something about the recipient set by observing errors.
 
 ## 7. Signatures (HIDE/0.5, minor 2)
 
@@ -212,3 +241,41 @@ it is what makes a rewritten history detectable rather than merely impolite.
 Neither proof detects a **split view**: two divergent logs are each internally consistent. Catching
 that requires independent witnesses who gossip roots and refuse to sign two roots for one size. No
 witnessing is specified here, and a log without it is a promise, not a proof.
+
+## 11. MLS credential binding (HIDE/0.7)
+
+Group messaging uses MLS (RFC 9420) unchanged; HIDE specifies only the credential a member presents.
+The credential type is `0xF01D`, in the private-use range RFC 9420 §17.5 reserves. Its data is
+three fixed-width fields with no framing:
+
+```
+credential = device_id(32) || hide_verifying_key(1984) || signature(3373)      # 5389 bytes
+
+message    = device_id(32) || mls_signature_public_key
+signature  = HIDE-Sign(device, context = "HIDE/0.7 mls binding", message)
+```
+
+`hide_verifying_key` and `signature` have the §7 layout. `mls_signature_public_key` is the raw MLS
+signature public key of the LeafNode carrying the credential, exactly as MLS encodes it; both parts
+of `message` are fixed-width for a given cipher suite, so no length prefix is needed. Because the
+signature covers the MLS key, a binding lifted from one key package cannot authorise another.
+
+A verifier MUST reject a roster entry, an external sender, or a proposed successor unless **all** of
+the following hold:
+
+1. The credential type is `0xF01D` and its data is exactly 5389 bytes.
+2. `device_id == SHA-256("HIDE/0.6 device id" || hide_verifying_key)` (§8). A mismatch means the id
+	and the key came from different devices.
+3. `signature` verifies under `hide_verifying_key` with the context and message above, both halves.
+4. `device_id` is currently in the identity's membership — that is, trusted at the head of the
+	identity log (§8), not merely at some earlier point.
+5. The verifying key the membership records for that device equals `hide_verifying_key`. The log,
+	not the credential, is the authority.
+
+A successor credential is valid for a member only if it names the same `device_id`.
+
+The MLS cipher suite is `MLS_128_DHKEMX25519_AES128GCM_SHA256_Ed25519` (0x0001). It is classical:
+post-quantum MLS cipher suites are an Internet-Draft and this binding does not change that. What
+the binding adds is that the roster entry is anchored to a hybrid post-quantum HIDE identity, so
+revoking the device in the identity log (§8) makes the member detectable as untrusted, though not
+automatically removed from the group.

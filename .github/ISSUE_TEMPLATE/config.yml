@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Report a security vulnerability (private)
+    url: https://github.com/hide-protocol/hide/security/advisories/new
+    about: HIDE is experimental and unaudited. Suspected vulnerabilities go through GitHub private vulnerability reporting, never a public issue. Process in SECURITY.md.
+  - name: Security policy
+    url: https://github.com/hide-protocol/hide/blob/main/SECURITY.md
+    about: What is in scope, what is documented as not protected, and how disclosure is coordinated.

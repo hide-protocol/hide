@@ -27,8 +27,11 @@ if (kind === "npm") {
   const manifest = {
     name: `@hide-protocol/${entry.npm}`,
     version,
-    description: `The HIDE native core for ${entry.npm}. Installed automatically by hide-protocol.`,
+    description:
+      `The compiled HIDE core for ${entry.target}, installed automatically by hide-protocol. ` +
+      "Experimental, unaudited.",
     license: "Apache-2.0",
+    keywords: ["post-quantum", "encryption", "native", "prebuilt"],
     // npm refuses to install a platform package on the wrong machine, which is
     // what makes the optional dependencies resolve to exactly one of these.
     os: [entry.nodePlatform],
@@ -36,6 +39,7 @@ if (kind === "npm") {
     ...(entry.libc ? { libc: [entry.libc] } : {}),
     files: [entry.library, "LICENSE"],
     repository: { type: "git", url: "git+https://github.com/hide-protocol/hide.git" },
+    bugs: { url: "https://github.com/hide-protocol/hide/issues" },
     homepage: "https://github.com/hide-protocol/hide",
   };
   writeFileSync(join(dir, "package.json"), `${JSON.stringify(manifest, null, 2)}\n`);

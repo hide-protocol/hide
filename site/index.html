@@ -1,0 +1,128 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>HIDE — hybrid post-quantum file &amp; message encryption (X25519 + ML-KEM-768)</title>
+<meta name="description" content="HIDE: experimental, unaudited hybrid post-quantum file encryption. X-Wing (X25519 + ML-KEM-768) and Ed25519 + ML-DSA-65 signatures. Rust core, 9 SDKs.">
+<link rel="canonical" href="https://hide-protocol.github.io/hide/">
+<meta name="color-scheme" content="light dark">
+<meta property="og:type" content="website">
+<meta property="og:url" content="https://hide-protocol.github.io/hide/">
+<meta property="og:title" content="HIDE — hybrid post-quantum file &amp; message encryption">
+<meta property="og:description" content="Experimental, unaudited hybrid post-quantum file encryption: X-Wing (X25519 + ML-KEM-768) and Ed25519 + ML-DSA-65. Encrypt to a person, not to a key.">
+<meta property="og:site_name" content="HIDE Protocol">
+<meta name="twitter:card" content="summary">
+<meta name="twitter:title" content="HIDE — hybrid post-quantum file &amp; message encryption">
+<meta name="twitter:description" content="Experimental, unaudited hybrid post-quantum file encryption: X-Wing (X25519 + ML-KEM-768) and Ed25519 + ML-DSA-65.">
+<link rel="alternate" type="text/plain" href="https://hide-protocol.github.io/hide/llms.txt" title="llms.txt">
+<script type="application/ld+json">
+{
+  "@context": "https://schema.org",
+  "@type": "SoftwareApplication",
+  "name": "HIDE",
+  "alternateName": "HIDE Protocol",
+  "description": "Hybrid post-quantum file and message encryption. Every content key is wrapped with X-Wing (X25519 + ML-KEM-768, NIST FIPS 203) and every signature is Ed25519 + ML-DSA-65 (FIPS 204). Rust core, CLI, desktop app and SDKs for nine languages over one C ABI. Experimental and unaudited: no third party has reviewed the design or code.",
+  "url": "https://hide-protocol.github.io/hide/",
+  "applicationCategory": "SecurityApplication",
+  "operatingSystem": "Windows, macOS, Linux",
+  "softwareVersion": "0.6.2",
+  "license": "https://www.apache.org/licenses/LICENSE-2.0",
+  "codeRepository": "https://github.com/hide-protocol/hide",
+  "programmingLanguage": "Rust",
+  "isAccessibleForFree": true,
+  "offers": { "@type": "Offer", "price": "0", "priceCurrency": "USD" },
+  "additionalProperty": [
+    { "@type": "PropertyValue", "name": "audit status", "value": "none" },
+    { "@type": "PropertyValue", "name": "post-quantum", "value": "X-Wing X25519+ML-KEM-768" },
+    { "@type": "PropertyValue", "name": "signatures", "value": "Ed25519 + ML-DSA-65 hybrid" },
+    { "@type": "PropertyValue", "name": "maturity", "value": "experimental, pre-1.0; CLI requires --experimental" }
+  ]
+}
+</script>
+<style>
+  :root { --bg:#fff; --fg:#1b1f23; --muted:#57606a; --line:#d0d7de; --code:#f6f8fa; --warn-bg:#fff4d6; --warn-fg:#5a3d00; --warn-line:#e0b04a; --link:#0550ae; }
+  @media (prefers-color-scheme: dark) { :root { --bg:#0d1117; --fg:#e6edf3; --muted:#9198a1; --line:#30363d; --code:#161b22; --warn-bg:#3a2a00; --warn-fg:#ffd479; --warn-line:#8a6d1f; --link:#79b8ff; } }
+  * { box-sizing:border-box }
+  body { margin:0; background:var(--bg); color:var(--fg); font:16px/1.55 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif }
+  main { max-width:64rem; margin:0 auto; padding:1.5rem 1.25rem 4rem }
+  a { color:var(--link) }
+  h1 { font-size:1.9rem; line-height:1.2; margin:1rem 0 .5rem }
+  h2 { font-size:1.3rem; margin:2.2rem 0 .6rem; padding-bottom:.25rem; border-bottom:1px solid var(--line) }
+  .banner { background:var(--warn-bg); color:var(--warn-fg); border:1px solid var(--warn-line); border-radius:6px; padding:.75rem 1rem; font-weight:600 }
+  .banner a { color:inherit }
+  pre, code { font:.9rem/1.5 ui-monospace,SFMono-Regular,Consolas,Menlo,monospace }
+  pre { background:var(--code); border:1px solid var(--line); border-radius:6px; padding:.75rem 1rem; overflow-x:auto }
+  code { background:var(--code); padding:.05rem .3rem; border-radius:4px }
+  pre code { background:none; padding:0 }
+  .tbl { overflow-x:auto }
+  table { border-collapse:collapse; width:100%; font-size:.9rem }
+  th, td { border:1px solid var(--line); padding:.45rem .6rem; text-align:left; vertical-align:top }
+  th { background:var(--code) }
+  ul { padding-left:1.3rem }
+  li { margin:.2rem 0 }
+  footer { margin-top:3rem; color:var(--muted); font-size:.85rem; border-top:1px solid var(--line); padding-top:1rem }
+</style>
+</head>
+<body>
+<main>
+  <p class="banner" role="note">HIDE is <strong>experimental and unaudited</strong>. Do not use it for sensitive data. The protocol is a draft, no third party has reviewed the code, and the hybrid KEM tracks a moving IETF draft. See <a href="https://github.com/hide-protocol/hide/blob/main/docs/audit-status.md">audit status</a>.</p>
+
+  <h1>HIDE — hybrid post-quantum file &amp; message encryption</h1>
+
+  <p><em>Human-friendly Identity &amp; Data Encryption.</em> HIDE is end-to-end encryption for files and short messages whose key encapsulation is quantum-resistant by construction: every content key is wrapped with X-Wing, a hybrid of X25519 and ML-KEM-768 as standardised in <strong>NIST FIPS 203 (ML-KEM)</strong>, and every signature is a hybrid of Ed25519 and ML-DSA-65 from <strong>FIPS 204 (ML-DSA)</strong>. A break of either half alone is not enough. The goal is to <strong>encrypt to a person, not to a key</strong>: the repository implements the file format engine, a hybrid signature scheme, and the machinery an identity needs to outlive a single key — device enrollment and revocation, forward security by erasure, an auditable history, and group messaging over MLS.</p>
+
+  <p>Source, specification and vectors: <a href="https://github.com/hide-protocol/hide">github.com/hide-protocol/hide</a> (Apache-2.0). Machine-readable summary: <a href="llms.txt">llms.txt</a>, <a href="llms-full.txt">llms-full.txt</a>.</p>
+
+  <h2 id="install">Install</h2>
+  <p>Every binding calls the same Rust core through one C ABI; no language reimplements the cryptography. The CLI requires <code>--experimental</code> on every invocation.</p>
+<pre><code>cargo install hide-cli                  # command line, from crates.io
+pip install hide-protocol               # Python
+npm install hide-protocol               # Node / TypeScript
+npm install @hide-protocol/wasm         # browser (WebAssembly)
+gem install hide-protocol               # Ruby
+dotnet add package HideProtocol         # .NET / C#
+go get github.com/hide-protocol/hide/sdk/go   # Go, from source via cgo</code></pre>
+  <p>Registry pages: <a href="https://crates.io/crates/hide-cli">crates.io</a> · <a href="https://pypi.org/project/hide-protocol/">PyPI</a> · <a href="https://www.npmjs.com/package/hide-protocol">npm</a> · <a href="https://www.npmjs.com/package/@hide-protocol/wasm">npm (wasm)</a> · <a href="https://rubygems.org/gems/hide-protocol">RubyGems</a> · <a href="https://www.nuget.org/packages/HideProtocol">NuGet</a>. Java and PHP are built from source. Desktop and portable builds are on the <a href="https://github.com/hide-protocol/hide/releases">releases page</a>; verify against <code>SHA256SUMS</code>.</p>
+
+  <h2 id="comparison">Compared with age, GPG, libsodium</h2>
+  <div class="tbl">
+  <table>
+    <thead><tr><th></th><th>HIDE</th><th>age</th><th>GPG</th><th>libsodium sealed box</th><th>Signal / MLS</th><th>AWS KMS envelope</th></tr></thead>
+    <tbody>
+      <tr><td>Post-quantum KEM</td><td>X-Wing (X25519 + ML-KEM-768), always</td><td>Yes, opt-in: <code>age-keygen -pq</code> gives ML-KEM-768 + X25519 since v1.3.0</td><td>No (RFC 4880; PQ drafts in progress)</td><td>No (X25519)</td><td>Signal: PQXDH; MLS: PQ suites are a draft</td><td>ML-KEM in TLS to the service; envelope key is AES</td></tr>
+      <tr><td>Multi-device identity</td><td>Signed device log with revocation; no directory</td><td>No — one key per recipient</td><td>Keyring, subkeys, web of trust</td><td>No — a key is a key</td><td>Yes, service-operated directory</td><td>IAM principals, not people</td></tr>
+      <tr><td>Forward secrecy</td><td>By erasure of epoch keys, no ratchet</td><td>No</td><td>No</td><td>No</td><td>Yes, double ratchet / tree ratchet</td><td>Rotation policy on the master key</td></tr>
+      <tr><td>Signatures</td><td>Ed25519 + ML-DSA-65 hybrid</td><td>No (integrity only)</td><td>Yes, classical</td><td>Separate <code>crypto_sign</code>, Ed25519</td><td>Implicit via ratchet authentication</td><td>Separate KMS sign API</td></tr>
+      <tr><td>Streaming large files</td><td>Yes, 64 KiB chunks, constant memory (unsigned)</td><td>Yes, 64 KiB STREAM</td><td>Yes</td><td>No — one message in memory</td><td>Attachments handled by the app</td><td>Application concern</td></tr>
+      <tr><td>Third-party audit</td><td><strong>None</strong></td><td>Yes (Trail of Bits, findings fixed Aug 2026)</td><td>Long public review history</td><td>Yes (Private Internet Access, 2017)</td><td>Yes (multiple)</td><td>Vendor-attested</td></tr>
+    </tbody>
+  </table>
+  </div>
+  <p>age and libsodium are mature, audited tools, and age has offered a hybrid post-quantum recipient type since v1.3.0. If what you need is post-quantum file encryption to a key, <strong>use age</strong>: it is audited and HIDE is not. What HIDE adds on top is a signed multi-device identity with revocation, hybrid signatures on containers, forward security by epoch erasure, a transparency-log primitive and MLS group binding, all under one format. Detail in <a href="https://github.com/hide-protocol/hide/blob/main/docs/comparison.md">docs/comparison.md</a>.</p>
+
+  <h2 id="docs">Documentation</h2>
+  <ul>
+    <li><a href="https://github.com/hide-protocol/hide/blob/main/README.md">README</a> — what is verified today, and what is <em>not</em> implemented or guaranteed</li>
+    <li><a href="https://github.com/hide-protocol/hide/blob/main/spec/hide-0.1.md">Specification</a> — the wire format</li>
+    <li><a href="https://github.com/hide-protocol/hide/blob/main/docs/threat-model.md">Threat model</a> — who the adversary is and what is not defended</li>
+    <li><a href="https://github.com/hide-protocol/hide/blob/main/docs/comparison.md">Comparison</a> — HIDE against age, GPG, libsodium, MLS and KMS envelopes</li>
+    <li><a href="https://github.com/hide-protocol/hide/blob/main/docs/use-cases.md">Use cases</a> — where it fits and where it does not</li>
+    <li><a href="https://github.com/hide-protocol/hide/blob/main/docs/faq.md">FAQ</a></li>
+    <li><a href="https://github.com/hide-protocol/hide/blob/main/docs/stability.md">Stability</a> — what may change before 1.0 and how it is announced</li>
+    <li><a href="https://github.com/hide-protocol/hide/blob/main/docs/migrating-from-age.md">Migrating from age</a></li>
+    <li><a href="https://github.com/hide-protocol/hide/blob/main/docs/architecture.md">Architecture</a> — crate boundaries and the C ABI</li>
+    <li><a href="https://github.com/hide-protocol/hide/blob/main/docs/audit-status.md">Audit status</a> — what has and has not been reviewed</li>
+    <li><a href="https://github.com/hide-protocol/hide/blob/main/docs/advisories.md">Advisories</a></li>
+    <li><a href="https://github.com/hide-protocol/hide/blob/main/docs/TRACKER.md">Tracker</a></li>
+    <li><a href="https://github.com/hide-protocol/hide/blob/main/SECURITY.md">SECURITY.md</a> — scope, non-goals, private vulnerability reporting</li>
+    <li><a href="https://github.com/hide-protocol/hide/blob/main/CHANGELOG.md">CHANGELOG</a></li>
+  </ul>
+
+  <h2 id="audit">Help audit this</h2>
+  <p>No third party has audited HIDE, and an unaudited encryption tool should be treated as broken until proven otherwise. Report findings through GitHub's private advisory as described in <a href="https://github.com/hide-protocol/hide/blob/main/SECURITY.md">SECURITY.md</a>; every finding is credited. There is no bounty, only credit and a fast fix.</p>
+
+  <footer>HIDE 0.6.2 · Apache-2.0 · This page loads no scripts, fonts or analytics from anywhere.</footer>
+</main>
+</body>
+</html>

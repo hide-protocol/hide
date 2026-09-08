@@ -1,0 +1,26 @@
+name: Security finding
+description: Read this first. Security issues are NOT filed here.
+labels: ["invalid"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        ## Do NOT file security issues here
+
+        A suspected vulnerability in HIDE must go through **GitHub private vulnerability reporting**, not a public issue, as described in [SECURITY.md](https://github.com/hide-protocol/hide/blob/main/SECURITY.md).
+
+        - Open a private report: <https://github.com/hide-protocol/hide/security/advisories/new>
+        - If you cannot use GitHub's form, open a plain issue asking only for a private contact, with no details of the finding.
+
+        Include the affected commit, a reproduction (a container plus the steps), and the impact you believe it has. Expect an acknowledgement within 7 days. There is no bounty; findings are credited in the CHANGELOG and in [docs/advisories.md](https://github.com/hide-protocol/hide/blob/main/docs/advisories.md).
+
+        HIDE is experimental and unaudited. Behaviour already listed under "What this version does not protect against" in SECURITY.md or in [docs/threat-model.md](https://github.com/hide-protocol/hide/blob/main/docs/threat-model.md) is a documented limitation, not a vulnerability; a bug report is the right form for a doc that is wrong.
+
+        Please close this issue without submitting it.
+  - type: checkboxes
+    id: ack
+    attributes:
+      label: Confirmation
+      options:
+        - label: I understand that this template exists only to redirect me, and that I will use private vulnerability reporting instead of filing details here.
+          required: true

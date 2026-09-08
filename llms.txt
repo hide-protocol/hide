@@ -1,0 +1,39 @@
+# HIDE Protocol
+
+> Hybrid post-quantum file encryption and signatures: X25519 + ML-KEM-768 (X-Wing) for key encapsulation, Ed25519 + ML-DSA-65 for signatures, per NIST FIPS 203 / FIPS 204. Experimental and unaudited.
+
+HIDE (Human-friendly Identity & Data Encryption) is an open, Apache-2.0 file and message encryption format with a Rust core, a CLI, a desktop app and SDKs for nine languages over one C ABI. The design goal is to encrypt to a person, not to a key: an identity is a signed, append-only log of devices that can be enrolled and revoked, so it survives losing one. Think of it as an age alternative with multi-device identity, hybrid signatures, encrypted metadata, forward security by epoch erasure and RFC 6962 transparency proofs. HIDE is experimental and unaudited: no third party has reviewed the design or code, the CLI requires `--experimental`, and for production file encryption today an audited tool such as age is the safer choice. Group messaging (`hide-mls`) and SSH login are NOT post-quantum.
+
+## Docs
+
+- [README](https://github.com/hide-protocol/hide/blob/main/README.md): overview, verified claims, comparison table, install commands, what is not implemented
+- [Wire format specification](https://github.com/hide-protocol/hide/blob/main/spec/hide-0.1.md): normative container, streaming, signature, identity-log, epoch, transparency and MLS-binding formats
+- [Threat model](https://github.com/hide-protocol/hide/blob/main/docs/threat-model.md): adversary, trust boundaries, what is and is not defended
+- [Comparison](https://github.com/hide-protocol/hide/blob/main/docs/comparison.md): HIDE against age, GPG, libsodium, minisign, Signal, MLS, Tink, AWS KMS, Kryptor
+- [Use cases](https://github.com/hide-protocol/hide/blob/main/docs/use-cases.md): where it fits, where it does not, what to use instead
+- [FAQ](https://github.com/hide-protocol/hide/blob/main/docs/faq.md): short factual answers
+- [Stability policy](https://github.com/hide-protocol/hide/blob/main/docs/stability.md): what may change before 1.0
+- [Migrating from age](https://github.com/hide-protocol/hide/blob/main/docs/migrating-from-age.md): command mapping and what you give up
+- [Architecture](https://github.com/hide-protocol/hide/blob/main/docs/architecture.md): crate boundaries, the C ABI, how SDKs load the core
+- [Audit status](https://github.com/hide-protocol/hide/blob/main/docs/audit-status.md): no third-party audit; internal findings; what an audit should cover
+- [Advisories](https://github.com/hide-protocol/hide/blob/main/docs/advisories.md): published security advisories
+- [SECURITY.md](https://github.com/hide-protocol/hide/blob/main/SECURITY.md): scope, non-goals, private vulnerability reporting
+- [CHANGELOG](https://github.com/hide-protocol/hide/blob/main/CHANGELOG.md): release history; format changes are called out explicitly
+- [Full text bundle](https://github.com/hide-protocol/hide/blob/main/llms-full.txt): README, FAQ, comparison, threat model, audit status, stability and SECURITY concatenated
+
+## Packages
+
+- [hide-cli on crates.io](https://crates.io/crates/hide-cli): the `hide` command-line binary (Rust)
+- [hide-protocol on PyPI](https://pypi.org/project/hide-protocol/): Python SDK, ctypes over the bundled core
+- [hide-protocol on npm](https://www.npmjs.com/package/hide-protocol): Node / TypeScript SDK
+- [@hide-protocol/wasm on npm](https://www.npmjs.com/package/@hide-protocol/wasm): browser WebAssembly build of the same crates
+- [hide-protocol on RubyGems](https://rubygems.org/gems/hide-protocol): Ruby SDK, stdlib fiddle
+- [HideProtocol on NuGet](https://www.nuget.org/packages/HideProtocol): .NET / C# SDK
+- [Source repository](https://github.com/hide-protocol/hide): Go, Java, PHP and C bindings are built from source
+
+## Optional
+
+- [Work tracker](https://github.com/hide-protocol/hide/blob/main/docs/TRACKER.md): open and completed work items
+- [Conformance vectors](https://github.com/hide-protocol/hide/tree/main/conformance/vectors): frozen containers and rejection vectors an independent implementation must agree on
+- [Independent Node verifier](https://github.com/hide-protocol/hide/blob/main/conformance/node/verify.mjs): a second implementation that decrypts the Rust vectors
+- [Engineering invariants](https://github.com/hide-protocol/hide/blob/main/AGENTS.md): no new primitives, no hand-rolled KEM combiner, secrets zeroize

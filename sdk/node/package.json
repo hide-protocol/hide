@@ -47,12 +47,21 @@
     "post-quantum",
     "cryptography",
     "hpke",
-    "ml-kem"
+    "ml-kem",
+    "x25519",
+    "pqc",
+    "quantum-resistant",
+    "file-encryption",
+    "e2ee",
+    "age"
   ],
   "repository": {
     "type": "git",
     "url": "git+https://github.com/hide-protocol/hide.git",
     "directory": "sdk/node"
+  },
+  "bugs": {
+    "url": "https://github.com/hide-protocol/hide/issues"
   },
   "homepage": "https://github.com/hide-protocol/hide"
 }

@@ -1,0 +1,1069 @@
+# ===== README.md =====
+
+# HIDE — hybrid post-quantum file & message encryption (X25519 + ML-KEM-768)
+
+*Human-friendly Identity & Data Encryption.* The goal is to **encrypt to a person, not to a key**.
+This repository implements the **file format engine** for post-quantum file encryption, a
+**hybrid signature scheme**, and the machinery an identity needs to outlive a single key: device
+enrollment and revocation, forward security by erasure, an auditable history, and group messaging
+over MLS.
+
+HIDE is end-to-end encryption for files and short messages whose key encapsulation is
+quantum-resistant by construction: every content key is wrapped with X-Wing, a hybrid of X25519
+and ML-KEM-768 as standardised in **NIST FIPS 203 (ML-KEM)**, and every signature is a hybrid of
+Ed25519 and ML-DSA-65 from **FIPS 204 (ML-DSA)**. A break of either half alone is not enough.
+
+> **HIDE is experimental and unaudited. Do not use this for sensitive data.** The protocol is a
+> draft, no third party has reviewed the code, and the hybrid KEM tracks a moving IETF draft.
+
+## What is verified today
+
+Every claim below was produced by a command in this repository, on Rust 1.97.1.
+
+- Encrypt/decrypt round-trips across chunk boundaries (0 B, 1 B, 64 KiB ± 1, multi-chunk).
+- One payload, many recipients: the file is encrypted once; only the content key is wrapped per recipient.
+- Tamper detection: flipping **every byte position of the frozen vectors** makes decryption fail
+  (`cargo test -p hide-object --test vectors`), and property tests extend that to random
+  single-byte mutations of random containers.
+- Truncation, chunk reordering, duplication, deletion and trailing bytes are all rejected.
+- Nine **frozen rejection vectors** (`conformance/vectors/rejections/`) — bad magic, header-length
+  overflow, flipped header and FINAL bits, altered payload salt, truncation, trailing bytes, a
+  small-order recipient key — are refused by both the Rust crates and the independent Node
+  implementation, so the two agree on what is *invalid*, not only on what is valid.
+- **Fuzzed**: six libFuzzer targets under `fuzz/` (container header, object open, keyring open,
+  identity log, epoch chain, transparency proofs) run in CI on every push.
+- `unsafe_code = "forbid"` in every crate except `hide-ffi`, where the C ABI needs it; 297 tests.
+- **Independent interoperability**: a separate Node implementation (`@hpke/hybridkem-x-wing`, `cbor`,
+  Node `crypto`) decrypts the Rust vectors, and Rust decrypts Node's container byte-identically.
+- **Cross-OS**: the full suite passes on Windows 11 and on Linux (WSL2 Ubuntu 24.04), and a Linux
+  build opens a container produced on Windows.
+- Degenerate recipient keys are refused: an X25519 component of small order would silently remove the
+  classical half of the hybrid, so all seven such points are rejected before use.
+- Property tests (`proptest`) assert the parser never panics on arbitrary input, that any single-byte
+  mutation of a container fails to decrypt, and that truncation or appended bytes always fail.
+- **Hybrid signatures**: Ed25519 + ML-DSA-65, concatenated; a signature verifies only if **both**
+  halves do, so neither a quantum nor a classical break of one is enough.
+- **Signatures cross surfaces**: a signature made in WASM verifies in Node and vice versa, and every
+  SDK returns the same verdict on the same bytes (`node conformance/cross-surface/verify.mjs`).
+- **OpenSSH accepts our agent**: `ssh-add -l` lists the key, `ssh-keygen -Y sign` obtains a signature
+  through it, and `ssh-keygen -Y verify` reports it good — verified by OpenSSH's own tools, not ours.
+- **Replay is refused**: a challenge answer is accepted once; presenting the identical valid signature
+  again is rejected, as is one given for a different audience or after its expiry.
+- **Revocation means something**: an identity is a hash-linked log of device events, and authority is
+  evaluated at the point in the log where an entry appears rather than against the final state. A
+  revoked device cannot re-enrol itself, cannot revoke the device that removed it, and cannot rewrite
+  anything after its removal. Only an offline recovery key can replace the device set.
+- **Forward security by erasure**: keys are grouped into epochs, and destroying an epoch's secret makes
+  every container written to it unreadable — including by the intended recipient. Epoch secrets are
+  independent random keys, not derived from a master seed, because a derived chain would let anyone
+  holding the seed reconstruct what was supposedly erased.
+- **A rewritten history is detectable**: the transparency log answers RFC 6962 inclusion and consistency
+  proofs, swept over every size from 1 to 33 and every index. A log that alters or drops an entry it
+  already published cannot produce a consistency proof against the root it published before.
+- **Group messages survive revocation**: MLS proves a message came from a group member, but not that
+  the member's device is still trusted. `accept_from_trusted` refuses a message from a device the
+  identity revoked, even though MLS itself considers it a valid member.
+
+## Measured performance
+
+On this machine (release build, 256 MiB payload):
+
+| Metric | Value |
+| --- | --- |
+| Encrypt / decrypt (in memory) | ~1250 / ~1550 MiB/s |
+| Peak RSS for a 256 MB file, unsigned | **7 MB** — constant, independent of input size |
+| Size overhead | 0.033% (~85 KB, dominated by the 1120-byte hybrid encapsulation) |
+| `hide.exe` | 675 KB |
+
+Streaming reuses two fixed 64 KiB buffers and one expanded AEAD instance, so there is no per-chunk
+allocation or rekeying. The constant-memory figure applies to *unsigned* encryption: signed
+encryption commits to `SHA-256(plaintext)`, so it buffers the plaintext and is capped at 1 GiB.
+
+**Verified by:** measured on the machine that produced this README (Windows 11, x86-64; your CPU
+and OS will give different absolute numbers). Reproduce with
+`cargo run --release -p hide-object --example throughput`.
+
+## Compared with age, GPG, libsodium
+
+| | HIDE | age | GPG | libsodium sealed box | Signal / MLS | AWS KMS envelope |
+| --- | --- | --- | --- | --- | --- | --- |
+| Post-quantum KEM | X-Wing (X25519 + ML-KEM-768), always | Yes, opt-in: `age-keygen -pq` gives ML-KEM-768 + X25519 since v1.3.0 | No (RFC 4880; PQ drafts in progress) | No (X25519) | Signal: PQXDH; MLS: PQ suites are a draft | ML-KEM in TLS to the service; envelope key is AES |
+| Multi-device identity | Signed device log with revocation; no directory | No — one key per recipient | Keyring, subkeys, web of trust | No — a key is a key | Yes, service-operated directory | IAM principals, not people |
+| Forward secrecy | By erasure of epoch keys, no ratchet | No | No | No | Yes, double ratchet / tree ratchet | Rotation policy on the master key |
+| Signatures | Ed25519 + ML-DSA-65 hybrid | No (integrity only) | Yes, classical | Separate `crypto_sign`, Ed25519 | Implicit via ratchet authentication | Separate KMS sign API |
+| Streaming large files | Yes, 64 KiB chunks, constant memory (unsigned) | Yes, 64 KiB STREAM | Yes | No — one message in memory | Attachments handled by the app | Application concern |
+| Third-party audit | **None** | Yes (Trail of Bits, findings fixed Aug 2026) | Long public review history | Yes (Private Internet Access, 2017) | Yes (multiple) | Vendor-attested |
+
+age and libsodium are mature, audited tools, and age has offered a hybrid post-quantum recipient
+type since v1.3.0. If what you need is post-quantum file encryption to a key, **use age**: it is
+audited and HIDE is not. What HIDE adds on top is a signed multi-device identity with revocation,
+hybrid signatures on containers, forward security by epoch erasure, a transparency-log primitive and
+MLS group binding, all under one format. Detail in [`docs/comparison.md`](docs/comparison.md).
+
+## What is NOT implemented or guaranteed
+
+Being explicit here matters more than the feature list.
+
+- **No directory, and no key-transparency *service*.** The RFC 6962 log primitive exists, but no
+  one operates a log, so recipients are still raw key files that you must exchange over a channel
+  you already trust. Nothing proves a key belongs to a particular person.
+- **Sender authentication only when the container is signed.** For an unsigned container, a successful
+  decryption proves it was not altered; it does **not** prove who created it. A signed container binds
+  a signing key to the recipient set, the metadata and the exact plaintext — but it attests to a *key*,
+  and nothing yet proves that key belongs to a particular person.
+- **Forward secrecy is by erasure, not by ratchet.** It exists only if the holder actually destroys
+  the epoch secret; anyone who later obtains a secret that was *not* erased can decrypt every
+  container captured under it. Device revocation cannot retroactively protect data an attacker
+  already holds.
+- **No hardware protection.** Secret keys are sealed with a passphrase (Argon2id + ChaCha20-Poly1305),
+  but there is no Keychain, TPM, Secure Enclave or Keystore integration, and `--insecure-plaintext`
+  still writes an unencrypted key on request.
+- **Recipient privacy is limited.** Stanzas carry no identifiers, but the recipient *count* and the
+  ciphertext size are visible, and metadata is encrypted rather than hidden. A *public* signature also
+  reveals the signer's key to anyone holding the file; the confidential placement avoids this.
+- **Signing is not streaming.** A signature commits to the plaintext, so signing buffers the payload.
+- **SSH authentication is not post-quantum.** `hide agent` offers the Ed25519 half of an identity and
+  nothing more. OpenSSH accepts only `ssh-ed25519`, `sk-*` and RSA for user authentication;
+  post-quantum algorithms exist there only in key exchange. What this buys is one sealed identity
+  instead of a plaintext private key sitting in `~/.ssh`, not quantum resistance.
+- **An agent is a signing oracle.** Anything that can reach the endpoint can ask for a signature.
+  That is why confirmation is the default and `--no-confirm` must be asked for.
+- **Group messaging is not post-quantum.** `hide-mls` uses X25519, because MLS's post-quantum
+  ciphersuites are still an Internet-Draft and no Rust provider implements them. Object encryption
+  *is* hybrid post-quantum, so a group message and a sealed file are protected differently. The API
+  states this in `PQ_STATUS` rather than letting the file format imply uniform protection.
+- **`mls-rs` is unaudited too**, like everything else here.
+- **A transparency log cannot detect a split view by itself.** Two divergent logs are each internally
+  consistent; catching that needs independent witnesses who gossip roots and refuse to sign two roots
+  for one size. No witnessing is implemented, so the log is a promise rather than a proof.
+- **Epoch secrets are not persisted.** `hide epoch-init` publishes a history, but the secret exists
+  only in the process that made it. A durable epoch store is not built, so erasure is demonstrable
+  but not yet operationally useful.
+- **Revocation is deliberately not retroactive.** Entries signed before a device was revoked stay
+  valid, because invalidating them would invalidate every message that device ever sent. Revoking a
+  device also does not evict it from MLS groups automatically; that is a separate, explicit call.
+- **An identity still is not a person.** The log proves which devices an identity trusts over time. It
+  does not prove that identity belongs to a particular human, and there is no directory to ask.
+- **The MLS credential binding is new in 0.7.0** and has been exercised only by this repository's
+  own tests; no other implementation has parsed it.
+
+## Download
+
+Releases carry three kinds of build. Verify any download against `SHA256SUMS` first.
+
+| Build | File | Use it when |
+| --- | --- | --- |
+| Desktop application | `HIDE_*-setup.exe`, `*.dmg`, `*.deb`, `*.AppImage` | You want a window, not a terminal. |
+| Portable | `hide-portable-*` | You want one executable, no installation, keys kept beside it. |
+| Command line | `hide-*` | You want to script it. |
+
+The portable build writes nothing outside its own folder: keys go into a `hide-keys` directory
+next to the executable, so it runs from a USB stick and leaves no trace in your user profile.
+
+### Platforms
+
+The CLI is built for Linux (x86-64, ARM64, and a static musl build for Alpine and
+scratch containers), Windows (x86-64, ARM64) and macOS (Apple silicon, Intel).
+
+### Package managers
+
+Manifests for Homebrew, Scoop, WinGet and the AUR live in [`packaging/`](packaging/) and are
+generated with the real checksums by the release workflow. None is published yet: putting an
+unaudited encryption tool in a default package manager reaches people who will not read the
+warnings, so that step is taken deliberately rather than automatically.
+
+## SDKs
+
+Every binding calls the same Rust core through one C ABI ([`crates/hide-ffi`](crates/hide-ffi)).
+No language reimplements the cryptography, so there is a single implementation to review, and
+[`conformance/cross-surface`](conformance/cross-surface) asserts that what one surface produces
+every other surface can open.
+
+| Language | Path | How it binds |
+| --- | --- | --- |
+| C / C++ | [`crates/hide-ffi/include/hide.h`](crates/hide-ffi/include/hide.h) | The ABI itself |
+| Python | [`sdk/python`](sdk/python) | `ctypes`, so a wheel needs no compiler |
+| TypeScript / Node | [`sdk/node`](sdk/node) | `koffi` over the same shared library |
+| Browser | [`sdk/wasm`](sdk/wasm) | WebAssembly, compiled from the same crates |
+| Go | [`sdk/go`](sdk/go) | `cgo` |
+| Java / Kotlin | [`sdk/java`](sdk/java) | Foreign Function & Memory API, no JNI shim |
+| Ruby | [`sdk/ruby`](sdk/ruby) | stdlib `fiddle`, no native gem to build |
+| PHP | [`sdk/php`](sdk/php) | `ext-ffi` |
+| .NET / C# | [`sdk/dotnet`](sdk/dotnet) | Source-generated `LibraryImport` |
+
+### Installing
+
+```
+pip install hide-protocol
+npm install hide-protocol
+gem install hide-protocol
+dotnet add package HideProtocol
+npm install @hide-protocol/wasm     # browser
+go get github.com/hide-protocol/hide/sdk/go
+```
+
+The first four carry the compiled core for seven targets — x86-64 and ARM64
+Linux (glibc), x86-64 Linux (musl), x86-64 and ARM64 Windows, and Apple
+silicon and Intel macOS — so nothing needs a Rust toolchain; the WASM package
+is compiled from the same crates. Go links the core statically through `cgo`.
+
+Java (`org.hide-protocol:hide`) is not yet on Maven Central and PHP
+(`hide-protocol/hide`) is not yet on Packagist: build both from source. Neither
+ships a binary: build it with `cargo build --release -p hide-ffi` and point
+`HIDE_LIBRARY` (Java also accepts `-Dhide.library=`) at the result, with
+`HIDE_ALLOW_LIBRARY_OVERRIDE=1` set as well. The same pair overrides the bundled
+library everywhere; it is a development-only override, since it replaces the
+entire cryptographic core, which is why the second variable is required.
+
+Secret keys never cross into the host language: each SDK holds an opaque handle, and there is
+deliberately no function that exports key material.
+
+```python
+import hide_protocol as hide
+
+with hide.SecretKey.generate() as secret:
+    box = hide.encrypt(b"hello", [secret.public_key()])
+    assert hide.decrypt(box, secret).data == b"hello"
+```
+
+A browser is a weaker place to hold a key than a desktop: any script on the page shares the
+heap, so an XSS bug is equivalent to key theft. Prefer the CLI or the desktop application for
+keys that matter.
+
+## Try it
+
+```powershell
+cargo test --workspace --all-features
+
+# A key pair. The secret is sealed with a passphrase unless you opt out.
+cargo run -p hide-cli -- --experimental keygen --secret alice.hide-key --public alice.hide-pub
+
+# Files.
+cargo run -p hide-cli -- --experimental encrypt report.pdf --recipient alice.hide-pub --output report.pdf.hide
+cargo run -p hide-cli -- --experimental open report.pdf.hide --secret alice.hide-key --output report.pdf
+
+# Sign as you encrypt. The signature is readable only by the recipients unless
+# you pass --public-signature.
+cargo run -p hide-cli -- --experimental encrypt report.pdf --recipient alice.hide-pub --output report.pdf.hide --sign alice.hide-key
+
+# Or sign a file in place, leaving report.pdf.hide-sig beside it.
+cargo run -p hide-cli -- --experimental sign report.pdf --secret alice.hide-key
+cargo run -p hide-cli -- --experimental verify report.pdf --signer alice.hide-pub.sign
+
+# Text messages, as a block you can paste into email or chat.
+cargo run -p hide-cli -- --experimental seal "meet at six" --recipient alice.hide-pub
+cargo run -p hide-cli -- --experimental unseal message.txt --secret alice.hide-key
+
+# What is this file? Answered without decrypting it.
+cargo run -p hide-cli -- --experimental info report.pdf.hide
+```
+
+The CLI never overwrites an existing file, writes plaintext to private staging first, and publishes the
+result only after authentication succeeds. `--experimental` is mandatory, so the risk is acknowledged explicitly.
+
+`keygen` writes three files: one secret master seed, and two shareable public keys — `alice.hide-pub`
+for encryption and `alice.hide-pub.sign` for checking signatures. Both derive from the master seed, so
+there is a single thing to back up, and neither can be computed from the other. A key file created
+before signatures existed still decrypts; signing with it fails and says so.
+
+A signature proves possession of a key. HIDE has no directory, so nothing ties that key to a person —
+compare a signer's key against one you already trust.
+
+### An identity with more than one device
+
+A key is a thing you lose. An identity is a log of device events, each signed by a device the log
+already trusted, so it can survive losing one.
+
+```powershell
+# The founding device, plus an offline recovery key kept somewhere else entirely.
+cargo run -p hide-cli -- --experimental identity-create --secret laptop.hide-key `
+  --recovery recovery.hide-pub.sign --label laptop --output alice.hide-log
+
+# Add a phone. Signed by the laptop, because only a trusted device may enrol another.
+cargo run -p hide-cli -- --experimental identity-enrol --log alice.hide-log `
+  --secret laptop.hide-key --device phone.hide-pub.sign --label phone `
+  --recovery recovery.hide-pub.sign
+
+# The phone is stolen.
+cargo run -p hide-cli -- --experimental identity-revoke --log alice.hide-log `
+  --secret laptop.hide-key --device phone.hide-pub.sign --recovery recovery.hide-pub.sign
+
+# Anyone can replay the log and see who is trusted now. No secret required.
+cargo run -p hide-cli -- --experimental identity-show --log alice.hide-log `
+  --recovery recovery.hide-pub.sign
+```
+
+The log is public and append-only: verifying it needs no secret, which is what lets someone else check
+which devices you trust. Revocation applies from the point it appears — the revoked phone cannot
+re-enrol itself or revoke the laptop, but containers it already holds stay readable to it, and
+signatures it made while trusted stay valid. Nothing can reach back and change that.
+
+If every device is lost, the offline recovery key replaces the whole device set. It is the only key
+that can, which is why it belongs somewhere that is not a computer.
+
+### Logging in over SSH
+
+The same identity can act as an ssh-agent, so the key that authenticates you is never written to disk
+in the clear.
+
+```powershell
+# Print the public line to paste into ~/.ssh/authorized_keys or github.com/settings/keys.
+cargo run -p hide-cli -- --experimental ssh-key --secret alice.hide-key
+
+# Serve it. Every signature asks for confirmation unless you pass --no-confirm.
+cargo run -p hide-cli -- --experimental agent --secret alice.hide-key
+```
+
+Then point SSH at it with `SSH_AUTH_SOCK` — the socket path on Unix, the pipe
+path on Windows (`$env:SSH_AUTH_SOCK = '\\.\pipe\hide-agent'`). OpenSSH for
+Windows 9.5p2 ignores `-o IdentityAgent`, so use the environment variable on
+both platforms.
+
+This offers the Ed25519 half of the identity only. SSH cannot carry the post-quantum half, so an SSH
+login is not post-quantum; what it avoids is a plaintext private key on disk. Treat the endpoint as
+sensitive: anything that can reach it can ask for a signature.
+
+### Building the desktop application
+
+```powershell
+cd apps/hide-desktop
+pnpm install --ignore-workspace
+pnpm tauri build        # installer
+pnpm build:portable     # single portable executable
+```
+
+The application calls the same Rust crates as the CLI; it contains no separate cryptographic code.
+Key material never reaches the user interface layer. A test in `src-tauri/tests/interop.rs` asserts
+that each surface can open what the other produced, so they cannot silently diverge.
+
+## Repository layout
+
+| Path | Purpose |
+| --- | --- |
+| `crates/hide-format` | Preamble, bounded canonical CBOR, portable-filename metadata |
+| `crates/hide-crypto` | HPKE X-Wing wrapping, HKDF, HMAC, ChaCha20-Poly1305; secrets zeroize and cannot be printed |
+| `crates/hide-sign` | Hybrid Ed25519 + ML-DSA-65 signatures, detached signatures, challenge–response |
+| `crates/hide-keyring` | Passphrase-sealed key files (Argon2id) and public-key armor |
+| `crates/hide-object` | Envelope encryption and authenticated 64 KiB streaming |
+| `crates/hide-epoch` | Epoch chains: forward security by erasure |
+| `crates/hide-identity` | Hash-linked device log: create, enrol, revoke, recover |
+| `crates/hide-transparency` | RFC 6962 Merkle tree, inclusion and consistency proofs |
+| `crates/hide-mls` | MLS (RFC 9420) groups bound to HIDE identities via `mls-rs` |
+| `crates/hide-ffi` | The C ABI every language binding calls |
+| `crates/hide-wasm` | WebAssembly bindings for the browser (not published to crates.io) |
+| `apps/hide-cli` | `hide` binary |
+| `apps/hide-desktop` | Desktop application (Tauri) and the portable build |
+| `sdk/` | Python, Node, WASM, Go, Java, Ruby, PHP and .NET packages; the C header is `crates/hide-ffi/include/hide.h` |
+| `packaging/` | Homebrew, Scoop, WinGet and AUR manifests |
+| `conformance/` | Frozen vectors, rejection vectors, the independent Node verifier and the cross-surface check |
+| `fuzz/` | libFuzzer targets, run in CI |
+| `docs/` | Threat model, comparison, architecture, stability policy, tracker |
+| `spec/hide-0.1.md` | Wire format |
+
+## Cryptography
+
+Suite 1 is HPKE base mode with the X-Wing hybrid KEM (X25519 + ML-KEM-768), HKDF-SHA256 and
+ChaCha20-Poly1305 in 64 KiB chunks, via the `hpke` and RustCrypto crates. Signatures are Ed25519 +
+ML-DSA-65 (FIPS 204). Key files are sealed with Argon2id. The transparency log is an RFC 6962 Merkle
+tree. Group messaging is MLS (RFC 9420) through `mls-rs`, on the classical X25519 suite only. No
+primitive is implemented here. Because X-Wing and HPKE-PQ are still drafts, every dependency is
+pinned to an exact version and the wire format will change; vectors will be regenerated when the
+upstream construction changes.
+
+## Documentation
+
+- [`docs/threat-model.md`](docs/threat-model.md) — who the adversary is and what is not defended
+- [`docs/comparison.md`](docs/comparison.md) — HIDE against age, GPG, libsodium, MLS and KMS envelopes
+- [`docs/use-cases.md`](docs/use-cases.md) — where it fits and where it does not
+- [`docs/faq.md`](docs/faq.md)
+- [`docs/stability.md`](docs/stability.md) — what may change before 1.0 and how it is announced
+- [`docs/migrating-from-age.md`](docs/migrating-from-age.md)
+- [`docs/architecture.md`](docs/architecture.md) — crate boundaries and the C ABI
+- [`docs/audit-status.md`](docs/audit-status.md) — what has and has not been reviewed
+- [`spec/`](spec/) — the wire format, [`SECURITY.md`](SECURITY.md), [`CHANGELOG.md`](CHANGELOG.md)
+
+## Help audit this
+
+No third party has audited HIDE, and an unaudited encryption tool should be treated as broken until
+proven otherwise. An audit that would change that should cover: the HPKE/X-Wing composition and the
+key schedule (`spec/hide-0.1.md` §3); the authenticated streaming and the FINAL rule (§5); the
+signature transcript and what a recipient can forge without one (§6–7); the identity log's
+authority-at-position rule (§8); the epoch chain and what "erased" actually guarantees (§9); the
+RFC 6962 proofs (§10); the MLS credential binding (§11); the C ABI's memory and panic handling in
+`hide-ffi`; and the ssh-agent's confirmation path. Internal review found real defects in 0.7.0
+([`SECURITY.md`](SECURITY.md) lists them), which is evidence that more exist. Report through
+GitHub's private advisory as described in `SECURITY.md`; every finding is credited in the
+CHANGELOG and in `docs/advisories.md`. There is no bounty, only credit and a fast fix.
+
+## License
+
+Apache-2.0 — the specification and vectors are freely implementable, with no requirement to use any
+particular server or service.
+
+# ===== docs/faq.md =====
+
+# HIDE frequently asked questions
+
+*HIDE is experimental and has not been audited by a third party. See [audit-status.md](audit-status.md).*
+
+Short factual answers. Each links to the document that carries the detail. "HIDE" here means version 0.6.x of the crates, CLI and SDKs in this repository.
+
+## What is HIDE?
+
+HIDE is a hybrid post-quantum file encryption format and toolset. Every content key is wrapped with X-Wing — X25519 combined with ML-KEM-768 (NIST FIPS 203) — through HPKE (RFC 9180), and every signature is Ed25519 combined with ML-DSA-65 (FIPS 204). It ships a Rust core, a CLI, a desktop app, and SDKs for nine languages over one C ABI. Wire format: [../spec/hide-0.1.md](../spec/hide-0.1.md).
+
+## Is HIDE post-quantum?
+
+For file and message encryption, yes, in the hybrid sense: an attacker must break both X25519 and ML-KEM-768 to recover a content key, and both Ed25519 and ML-DSA-65 to forge a signature. Two parts are **not** post-quantum: `hide-mls` group messaging (classical X25519 suite) and SSH login through `hide agent` (Ed25519 only, because OpenSSH accepts no PQ user-authentication algorithm). See [threat-model.md](threat-model.md).
+
+## Is HIDE audited?
+
+No. No third party has reviewed the design or code. Internal review on 2026-09-08 found seven real defects, all fixed in 0.7.0, which is evidence that others remain. Details, and what an audit should cover, in [audit-status.md](audit-status.md).
+
+## Should I use HIDE in production?
+
+Not for data whose loss or disclosure would matter. The CLI requires `--experimental` for this reason. Use it to evaluate the format, to build against the API, or to review the code. For production file encryption today, an audited tool such as age is the safer choice ([comparison.md](comparison.md)).
+
+## How is HIDE different from age?
+
+age is audited, packaged everywhere, and since v1.3.0 offers opt-in hybrid ML-KEM-768 + X25519 recipients. HIDE is unaudited, PQ-hybrid by default, and adds hybrid signatures, encrypted metadata, a multi-device identity log with revocation, epoch chains for forward security by erasure, and RFC 6962 proofs. age encrypts to SSH keys; HIDE does not. Full mapping in [migrating-from-age.md](migrating-from-age.md) and [comparison.md](comparison.md).
+
+## Does HIDE replace GPG?
+
+No. GPG covers email, keyservers, smartcards, the web of trust and decades of tooling. HIDE covers file and message encryption plus signatures with a small, fully specified format and a hybrid PQ KEM. If you use GPG for email or package signing, HIDE is not a substitute ([comparison.md](comparison.md)).
+
+## What does "encrypt to a person" mean?
+
+It is the design goal, not a delivered property. Today a recipient is a public key file. The identity log lets one identity span several devices and survive losing one, but nothing in HIDE proves a key or a log belongs to a particular human — there is no directory. You still exchange keys over a channel you trust ([threat-model.md](threat-model.md), "Trust boundaries").
+
+## Why hybrid and not pure ML-KEM?
+
+ML-KEM is new; X25519 has two decades of scrutiny. A hybrid means a flaw in either half alone does not break confidentiality. This is the same reasoning behind hybrid TLS deployments and age's PQ recipients. The cost is 1120 bytes of encapsulation per recipient.
+
+## Why X-Wing?
+
+X-Wing is a specified, analysed combiner of X25519 and ML-KEM-768 with an IANA-allocated HPKE KEM id (`0x647A`), implemented in the `hpke` crate. Using it means HIDE defines no combiner of its own, which is an explicit invariant in [../AGENTS.md](../AGENTS.md). Its byte format has been stable across draft revisions.
+
+## Why 64 KiB chunks?
+
+64 KiB is large enough that per-chunk overhead (16-byte tag, 5-byte record header) is 0.03 %, and small enough that a decryptor holds two fixed buffers — measured peak RSS is 7 MB for a 256 MB file. It is also the chunk size age's STREAM uses, so the trade-off is well understood. Each chunk's AAD binds object id, header hash, counter, kind and length ([../spec/hide-0.1.md](../spec/hide-0.1.md) §5).
+
+## Can HIDE stream large files?
+
+Unsigned encryption and all decryption stream with constant memory. Signed encryption buffers the plaintext, because the signature commits to `SHA-256(plaintext)`, and is capped at 1 GiB (`MAX_SIGNED_INPUT`). Sign a detached signature with `hide sign` if the file is larger.
+
+## Can a recipient forge a container?
+
+For an **unsigned** container, yes: every recipient holds the content key and can rewrite the recipient set or re-encrypt different content with a valid header MAC. For a **signed** container, no: the transcript binds the recipient stanzas and the plaintext hash, and both signature halves must verify. Sign anything a second recipient will rely on ([threat-model.md](threat-model.md)).
+
+## Does decryption prove who sent a file?
+
+Only if the container is signed, and even then it proves which *key* signed it, not which person. An unsigned container that decrypts proves only that no non-recipient altered it.
+
+## Is forward secrecy real?
+
+It is forward security **by erasure**: keys live in epochs with independent random secrets, and destroying an epoch's secret makes every container sent to it unreadable by everyone. There is no ratchet, and nothing can prove to a third party that erasure happened. The CLI does not yet persist epoch secrets, so this is demonstrable in the Rust API and not yet operational ([threat-model.md](threat-model.md), "Device revocation versus epoch erasure").
+
+## What happens if my device is stolen?
+
+Revoke it from another trusted device with `hide identity-revoke`, or from the offline recovery key if every device is gone. From that log entry on, the device cannot re-enrol itself or revoke others. It **keeps** access to everything it already held or was encrypted to before senders replay the log. Revocation is not retroactive ([threat-model.md](threat-model.md)).
+
+## Are group messages post-quantum?
+
+No. `hide-mls` uses `MLS_128_DHKEMX25519_AES128GCM_SHA256_Ed25519` because PQ MLS suites are still `draft-ietf-mls-pq-ciphersuites` with no Rust provider. The constant `hide_mls::PQ_STATUS` says so in the API. What HIDE adds to MLS is a credential bound to a HIDE identity so a revoked device is detectable ([use-cases.md](use-cases.md) §3).
+
+## Is SSH login through `hide agent` post-quantum?
+
+No. It offers the Ed25519 half of the identity. OpenSSH accepts only `ssh-ed25519`, `sk-*` and RSA for user authentication; PQ exists in SSH key exchange only. What it buys is a passphrase-sealed key instead of a plaintext one in `~/.ssh`.
+
+## Can I encrypt to someone's SSH key like age does?
+
+No. `hide ssh-key` and `hide agent` are for logging in over SSH with a HIDE identity. HIDE recipients are HIDE public keys only ([migrating-from-age.md](migrating-from-age.md)).
+
+## Which languages have SDKs?
+
+C (the ABI itself), Python, TypeScript/Node, browser WASM, Go, Java/Kotlin, Ruby, PHP and .NET — nine surfaces over one C ABI in `crates/hide-ffi`. No language reimplements the cryptography, and key material never crosses into the host language. Python, npm, RubyGems, NuGet and crates.io packages are published via OIDC trusted publishing ([architecture.md](architecture.md)).
+
+## How do I verify a download?
+
+Check the file against `SHA256SUMS` from the same GitHub release. HIDE does not yet sign its own releases with HIDE or with Sigstore; that is planned. Package-manager manifests exist in `packaging/` but are deliberately not published ([../README.md](../README.md), "Download").
+
+## Why is the version 0.x?
+
+Because the wire format and APIs may still change, the HPKE-PQ document is a draft, and no audit has happened. A 0.x minor bump may break format or API and is always called out in the changelog; frozen vectors must keep opening. What 1.0 requires is in [stability.md](stability.md).
+
+## Will files I encrypt today open in a future version?
+
+Every container produced by 0.1.0 through 0.6.2 still opens; the frozen vectors are tested on every commit. If a 0.x release ever cannot open an earlier container, the changelog will say so and the previous binary will still be available. After 1.0 the format never breaks ([stability.md](stability.md)).
+
+## Is my filename hidden?
+
+Yes — filename and media type are encrypted in the header. Not hidden: the ciphertext size, the recipient count, whether the container is signed, and the signer's key if the signature is *public* rather than confidential ([threat-model.md](threat-model.md)).
+
+## What if I forget my passphrase?
+
+The key is unrecoverable. Key files are sealed with Argon2id (19 MiB, t = 2 by default; a floor of 8 MiB is enforced) and ChaCha20-Poly1305; there is no escrow or reset. Back up the sealed key file and remember the passphrase, or keep an identity with a second device and an offline recovery key.
+
+## Does HIDE use any hardware key storage?
+
+No. There is no TPM, Secure Enclave, Keychain, Android Keystore or PIV integration. The passphrase-sealed key file is the only at-rest protection, and `keygen --insecure-plaintext` writes an unsealed key on request.
+
+## Is using HIDE in a browser safe?
+
+The WASM package is the same code as every other SDK, but any script on the page shares the heap: an XSS bug equals key theft. Use the browser to encrypt *to* others; keep decryption keys in the CLI or desktop app ([use-cases.md](use-cases.md) §8).
+
+## Does the desktop app implement its own cryptography?
+
+No. It calls the same Rust crates as the CLI, key material never reaches the webview, and `apps/hide-desktop/src-tauri/tests/interop.rs` proves the CLI and the app open each other's output. CI fails if that test skips ([architecture.md](architecture.md)).
+
+## Is there a formal specification and are there test vectors?
+
+Yes: [../spec/hide-0.1.md](../spec/hide-0.1.md) is normative, and `conformance/vectors/` holds frozen containers plus nine rejection vectors. An independent Node implementation (`conformance/node/verify.mjs`) decrypts the vectors and refuses the rejections, so two implementations agree on what is invalid, not only on what is valid.
+
+## How can I help, audit or fund?
+
+Read [audit-status.md](audit-status.md) for the prioritised list of what to review and an estimate of effort. Report findings through GitHub's private advisory ([../SECURITY.md](../SECURITY.md)). To fund a third-party audit, open an issue titled "audit funding"; the report will be published unredacted.
+
+## Is there a bug bounty?
+
+No. Reporters receive credit in the changelog and in [advisories.md](advisories.md), and a fast fix.
+
+## What license is HIDE under?
+
+Apache-2.0, for the code, the specification and the vectors. There is no requirement to use any server or service.
+
+# ===== docs/comparison.md =====
+
+# HIDE compared with other encryption tools
+
+*HIDE is experimental and has not been audited by a third party. See [audit-status.md](audit-status.md).*
+
+This is a comparison on properties, not a ranking. Several tools below are audited and widely deployed; HIDE is neither. If your threat model does not require a hybrid post-quantum KEM, hybrid signatures, or a multi-device identity log, one of the audited tools is the safer choice today. Facts about other tools were checked against their public repositories on 2026-09-08; where a date could not be confirmed the cell says so.
+
+## Property table
+
+| Tool | PQ KEM | Hybrid | Streaming | Multi-recipient | Signatures | Multi-device identity | Forward secrecy | Group messaging | Third-party audit | Language bindings | License |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| **HIDE 0.6.x** | X-Wing (X25519 + ML-KEM-768, FIPS 203) | Yes, KEM and signature | Yes, 64 KiB chunks, constant memory (unsigned) | Yes, ≤64 | Ed25519 + ML-DSA-65 (FIPS 204); both must verify | Hash-linked device log with revocation and recovery | By epoch erasure only; no ratchet | MLS via `mls-rs`, **classical suite only** | **None** | 9 over one C ABI: C, Python, Node, WASM, Go, Java, Ruby, PHP, .NET | Apache-2.0 |
+| **age** (Go reference) | ML-KEM-768 + X25519 hybrid recipients since v1.3.0 (`age-keygen -pq`); not default | Yes for PQ recipients | Yes, 64 KiB STREAM | Yes | No (integrity only) | No — one key per recipient | No | No | Yes — Trail of Bits; findings fixed in v1.3.2 (Aug 2026) | Go; Rust (rage); TypeScript (typage) | BSD-3-Clause |
+| **rage** (Rust) | Via age plugin system (`age-plugin-pq`); built-in PQ status: see project | As age | As age | As age | No | No | No | No | Not known to us | Rust crate `age` | Apache-2.0 OR MIT |
+| **GPG / OpenPGP** | No in RFC 9580; PQ composite drafts in progress | Drafts only | Yes | Yes | Yes, classical | Keyring with subkeys; web of trust | No | No | Long public review history; no single audit to cite | Many via GPGME | GPL-3.0 (GnuPG) |
+| **libsodium `crypto_box_seal`** | No (X25519) | No | No — one message in memory | No (one recipient per sealed box) | Separate `crypto_sign` (Ed25519) | No | No | No | Yes — Private Internet Access, 2017 | Very many | ISC |
+| **minisign / signify** | No (Ed25519) | No | Signing only, prehash mode | n/a | Yes, Ed25519 only | No | n/a | n/a | Widely reviewed; no formal audit known to us | Several ports | ISC (minisign); ISC/BSD (signify) |
+| **Signal Protocol** | PQXDH (ML-KEM) for initial key agreement; SPQR ratchet announced | Yes | Attachments handled by app | Pairwise + Sender Keys | Implicit via ratchet | Yes, service-operated directory and key transparency | Yes, double ratchet | Yes | Yes, multiple academic analyses and audits (see project) | libsignal: Rust with Java/Swift/TS | AGPL-3.0 |
+| **MLS (RFC 9420), bare** | No — PQ suites are `draft-ietf-mls-pq-ciphersuites` | Draft | n/a | n/a (group) | Per-leaf signature keys | Credential is application-defined | Yes, tree ratchet | Yes, the point of it | Protocol has formal analysis; implementations vary | OpenMLS (Rust), mls-rs (Rust), others | Spec: IETF; impls vary |
+| **Tink** | No | No | Yes (streaming AEAD) | Via hybrid encryption, one recipient per ciphertext | Yes, classical | No (KMS-backed keysets) | No | No | Google-internal review; see project | Java, C++, Go, Python, Obj-C | Apache-2.0 |
+| **AWS KMS envelope / Encryption SDK** | ML-KEM in TLS to the service; data keys are AES | No | Yes (ESDK framing) | Via multiple CMKs / keyrings | Separate KMS Sign API | IAM principals, not people | Key rotation policy; no FS | No | Vendor-attested; FIPS 140 validated HSMs (vendor claim) | Java, Python, C, JS, .NET, Go, Rust, CLI | Apache-2.0 (SDK); service proprietary |
+| **Kryptor** | Pre-shared symmetric keys only ("post-quantum secure key exchange" via PSK) | No | Not checked | Yes | Yes, Ed25519 with comment | No | No | No | Not known to us | .NET only | GPL-3.0 |
+
+Cells say "see project" where a claim is plausible but a specific auditor or year could not be verified from the project's own material during this check. HIDE's own column has no such cell: it has not been audited.
+
+## Tool by tool
+
+### age and rage
+
+**What age does that HIDE does not.** age is audited; HIDE is not. age is packaged in nearly every distribution and has a plugin ecosystem (YubiKey/PIV via `age-plugin-yubikey`, `age-plugin-pq`, and others). age encrypts to existing `ssh-ed25519` and `ssh-rsa` public keys, including a GitHub user's published keys; HIDE's `ssh-key` and `agent` commands are for SSH *login*, not for encrypting to SSH keys. age's format is deliberately small and has three interoperable implementations (Go, Rust, TypeScript). age v1.3.0 added hybrid ML-KEM-768 + X25519 recipients, so "age has no post-quantum option" is no longer true; it is opt-in and recipients are ~2000 characters long.
+
+**What HIDE adds.** Hybrid signatures (Ed25519 + ML-DSA-65) inside or beside the container, so a file can be both confidential and attributable to a key. A recipient set that cannot be rewritten by a co-recipient when signed. A device log with revocation and an offline recovery key, so an identity can survive losing a device. Epoch chains for forward security by erasure. RFC 6962 proofs. Encrypted metadata (filename, media type). A single C ABI with nine bindings. PQ KEM as the only mode rather than an option.
+
+See [migrating-from-age.md](migrating-from-age.md) for a command mapping.
+
+### GPG / OpenPGP
+
+**What GPG does better.** Decades of deployment, review and tooling; keyservers, subkeys, expiry, the web of trust; smartcard support; integration with git, email, and package managers. OpenPGP has an active standardisation process (RFC 9580) and PQ composite schemes are being drafted in the IETF.
+
+**What HIDE adds.** A hybrid post-quantum KEM today rather than in a draft. A small, fully specified format with frozen vectors and rejection vectors that a second implementation actually passes. No algorithm negotiation or configuration surface. Canonical, bounded parsing with fuzz targets. HIDE does not attempt GPG's scope: no email integration, no keyservers, no smartcards.
+
+### libsodium `crypto_box_seal`
+
+**What libsodium does better.** Audited (Private Internet Access, 2017), ubiquitous, minimal, and the right tool when you need a sealed message to one recipient inside your own protocol. Constant-time primitives with a long track record.
+
+**What HIDE adds.** A complete file format rather than a primitive: multi-recipient, streaming with constant memory, authenticated chunk ordering and end-of-stream, encrypted metadata, hybrid PQ KEM, hybrid signatures. libsodium sealed boxes are X25519 only and hold the whole message in memory.
+
+### minisign / signify
+
+**What they do better.** Tiny, mature, widely reviewed, and the standard for signing release artifacts and OS packages. Ed25519 only, which is a feature: nothing to configure.
+
+**What HIDE adds.** A hybrid signature where both a classical and a post-quantum half must verify. A signature that can be *confidential* — inside the encrypted metadata, visible only to recipients. Challenge–response with replay protection. Identity logs so a signing key can be rotated with an auditable history. HIDE's detached signatures are 5357 bytes versus minisign's ~100; that is the cost of ML-DSA-65.
+
+### Signal Protocol
+
+**What Signal does better.** Real forward secrecy and post-compromise security through the double ratchet. PQXDH gives hybrid post-quantum initial key agreement, and a PQ ratchet (SPQR) has been announced. A service-operated directory and key transparency. Extensive academic analysis. Signal is a messaging protocol; comparing it to a file format is mostly a category error.
+
+**What HIDE adds.** Nothing for interactive messaging. HIDE is for data at rest: files, backups, artifacts. Its forward security is by erasure, not ratchet, and it has no directory. If you need a ratchet, use Signal or MLS. libsignal is AGPL-3.0; HIDE is Apache-2.0.
+
+### MLS (RFC 9420), bare
+
+**What MLS does better.** Group key agreement with a tree ratchet, forward secrecy and post-compromise security, formally analysed, standardised. This is what `hide-mls` uses internally.
+
+**What HIDE adds.** A credential: MLS leaves the credential type to the application, and `hide-mls` supplies a HIDE-signed binding of a device id to the MLS signature key, checked against the identity log so a revoked device is detectable as untrusted. HIDE does *not* add post-quantum protection to MLS — the suite is `MLS_128_DHKEMX25519_AES128GCM_SHA256_Ed25519` and `hide_mls::PQ_STATUS` says so in the API.
+
+### Tink
+
+**What Tink does better.** A key-management-first design: keysets, rotation, KMS-wrapped keys, and misuse-resistant APIs across five languages, maintained by Google. Streaming AEAD for large data. If you are inside a cloud with a KMS, Tink is built for that.
+
+**What HIDE adds.** A portable, self-describing file that needs no KMS or key management service, a hybrid PQ KEM, hybrid signatures, and multi-recipient encryption of one payload. Tink's hybrid encryption is classical and one-recipient.
+
+### AWS KMS envelope encryption / AWS Encryption SDK
+
+**What KMS does better.** Keys never leave FIPS-validated HSMs; access is IAM-governed and audited in CloudTrail; rotation is a policy. The Encryption SDK gives a framed, streaming format with multiple keyrings. It is the right answer when the keys should belong to an organisation, not a person, and the organisation lives in AWS.
+
+**What HIDE adds.** Independence from a cloud provider: a container is decryptable with a key file and nothing else. Recipients are people or devices, not IAM principals. PQ protection on the data key itself rather than only on the TLS connection to the service. Signatures bound to the plaintext.
+
+### Kryptor
+
+**What Kryptor does better.** A single-binary tool with passphrase, symmetric and asymmetric modes, encrypted filenames, and ciphertexts indistinguishable from random. Signing with comments. Simple UX.
+
+**What HIDE adds.** An asymmetric post-quantum KEM; Kryptor's PQ story is a pre-shared symmetric key, which is a different deployment model. Hybrid signatures. Identity logs, epochs, transparency proofs. Nine language bindings; Kryptor is .NET only. Kryptor is GPL-3.0; HIDE is Apache-2.0.
+
+## What HIDE is not
+
+HIDE is not audited, not formally verified, not a messaging protocol, not a key directory, and not post-quantum for group messaging or SSH. The list of what is not implemented is in the README and [threat-model.md](threat-model.md); it is longer than this comparison.
+
+# ===== docs/threat-model.md =====
+
+# HIDE threat model
+
+*HIDE is experimental and has not been audited by a third party. See [audit-status.md](audit-status.md).*
+
+This document states what HIDE defends, against whom, and what it does not. Every "provided" claim below is backed by a test in the repository; every "not provided" is a deliberate statement, not an omission. The normative wire format is [../spec/hide-0.1.md](../spec/hide-0.1.md).
+
+## Assets
+
+| Asset | Where it lives | Protected by |
+| --- | --- | --- |
+| Plaintext of a container | Never on disk unencrypted except at the sender and after a recipient's successful decryption | X-Wing (X25519 + ML-KEM-768, NIST FIPS 203) via HPKE, ChaCha20-Poly1305 chunks |
+| Content encryption key (CEK) | Wrapped once per recipient in the header | HPKE seal to each recipient's public key |
+| Recipient secret key | A key file, or process memory while in use | Argon2id (19 MiB, t=2 default; floor 8 MiB) + ChaCha20-Poly1305 at rest; nothing while in memory |
+| Signing key | Same master seed, domain-separated | Same key file |
+| Metadata (filename, media type, confidential signature) | Encrypted in the header | ChaCha20-Poly1305 under a key derived from the CEK |
+| Container integrity: chunk order, count, end of stream, recipient set | Header MAC + per-chunk AAD + FINAL record | HMAC-SHA256 over `preamble ‖ protected`; 91-byte AAD binding object id, header hash, counter, kind, length |
+| Authorship of content | Only if signed | Ed25519 + ML-DSA-65 (FIPS 204) hybrid over a transcript that includes `SHA-256(plaintext)` and the recipient set |
+| Device membership of an identity | Public hash-linked log | Signatures by already-trusted devices; authority evaluated at entry position |
+| Epoch history | Public hash-linked chain | SHA-256 links; secrets are independent random keys |
+| Published log state | Checkpoint `size ‖ root` | RFC 6962 inclusion and consistency proofs |
+
+## Adversaries
+
+**Passive network observer.** Sees containers in transit. Learns ciphertext length, recipient count (number of stanzas), and whether the container is signed (preamble minor 2). Learns a *public* signer's key. Cannot read plaintext, metadata, or a confidential signature.
+
+**Storage or cloud provider.** Holds containers indefinitely. Same view as the network observer, plus the ability to serve altered or old containers. Alteration is detected; substitution of a whole older container is not (HIDE has no freshness).
+
+**Malicious co-recipient.** Holds the CEK. For an *unsigned* container can rewrite the recipient set, re-encrypt arbitrary plaintext under the same header, and recompute a valid header MAC — the container will look authentic to every other recipient. For a *signed* container, cannot do any of that without invalidating the signature, because the transcript binds the stanza list and the plaintext hash. Cannot learn the other recipients' secret keys.
+
+**Compromised device.** An attacker with a recipient's secret key reads every container encrypted to that key, past and future, until the key is revoked *and* senders stop using it. Can sign as that device until revocation appears in the log. Cannot forge entries that appear after its revocation, cannot re-enrol itself, cannot revoke the device that removed it.
+
+**Quantum-capable future adversary ("harvest now, decrypt later").** Records containers today, attacks them when a cryptographically relevant quantum computer exists. Must break both X25519 *and* ML-KEM-768 to recover a CEK. Must break both Ed25519 *and* ML-DSA-65 to forge a signature. This is the adversary HIDE's hybrid construction exists for. It does *not* apply to `hide-mls` group messages, which use classical X25519 only.
+
+**Coercion or legal compulsion.** A party who can compel a key holder. HIDE provides no deniability; a signed container is non-repudiable proof that a key signed that content. Epoch erasure limits what a compelled holder *can* hand over, but only if the erasure happened before the compulsion and is genuine.
+
+**Malicious log operator.** Operates a transparency log. Can present a rewritten history to a client who never saw the earlier root — a split view. Cannot produce a consistency proof from a published root to a history that dropped or altered an entry.
+
+## Trust boundaries
+
+1. **Sender ↔ recipient key.** HIDE has no directory. A public key arrives over a channel you already trust, or you compare a fingerprint out of band. Nothing in HIDE proves a key belongs to a person.
+2. **Container ↔ decrypting application.** The filename in metadata is untrusted; an application must never use it to choose an output path. Plaintext is not published until FINAL authenticates.
+3. **Rust core ↔ host language.** Every SDK crosses one C ABI. Key material never crosses it; handles do. A browser page is one trust domain: any script on it can use the key.
+4. **Identity log ↔ verifier.** The log is public and self-verifying. The offline recovery key's public half is the root of trust a verifier must obtain independently.
+5. **Epoch holder ↔ everyone.** Forward security exists only if the holder erases. Nothing external can confirm erasure happened.
+
+## Property × adversary
+
+Legend: **P** provided (tested) · **–** not provided · **~** partial, reason in the cell.
+
+| Property | Network observer | Storage provider | Co-recipient (unsigned) | Co-recipient (signed) | Compromised device | Quantum (future) | Log operator |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| Confidentiality of plaintext | P | P | – (is a recipient) | – (is a recipient) | – | P (hybrid) | P |
+| Confidentiality of metadata | P | P | – | – | – | P | P |
+| Integrity: tamper, truncate, reorder, duplicate | P | P | – (holds CEK) | P (transcript) | – for own containers | P | n/a |
+| Recipient set cannot be rewritten | P | P | **–** | P | – | P | n/a |
+| Authorship of content | – (unsigned) | – (unsigned) | – | P | ~ until revocation appears | P (hybrid sig) | n/a |
+| Confidentiality of signer | P (confidential placement) / – (public) | same | – | – | – | same | n/a |
+| Recipient anonymity | – (count visible) | – | – | – | – | – | n/a |
+| Plaintext length hidden | – | – | – | – | – | – | n/a |
+| Freshness / anti-rollback | – | **–** | – | – | – | – | – |
+| Forward secrecy | ~ by erasure only; no ratchet | ~ same | ~ | ~ | ~ only for epochs erased before compromise | ~ | n/a |
+| Post-compromise security | – | – | – | – | – (no ratchet) | – | n/a |
+| Revocation takes effect | n/a | n/a | n/a | n/a | P from log position; **not retroactive** | n/a | n/a |
+| History rewrite detectable | n/a | n/a | n/a | n/a | n/a | n/a | P with a prior root; **– split view** |
+| Deniability | – | – | – | – | – | – | – |
+| Group-message PQ | n/a | n/a | n/a | n/a | n/a | **–** (X25519 only) | n/a |
+| Key in process memory | out of scope | out of scope | out of scope | out of scope | – | out of scope | out of scope |
+
+## Explicitly out of scope
+
+- **Binding a key to a person.** No directory, no key server, no transparency *service*. The RFC 6962 primitive exists; nobody operates a log.
+- **Recipient anonymity and traffic analysis.** Stanzas carry no identifiers but the count and the ciphertext length are visible.
+- **Hiding file size.** No padding scheme.
+- **Freshness.** A storage provider can return an older valid container.
+- **Post-compromise security and ratcheting.** Forward security is by erasure only.
+- **Deniability.** Signatures are non-repudiable.
+- **Hardware-backed keys.** No TPM, Secure Enclave, Keychain, Keystore or PIV integration.
+- **Memory disclosure.** An attacker who reads process memory while a key is in use obtains the key. Secrets are zeroized on drop and never derive `Debug`, `Clone` or `Serialize`; that is hygiene, not a defence.
+- **Post-quantum group messaging.** `hide-mls` uses `MLS_128_DHKEMX25519_AES128GCM_SHA256_Ed25519`; PQ MLS suites are an Internet-Draft with no Rust provider.
+- **Post-quantum SSH.** `hide agent` offers the Ed25519 half only; OpenSSH accepts no PQ user-authentication algorithm.
+- **Side channels** beyond constant-time primitives in upstream crates and evaluating both signature halves before deciding.
+- **Split-view detection** in the transparency log. Needs witnesses and gossip; none is implemented.
+- **Availability.** Altering the unauthenticated 16-byte `payload_salt` makes a container unreadable. This is denial of service and nothing more.
+
+## Residual risks
+
+- **Unaudited composition.** The primitives are upstream and pinned; the composition (key schedule, AAD layout, transcript, log encoding) is ours and has been reviewed only internally. Internal review found seven real defects in 0.7.0 ([audit-status.md](audit-status.md)); more exist.
+- **Moving standards.** X-Wing is stable across draft-ietf-hpke-pq revisions and KEM id `0x647A` is IANA-allocated, but the HPKE-PQ document is still a draft. A change would require regenerating vectors and is a format change ([stability.md](stability.md)).
+- **Unsigned containers are trusted by habit.** Users may assume an unsigned container that decrypts came from who they think. It proves only that it was not altered by a non-recipient.
+- **Epoch secrets are not persisted.** `hide epoch-init` publishes a history but the secret lives only in that process, so erasure is demonstrable and not yet operationally useful.
+- **Key file passphrase is the only at-rest protection.** A weak passphrase plus a copied key file is a recoverable key. There is no escrow or reset; a forgotten passphrase is unrecoverable.
+- **The MLS binding is parsed by exactly one implementation.** Ours.
+- **SDK boundaries.** Nine bindings over one ABI mean one bug is nine bugs. The cross-surface test catches divergence, not shared defects.
+
+## Device revocation versus epoch erasure
+
+These are different mechanisms that answer different questions.
+
+| | Revoking a device | Erasing an epoch |
+| --- | --- | --- |
+| What changes | The identity log gains a `Revoke` entry signed by a still-trusted device (or `Recover` by the offline key) | The holder destroys the epoch's secret key; the public chain is unchanged |
+| Effect on containers the device already holds | **None.** It still has the CEK for anything it decrypted, and the secret key for anything encrypted to it. | Every container encrypted to that epoch becomes unreadable **by everyone**, including the legitimate recipient, if no copy of the secret exists |
+| Effect on future containers | Senders who replay the log stop encrypting to it. Senders who do not replay the log continue to. | Senders who follow the chain move to the next epoch; the erased epoch's public key still verifies as having existed |
+| Effect on past signatures and log entries | Remain valid. Revocation is not retroactive by design. | n/a — epochs carry no signing authority |
+| Effect on MLS groups | Member becomes detectable as untrusted via `accept_from_trusted`; not automatically evicted | n/a |
+| Who can verify it happened | Anyone with the log and the recovery public key | Nobody. Erasure is an act by the holder; the chain proves the epoch existed, not that its secret is gone |
+| Protects against | A stolen device *continuing* to be trusted | A key obtained *later* being used on data captured *earlier* |
+| Does not protect against | Data the device already had | A secret copied before erasure; a holder who claims to have erased and did not |
+
+Revoke when a device is lost or untrusted. Erase epochs on a schedule to bound how much a future key compromise exposes. Doing one does not do the other.
+
+# ===== docs/audit-status.md =====
+
+# HIDE audit status
+
+*HIDE is experimental and has not been audited by a third party. See [audit-status.md](audit-status.md).*
+
+## No third-party audit has been performed.
+
+No security firm, academic group or independent researcher has reviewed HIDE's design or code under any engagement. Nothing below changes that. An unaudited encryption tool should be treated as broken until shown otherwise; the CLI requires `--experimental` for that reason.
+
+## What has been reviewed, and by whom
+
+The only reviews are internal — performed by the maintainers on their own code. They are listed because they are evidence of process, not evidence of security, and because the defects they found are the best indication that others remain.
+
+| Date | Reviewer | Scope | Findings | Status |
+| --- | --- | --- | --- | --- |
+| 2026-09-08 | maintainers (internal) | MLS credential binding, signature stanza handling, confidential-signature metadata path, identity-log encoding, C ABI panic handling, SDK library loading, ssh-agent confirmation and Windows pipe ACL, Argon2id parameter floor | 7 | all fixed in 0.7.0; each fix has a test that fails on the previous code |
+| 2026-09-06 | maintainers (internal) | X25519 small-order points in recipient keys; chunk AAD/nonce byte layout | 2 | fixed in 0.3.0; AAD/nonce bytes now pinned exactly in tests |
+| 2026-09-06 | maintainers (internal) | Signature transcript: header-only signing forgeable by any recipient | 1 | design changed before 0.5.0 shipped; transcript binds `SHA-256(plaintext)` |
+
+### The seven 0.7.0 findings
+
+From [../SECURITY.md](../SECURITY.md) and [../CHANGELOG.md](../CHANGELOG.md):
+
+1. **MLS credentials were self-asserted** — a member could present another device's id; nothing proved it held that device's key. Now a HIDE-signed binding over the MLS signature key ([../spec/hide-0.1.md](../spec/hide-0.1.md) §11).
+2. **7 of 8 signature stanzas were never verified** — only the first of up to eight public stanzas was checked. `MAX_SIGNATURES` is now 1 and a second stanza is rejected.
+3. **One metadata key and nonce sealed two plaintexts** in the confidential-signature path. No disclosure, but nonce reuse under one key.
+4. **The identity-log encoding was not canonical** — two event sequences could serialise identically. Every variable-length field is now length-prefixed.
+5. **`panic = "abort"` made `HIDE_ERR_PANIC` unreachable** in the C ABI. The FFI now builds with `panic = "unwind"` and catches at the boundary.
+6. **`HIDE_LIBRARY` was an unconditional library-injection vector** in every SDK. Honoured only with `HIDE_ALLOW_LIBRARY_OVERRIDE=1`.
+7. **The ssh-agent read confirmation from stdin, and the Windows pipe had no ACL.** Confirmation now reads the controlling tty; the pipe is restricted to the current user. (Listed alongside: Argon2id parameters gained a floor — a key file declaring weaker parameters is refused.)
+
+## Automated evidence that exists
+
+These are not audits. They constrain what a bug can look like; they do not show its absence.
+
+- 297 tests, run on Linux, Windows and macOS in CI.
+- Property tests (`proptest`): the parser never panics on arbitrary input; any single-byte mutation of a container fails to decrypt; truncation and appended bytes always fail.
+- Six libFuzzer targets under [../fuzz/fuzz_targets](../fuzz/fuzz_targets) (container header, object open, keyring open, identity log, epoch chain, transparency proofs), run in CI on every push.
+- Frozen vectors under [../conformance/vectors](../conformance/vectors), including nine rejection vectors; flipping every byte position of the frozen containers is asserted to fail.
+- An independent Node implementation ([../conformance/node/verify.mjs](../conformance/node/verify.mjs)) decrypts the Rust vectors and refuses the rejection vectors.
+- Mutation testing was applied by hand to the signing and keyring code during development; results are recorded in commit messages, not in a report.
+- `cargo audit` runs in CI (`supply-chain` job); every dependency is pinned to an exact version.
+
+## What an audit should cover
+
+In priority order. File references are the entry points; the normative text is [../spec/hide-0.1.md](../spec/hide-0.1.md).
+
+| # | Component | Why it is first | Where |
+| --- | --- | --- | --- |
+| 1 | Container key schedule and HPKE/X-Wing composition | A flaw here breaks confidentiality for every file | spec §3; [../crates/hide-crypto/src/lib.rs](../crates/hide-crypto/src/lib.rs) |
+| 2 | Authenticated streaming and the FINAL rule | Truncation, reordering, and early plaintext release | spec §5; [../crates/hide-object/src/lib.rs](../crates/hide-object/src/lib.rs) |
+| 3 | Header parsing and limits | Untrusted input; bounded canonical CBOR | spec §1–2; [../crates/hide-format/src/lib.rs](../crates/hide-format/src/lib.rs) |
+| 4 | Signature transcript and what a recipient can forge | Recipients hold the CEK; the transcript is the only thing that stops them re-encrypting under a valid signature | spec §7; [../crates/hide-sign/src/lib.rs](../crates/hide-sign/src/lib.rs), `transcript()` in hide-object |
+| 5 | Identity log: authority-at-position | Revocation is meaningless if a revoked device can author a later entry | spec §8; [../crates/hide-identity/src/lib.rs](../crates/hide-identity/src/lib.rs) |
+| 6 | C ABI: memory ownership, panic catching, error codes | Nine SDKs sit on it; a bug is a bug in all of them | [../crates/hide-ffi/src/lib.rs](../crates/hide-ffi/src/lib.rs), [../crates/hide-ffi/include/hide.h](../crates/hide-ffi/include/hide.h) |
+| 7 | Key files: Argon2id parameters, purpose byte, seed derivation | The at-rest protection of every secret | [../crates/hide-keyring/src/lib.rs](../crates/hide-keyring/src/lib.rs) |
+| 8 | Epoch chain: what "erased" guarantees | Independent random keys, no derivation | spec §9; [../crates/hide-epoch/src/lib.rs](../crates/hide-epoch/src/lib.rs) |
+| 9 | RFC 6962 proofs | Consistency-proof forgery would make history rewriting undetectable | spec §10; [../crates/hide-transparency/src/lib.rs](../crates/hide-transparency/src/lib.rs) |
+| 10 | MLS credential binding | New in 0.7.0, parsed by no other implementation | spec §11; [../crates/hide-mls/src/lib.rs](../crates/hide-mls/src/lib.rs) |
+| 11 | ssh-agent confirmation path and endpoint permissions | A signing oracle reachable by local processes | [../apps/hide-cli/src](../apps/hide-cli/src) |
+| 12 | SDK library loading and handle lifetimes | Injection and use-after-free at the language boundary | [../sdk](../sdk) |
+
+Out of scope for a first audit, and stated so a reviewer does not waste time: the cryptographic primitives themselves (`hpke`, `ml-kem`, `ml-dsa`, `ed25519-dalek`, `chacha20poly1305`, `argon2` — upstream crates), the desktop UI (it contains no cryptography), and `mls-rs` internals (upstream, itself unaudited).
+
+## Estimated scope
+
+Our estimate, not a quote. It assumes a reviewer familiar with Rust and with HPKE, reading the spec first.
+
+| Component | Reviewer-days |
+| --- | --- |
+| Container (format + crypto + object; items 1–3) | 5–7 |
+| Signatures and transcript (item 4) | 2–3 |
+| Identity log (item 5) | 2 |
+| C ABI and one SDK in depth, others by diff (items 6, 12) | 3–4 |
+| Key files (item 7) | 1 |
+| Epoch chain and transparency (items 8–9) | 2 |
+| MLS binding (item 10) | 2 |
+| ssh-agent (item 11) | 1 |
+| **Total** | **18–22** |
+
+A design review of the spec alone, without reading code, is roughly 3–4 days and would already be valuable.
+
+## How to perform or fund one
+
+- **Perform one**: clone the repository, read [../spec/hide-0.1.md](../spec/hide-0.1.md), start with the table above. Report through the private advisory channel in [../SECURITY.md](../SECURITY.md). Every finding is credited in the changelog and in [advisories.md](advisories.md).
+- **Fund one**: open a GitHub issue titled "audit funding" to coordinate. The maintainers have no budget for a commercial audit; a sponsor who engages a firm directly is the realistic path.
+- **Commitment**: the full report of any third-party audit will be published in this directory, unredacted, with the maintainers' response and the fix status of each finding. Findings that cannot be fixed will be listed as known limitations in [threat-model.md](threat-model.md).
+
+## Formal verification
+
+None. No component has a machine-checked proof, a Tamarin or ProVerif model, or a verified implementation. It is not planned before 1.0; a third-party code audit is the prerequisite, and a symbolic model of the container key schedule and the signature transcript would be the first candidate after it.
+
+# ===== docs/stability.md =====
+
+# HIDE stability policy
+
+*HIDE is experimental and has not been audited by a third party. See [audit-status.md](audit-status.md).*
+
+This document says what may change while the version is 0.x, how a change is announced, and what has to be true before 1.0. Current version: 0.6.2 (0.7.0 in progress). It applies to the wire format, the Rust crates, the C ABI, the SDKs and the CLI.
+
+## Wire format
+
+- **Before 1.0 the format may change.** Any change to bytes on disk — container, key file, detached signature, identity log, epoch chain, transparency checkpoint, MLS credential — is a **format change** and is called out in [../CHANGELOG.md](../CHANGELOG.md) under its own heading, with the version that introduced it. A format change bumps the *minor* version.
+- **Frozen vectors must keep opening.** The containers under `conformance/vectors/` produced by 0.1.0 are tested byte-for-byte on every commit, in Rust and in the independent Node implementation. A release that cannot open them is not made. Every 0.1.0–0.6.2 container opens in 0.6.2.
+- **New capabilities are additive when possible.** Signatures (0.5.0) reused header key 5, which 0.1.0 wrote as an empty array, so unsigned containers stayed byte-identical; signed ones advertise preamble minor 2 so an old reader refuses rather than silently ignores.
+- **Vectors are frozen artifacts.** Regenerating them is a protocol change and is done only deliberately (`cargo run -p hide-object --features test-vectors --example generate_vectors`), never as a side effect.
+- **Upstream drafts.** X-Wing's byte format has been stable across `draft-ietf-hpke-pq` revisions and its KEM id `0x647A` is IANA-allocated. If the final RFC changed the construction, HIDE would add a new suite id rather than alter suite 1; existing containers would keep opening.
+- **After 1.0 the format never breaks.** A reader of version 1.x opens every container written by any 1.y. New features arrive as new suite ids, new optional header keys, or new preamble minors that old readers refuse explicitly.
+
+## Public API, per crate
+
+| Crate | Status | Meaning |
+| --- | --- | --- |
+| `hide-object` | stable-intent | `encrypt`, `encrypt_signed`, `decrypt`, the `Decrypted` type. Signatures may gain optional parameters; existing calls keep compiling within a minor except when a format change forces otherwise |
+| `hide-crypto` | stable-intent | `RecipientPublic`, `RecipientSecret`, `Identity::from_seed`. Secret types will never gain `Debug`, `Clone` or `Serialize` |
+| `hide-sign` | stable-intent | `SigningIdentity`, `sign`, `verify`, challenge–response, `SpentNonces` |
+| `hide-keyring` | stable-intent | `open`, `protect`, `unprotect_seed`, `KeyPurpose`. Argon2id parameters may be raised; the floor may be raised (which refuses weaker files) |
+| `hide-ffi` (C ABI) | stable-intent | Functions and error codes in `include/hide.h`. Additions only; a removed function breaks every SDK at import, so it will not happen in a patch |
+| `hide-format` | evolving | Parser internals; used by `hide-object`, not intended for direct use |
+| `hide-identity` | evolving | Event types and `Membership` may change shape while the log format is 0.x |
+| `hide-epoch` | evolving | `EpochChain` will gain persistence; the in-memory API may change |
+| `hide-transparency` | evolving | Proof types follow RFC 6962 and are unlikely to change; the checkpoint format may gain a signature |
+| `hide-mls` | evolving | New in 0.6/0.7; follows `mls-rs` 0.56, whose own API is 0.x |
+| `hide-wasm` | evolving | Browser surface; not published to crates.io |
+| `hide-cli` | internal | The binary is the interface; the crate has no library API. Command names and flags are stable-intent (below) |
+
+"Stable-intent" means: we intend not to break it before 1.0, and if we must, it is a minor bump with a changelog entry and a migration note. "Evolving" means a minor bump may change it without a migration note. "Internal" means no guarantee.
+
+## SemVer for 0.x
+
+| Bump | May include | Never includes |
+| --- | --- | --- |
+| **Minor** (0.6 → 0.7) | Format changes, API changes in any crate, new features, MSRV bump, dependency major bumps, removed deprecated items | — |
+| **Patch** (0.6.1 → 0.6.2) | Bug fixes, security fixes, packaging fixes, documentation, new SDK platform targets | Format changes, API breaks, MSRV bump, removal of anything |
+
+All crates in the workspace share one version (`Cargo.toml` `[workspace.package]`) and are released together; `scripts/set-version.ps1 -Check` runs in CI so the version cannot drift across the 22 files in seven ecosystems that carry it.
+
+## Minimum supported Rust version
+
+MSRV is **1.85** (`rust-version` in `Cargo.toml`), verified in CI by the `minimum-supported-rust` job. Raising it is a **minor** bump and is listed in the changelog. The toolchain used for development is whatever `rust-toolchain.toml` pins.
+
+## Deprecation
+
+An item scheduled for removal is marked `#[deprecated]` (Rust) or documented as deprecated (C header, SDKs, CLI) for **two minor releases** before removal. Example: `hide test-keygen` was deprecated in 0.2.0 and still works; it remains until at least two minors after its deprecation note. A deprecation is not a break; the removal is, and happens only in a minor.
+
+## SDK surfaces covered
+
+| Surface | Covered by this policy | Notes |
+| --- | --- | --- |
+| C header `crates/hide-ffi/include/hide.h` | Yes — stable-intent | The single seam every binding uses; the `c_abi` test asserts header constants equal the Rust ones |
+| Python `hide_protocol` | Yes — stable-intent for the public names in `__init__.py` | Underscore-prefixed modules are internal |
+| Node `hide-protocol` | Yes — stable-intent for exports of `index.ts` | Platform packages `@hide-protocol/<platform>` are internal to the loader |
+| WASM `@hide-protocol/wasm` | Evolving | Function signatures differ from Node (positional, concatenated recipients) and may converge |
+| Go `sdk/go` | Stable-intent | Exported identifiers only |
+| Java `org.hide-protocol:hide` | Evolving | Not yet on Maven Central |
+| Ruby `hide-protocol` | Stable-intent | Public methods of `Hide` |
+| PHP `hide-protocol/hide` | Evolving | Not yet on Packagist |
+| .NET `HideProtocol` | Stable-intent | Public types in the `HideProtocol` namespace |
+| CLI `hide` | Stable-intent | Subcommand names and long flags; output text is not stable and should not be parsed |
+| Desktop app | Not an API | Opens what the CLI writes; enforced by `src-tauri/tests/interop.rs` |
+
+Cross-surface agreement is enforced by `conformance/cross-surface/verify.mjs`: each surface must open every other surface's output and the frozen vectors, and a missing surface fails rather than skips.
+
+## What 1.0 requires
+
+All of the following, in this order of dependency:
+
+1. **A third-party audit** of the container format, the key schedule, the authenticated streaming and the signature transcript (items 1–4 in [audit-status.md](audit-status.md)), with every finding fixed or documented as a known limitation, and the report published unredacted.
+2. **One year of frozen container format** after the last format change to suite 1, measured from the release that made it.
+3. **Two independent implementations** passing the full vector set, including the rejection vectors. The Rust crates are one; the Node verifier under `conformance/node` is a second for the container, and must be extended to signatures, identity logs and epoch chains — or replaced by an implementation maintained outside this repository.
+4. The HPKE-PQ specification carrying X-Wing published as an RFC, or a documented decision to freeze on the draft with a HIDE-owned suite id.
+5. Epoch secrets persisted, so forward security by erasure is operational rather than demonstrable.
+6. The stability table above with no "evolving" row among the crates a container depends on.
+
+1.0 does not require post-quantum MLS, a key directory, hardware key storage, or formal verification. Those remain out of scope and are listed as such in [threat-model.md](threat-model.md).
+
+# ===== SECURITY.md =====
+
+# Security Policy
+
+## HIDE is experimental — do not protect real data with it
+
+The protocol is a draft, the implementation has never been audited by a third
+party, and the hybrid KEM follows IETF drafts that are still changing. Treat
+every container as a test artifact. The CLI requires `--experimental` for this
+reason.
+
+## Cryptographic scope
+
+HIDE implements no primitives of its own and defines no novel KEM combiner. It
+composes, from established crates, all pinned to exact versions:
+
+- **Key encapsulation**: HPKE base mode with X-Wing (X25519 + ML-KEM-768,
+  FIPS 203), HKDF-SHA256, ChaCha20-Poly1305.
+- **Payload**: ChaCha20-Poly1305 in 64 KiB authenticated chunks; HMAC-SHA256
+  over the header.
+- **Signatures**: hybrid Ed25519 + ML-DSA-65 (FIPS 204); both halves must
+  verify.
+- **Key files**: Argon2id with an enforced parameter floor, then
+  ChaCha20-Poly1305.
+- **Transparency**: RFC 6962 Merkle tree, inclusion and consistency proofs.
+- **Group messaging**: MLS (RFC 9420) through `mls-rs`, classical X25519 suite
+  only — post-quantum MLS suites are still an IETF draft.
+
+`unsafe_code = "forbid"` applies to every crate except `hide-ffi`. A flaw in an
+upstream primitive belongs upstream, though a report here is still appreciated
+so the dependency can be pinned or replaced.
+
+## Threat model in one paragraph
+
+HIDE defends a container against anyone who is not a recipient: they cannot read
+it, alter it, truncate it, reorder its chunks, or learn its filename. A *signed*
+container additionally proves which key produced exactly this content, even to
+another recipient. It does **not** bind a key to a person, hide who or how many
+the recipients are, hide the file size, or protect a key that an attacker can
+read from process memory. The full model, including what a malicious recipient
+and a malicious log operator can do, is in
+[`docs/threat-model.md`](docs/threat-model.md).
+
+## What this version does not protect against
+
+Known and documented, not new findings:
+
+- **An identity is not a person.** The device log proves which devices an
+  identity trusts over time; nothing proves the identity belongs to a given
+  human. There is no directory, and no key-transparency *service* — the log
+  primitive exists, but no one operates a log and no witnessing is implemented.
+- **Sender authentication only when signed.** A recipient of an *unsigned*
+  container holds the CEK and can rewrite the recipient set and recompute a
+  valid header MAC. A signature closes this; its absence does not.
+- **Forward secrecy is by erasure, not by ratchet.** It exists only if the
+  holder actually destroys the epoch secret, and epoch secrets are not yet
+  persisted, so this is demonstrable rather than operational.
+- **No recipient anonymity.** Ciphertext size and recipient count are visible;
+  metadata is encrypted, not hidden. A public signature reveals the signer.
+- **No hardware protection.** Argon2id resists an attacker who copies a key
+  file, not one who reads memory while the key is in use. There is no Keychain,
+  TPM, Secure Enclave or Keystore integration, and `keygen --insecure-plaintext`
+  writes an unencrypted key on request.
+- **A forgotten passphrase is unrecoverable.** There is no escrow or reset.
+- **Group messaging is not post-quantum**, and `mls-rs` is as unaudited as the
+  rest. The credential binding described below is new in 0.7.0 and has been
+  parsed by no implementation outside this repository.
+- **SSH authentication is not post-quantum.** `hide agent` offers the Ed25519
+  half only, because OpenSSH accepts no post-quantum algorithm for user
+  authentication. It avoids a plaintext key on disk; nothing more.
+- **An agent is a signing oracle.** Anything that can reach the endpoint can
+  request a signature, which is why confirmation is the default.
+- **Replay is only detectable by the verifier.** A replayed challenge answer is
+  a genuine signature; a verifier that keeps no spent-nonce record gains nothing
+  over a plain signature.
+
+## What changed in 0.7.0
+
+An internal review — not a third-party audit — found the following. All are
+fixed in 0.7.0, and each fix has a test that fails on the previous code. They
+are listed because their existence is the best evidence that others remain.
+
+- **MLS credentials were self-asserted.** A group member could present another
+  device's id in its credential; nothing proved it held that device's key. The
+  credential is now a HIDE-signed binding over the MLS signature key
+  (`spec/hide-0.1.md` §11), verified on every roster change.
+- **7 of 8 signature stanzas were never verified.** The header admitted up to
+  eight public signatures but checked only the first, so a recipient could
+  append stanzas nobody examined. `MAX_SIGNATURES` is now 1 and a second stanza
+  is rejected, not skipped.
+- **One metadata key and nonce sealed two plaintexts** in the
+  confidential-signature path (the metadata before and after the signature was
+  inserted). No disclosure resulted, but nonce reuse under one key is a
+  fragility that should not exist.
+- **The identity-log encoding was not canonical**: two distinct event
+  sequences could serialise to the same bytes. Every variable-length field is
+  now length-prefixed.
+- **`panic = "abort"` made `HIDE_ERR_PANIC` unreachable** in the C ABI: a panic
+  inside the library aborted the host process instead of returning the error
+  code the header documents. The FFI now builds with `panic = "unwind"` and
+  catches at the boundary.
+- **`HIDE_LIBRARY` was an unconditional library-injection vector** in every
+  SDK: any process able to set an environment variable could replace the
+  cryptographic core. It is now honoured only when
+  `HIDE_ALLOW_LIBRARY_OVERRIDE=1` is also set.
+- **The ssh-agent read its confirmation from stdin, not the terminal**, so a
+  piped process could answer for the user; and on Windows the agent's named
+  pipe was created without an ACL. Confirmation now reads the controlling tty,
+  and the pipe is restricted to the current user.
+- **Argon2id parameters have a floor.** A key file declaring weaker parameters
+  than the floor is refused rather than opened.
+
+## Reporting a vulnerability
+
+Use GitHub's **Report a vulnerability** button under the Security tab, which
+opens a private advisory. Please do not open a public issue for a suspected
+vulnerability. If you cannot use GitHub, open an issue asking for a contact and
+we will reply with one.
+
+Include the affected commit, a reproduction (a container plus the steps), and
+what you believe the impact is. A failing test is the most useful form.
+
+Expect an acknowledgement within 7 days. We aim to publish a fix or a
+mitigation within 90 days and will coordinate disclosure with you; because this
+is a pre-1.0 experiment maintained without a dedicated security team, that is
+an aim rather than a guarantee.
+
+No bug bounty exists; credit in the CHANGELOG and in `docs/advisories.md` is
+what we can offer.
+
+## Safe harbor
+
+Good-faith security research against your own HIDE instances, keys and data is
+authorised, and we will not pursue or support legal action over it. Do not
+access, alter or exfiltrate data belonging to anyone else, do not degrade a
+service other people rely on, and give us a reasonable window to fix what you
+find before publishing. If you are unsure whether something is in scope, ask
+first through the channel above.
+
+## Findings that are especially valuable
+
+- A container that decrypts under a key it was not encrypted to.
+- A tampered container that authenticates successfully.
+- Any input that causes a panic, an unbounded allocation, or non-termination in
+  a parser — the fuzz targets under `fuzz/` are the starting point.
+- Divergence between the Rust implementation and `conformance/node/verify.mjs`,
+  since either side may be the wrong one.
+- Secret material reaching a log, an error message, or a file on disk.
+- **Identity-log forgery**: an entry accepted as authored by a device that was
+  not trusted at that position in the log, or a revoked device regaining
+  authority without the recovery key.
+- **Epoch-chain rewriting**: a chain that verifies while omitting, reordering
+  or replacing an epoch that was published.
+- **Consistency-proof forgery**: a proof accepted between two checkpoints where
+  the smaller log is not a prefix of the larger.
+- **MLS binding bypass**: a roster entry accepted whose credential does not
+  bind the MLS key to a device currently in the identity's membership.

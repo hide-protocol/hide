@@ -3,13 +3,16 @@ name = "hide-keyring"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
+authors.workspace = true
 license.workspace = true
 repository.workspace = true
 homepage.workspace = true
-keywords.workspace = true
-categories.workspace = true
+documentation = "https://docs.rs/hide-keyring"
+readme = "README.md"
+keywords = ["argon2", "key-file", "passphrase", "armor", "encryption"]
+categories = ["cryptography"]
 publish.workspace = true
-description = "Identity and key file handling for the HIDE protocol"
+description = "Passphrase-sealed key files (Argon2id) and armored public keys for HIDE. Experimental, unaudited."
 
 [dependencies]
 hide-crypto = { path = "../hide-crypto", version = "0.6.2" }

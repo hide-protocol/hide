@@ -42,6 +42,12 @@
     <maven.compiler.release>22</maven.compiler.release>
   </properties>
 
+  <!-- No <distributionManagement>: there is no Sonatype / Maven Central
+       account for org.hide-protocol yet, so this POM cannot publish anywhere.
+       Add the OSSRH/Central Portal repository here once the namespace is
+       verified; the release profile below already attaches what Central
+       requires (sources, javadoc, GPG signatures). -->
+
   <build>
     <sourceDirectory>src/main/java</sourceDirectory>
     <testSourceDirectory>src/test/java</testSourceDirectory>
@@ -51,11 +57,65 @@
         <artifactId>maven-surefire-plugin</artifactId>
         <version>3.5.2</version>
         <configuration>
-          <!-- The tests are a plain main(); they are run by the CI workflow,
-               which also supplies the native library path. -->
+          <!-- HideTest is a plain main() with no JUnit dependency, so surefire
+               has nothing to discover and would fail on the empty result. The
+               CI workflow runs it directly with -Dhide.library pointing at the
+               freshly built native core. -->
           <skipTests>true</skipTests>
         </configuration>
       </plugin>
+      <plugin>
+        <groupId>org.apache.maven.plugins</groupId>
+        <artifactId>maven-source-plugin</artifactId>
+        <version>3.3.1</version>
+        <executions>
+          <execution>
+            <id>attach-sources</id>
+            <goals>
+              <goal>jar-no-fork</goal>
+            </goals>
+          </execution>
+        </executions>
+      </plugin>
+      <plugin>
+        <groupId>org.apache.maven.plugins</groupId>
+        <artifactId>maven-javadoc-plugin</artifactId>
+        <version>3.11.2</version>
+        <executions>
+          <execution>
+            <id>attach-javadocs</id>
+            <goals>
+              <goal>jar</goal>
+            </goals>
+          </execution>
+        </executions>
+      </plugin>
     </plugins>
   </build>
+
+  <profiles>
+    <profile>
+      <!-- Signing needs a key on the release machine; keep it out of every
+           ordinary build: mvn -Prelease deploy -->
+      <id>release</id>
+      <build>
+        <plugins>
+          <plugin>
+            <groupId>org.apache.maven.plugins</groupId>
+            <artifactId>maven-gpg-plugin</artifactId>
+            <version>3.2.7</version>
+            <executions>
+              <execution>
+                <id>sign-artifacts</id>
+                <phase>verify</phase>
+                <goals>
+                  <goal>sign</goal>
+                </goals>
+              </execution>
+            </executions>
+          </plugin>
+        </plugins>
+      </build>
+    </profile>
+  </profiles>
 </project>

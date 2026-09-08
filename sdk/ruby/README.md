@@ -1,180 +1,154 @@
-# hide-protocol (Ruby)
+# hide-protocol for Ruby
 
-Ruby bindings to the HIDE core: hybrid post-quantum encryption for files and
-messages (X25519 + ML-KEM-768).
+*Experimental and unaudited. HIDE is hybrid post-quantum (X25519 + ML-KEM-768, Ed25519 + ML-DSA-65). See the [security policy](https://github.com/hide-protocol/hide/blob/main/SECURITY.md).*
 
-## Read this before using it
+Ruby binding, through stdlib `fiddle`, to the same Rust core (`crates/hide-ffi`)
+that the CLI and every other HIDE SDK use. This gem contains no cryptography of
+its own, no compiled extension and no runtime gem dependency.
 
-**This is experimental and unaudited.** Do not use it to protect data you
-cannot afford to lose or expose. The format may change.
-
-**A successful decryption proves the data was not altered. It does *not* prove
-who sent it.** Anyone holding your public key can produce a container that
-decrypts for you. If you need to know the sender, sign the message with
-`Hide::SigningIdentity` and verify it separately.
-
-A decrypted filename is attacker-controlled. Never use it to choose an output
-path.
-
-## How it binds
-
-There is no Ruby cryptography here, and no compiled extension. The gem calls
-the same Rust core as the CLI through its C ABI, using stdlib `fiddle` — so
-installing it needs no compiler and adds no runtime gem dependency.
-
-The native library is found in this order:
-
-1. `HIDE_LIBRARY`, if set AND `HIDE_ALLOW_LIBRARY_OVERRIDE=1` — the full path to
-  the shared library. Development only: it replaces the cryptographic core.
-2. Beside the gem, in `lib/hide_protocol/`, where the release workflow puts it.
-3. The system loader.
-
-Platform names are `hide_ffi.dll` on Windows, `libhide_ffi.dylib` on macOS and
-`libhide_ffi.so` elsewhere.
-
-### Running against a local build
+## Install
 
 ```sh
-cargo build -p hide-ffi
+gem install hide-protocol
 ```
 
-Then point `HIDE_LIBRARY` at the result and enable the override:
+The compiled core ships as seven platform gems, so `gem install` fetches only
+the binary for your machine: `x86_64-linux`, `aarch64-linux`,
+`x86_64-linux-musl`, `x64-mingw-ucrt`, `aarch64-mingw-ucrt`, `arm64-darwin`,
+`x86_64-darwin`. On any other platform, build the core yourself and point the
+binding at it (see [Native library](#native-library)).
 
-```sh
-# Linux
-export HIDE_LIBRARY="$PWD/target/debug/libhide_ffi.so"
-# macOS
-export HIDE_LIBRARY="$PWD/target/debug/libhide_ffi.dylib"
-export HIDE_ALLOW_LIBRARY_OVERRIDE=1
-```
-
-```powershell
-# Windows
-$env:HIDE_LIBRARY = "$PWD\target\debug\hide_ffi.dll"
-$env:HIDE_ALLOW_LIBRARY_OVERRIDE = "1"
-```
-
-## Use
+## Quick start
 
 ```ruby
 require "hide_protocol"
 
 Hide::SecretKey.generate do |secret|
-  box = Hide.encrypt(
-    File.binread("salarii.csv"),
-    recipients: [secret.public_key],
-    filename: "salarii.csv",
-    media_type: "text/csv"
-  )
-
+  box = Hide.encrypt("hello", recipients: [secret.public_key], filename: "note.txt")
   opened = Hide.decrypt(box, secret)
-  opened.plaintext  # => the original bytes
-  opened.filename   # => "salarii.csv"
-  opened.media_type # => "text/csv"
+  puts "#{opened.plaintext} #{opened.filename}"   # hello note.txt
+
+  tampered = box.dup
+  tampered.setbyte(-1, tampered.getbyte(-1) ^ 1)
+  begin
+    Hide.decrypt(tampered, secret)
+  rescue Hide::AuthenticationError => e
+    puts "refused: #{e.message}"                  # refused: authentication failed; the data was altered
+  end
 end
 ```
 
-The block form always closes the key, including when the block raises. Without
-a block, call `#close` yourself.
+`Hide.encrypt(plaintext, recipients:, filename: nil, media_type: nil)` takes
+the recipients as a **keyword** argument: 1..64 public keys, each exactly
+`Hide::PUBLIC_KEY_LEN` (1216) bytes. `Hide.decrypt(container, secret)` is
+positional and returns a `Hide::Decrypted` with `plaintext`, `filename` and
+`media_type`; nothing is returned unless the whole payload authenticates. The
+filename is attacker-controlled: never use it to choose an output path. Binary
+values in and out are ASCII-8BIT Strings; metadata comes back as UTF-8.
 
-### Keys
+Keys on disk: `secret.protect(passphrase)` returns a sealed key file
+(`Hide::MIN_PASSPHRASE_LEN` is 8, and there is no escrow);
+`Hide::SecretKey.open(bytes, passphrase)` opens one; `Hide.inspect_key(bytes)`
+reports `"raw"` or `"protected"` without the passphrase.
+`Hide.armor_public_key` / `Hide.dearmor_public_key` give a public key a
+pasteable text form.
 
-```ruby
-secret = Hide::SecretKey.generate
-public_key = secret.public_key            # 1216 bytes, binary
+Errors: everything raises a subclass of `Hide::Error` — `AuthenticationError`
+(altered, or not a container), its subclass `MalformedError` (did not decode at
+all), `WrongPassphraseError`, `NoMatchingRecipientError`, `NotAKeyError`,
+`TooLargeError`, `ClosedKeyError`, `ChallengeExpiredError`,
+`ChallengeReplayedError`, and `InvalidArgumentError` for arguments this binding
+rejects before calling the core.
 
-sealed = secret.protect("a long passphrase")  # for writing to disk
-Hide.inspect_key(sealed)                      # => "protected"
+## Signing and verification
 
-reopened = Hide::SecretKey.open(sealed, "a long passphrase")
-```
-
-A passphrase must be at least `Hide::MIN_PASSPHRASE_LEN` (8) characters. A
-forgotten passphrase cannot be recovered: there is no escrow.
-
-Secret key material never crosses into Ruby. `inspect` and `to_s` report only
-whether the key is open or closed, and a closed key raises on any use.
-
-### Sharing a public key
-
-```ruby
-text = Hide.armor_public_key(public_key)  # "hide-public-key:..."
-Hide.dearmor_public_key(text)             # back to bytes
-```
-
-### Signing
-
-Encryption and signing share one seed, so there is a single thing to back up.
+One seed backs both encryption and signing, so there is a single thing to back
+up.
 
 ```ruby
-sealed = Hide::SigningIdentity.generate("a long passphrase")  # write this to disk
+sealed = Hide::SigningIdentity.generate("correct horse battery")   # store this
 
-Hide::SigningIdentity.open(sealed, "a long passphrase") do |signer|
-  public_key = signer.public_key                  # 1984 bytes, shareable
-  signature = signer.sign("myapp/v1 release", bytes)  # 3373 bytes
-  Hide.verify(public_key, "myapp/v1 release", bytes, signature)
+Hide::SigningIdentity.open(sealed, "correct horse battery") do |signer|
+  context = "myapp/v1 release"
+  message = "payload"
+  signature = signer.sign(context, message)                        # 3373 bytes
+  Hide.verify(signer.public_key, context, message, signature)      # nil, or raises
+
+  # Challenge/response: good once, here, now.
+  now = Time.now.to_i
+  challenge = Hide.new_challenge("app.example", now, 60)
+  answer = signer.answer(challenge)
+  Hide::SpentNonces.open do |spent|                                # must outlive one request
+    spent.accept(challenge, answer, signer.public_key, now)
+    spent.accept(challenge, answer, signer.public_key, now)        # Hide::ChallengeReplayedError
+  end
 end
 ```
 
-`verify` returns `nil` and raises on failure, rather than returning a boolean a
-caller could forget to test. The context string separates uses of one identity:
-never let a remote party choose it.
+`context` separates uses of one identity so a signature made for one purpose
+cannot be replayed as another; never let a remote party choose it.
+`Hide.verify` returns `nil` and raises `Hide::AuthenticationError` on failure
+rather than returning a boolean a caller could forget to check. A key file
+written before signatures existed carries no signing seed and raises
+`Hide::NotAKeyError`.
 
-### Proving possession live
+## Identity logs, epoch chains, transparency proofs
 
-A detached signature proves possession at some point, to nobody in particular,
-and can be replayed. A challenge binds a nonce, an audience and an expiry.
+| Method | Returns |
+| --- | --- |
+| `Hide.verify_identity(log, recovery_key)` | `Integer` — how many devices the log trusts now |
+| `Hide.identity_trusts_device(log, recovery_key, device_public_key)` | `true`/`false` — membership, after verifying the log |
+| `Hide.identity_head(log, recovery_key)` | 32 bytes naming this exact history |
+| `Hide.verify_epoch_chain(chain)` | `Integer` — how many epochs it holds |
+| `Hide.epoch_public_key(chain, epoch)` | the public key to encrypt to for `epoch` |
+| `Hide.verify_inclusion(leaf, index, size, path, root)` | `nil` |
+| `Hide.verify_consistency(old_size, new_size, path, old_root, new_root)` | `nil` |
 
-```ruby
-challenge = Hide.new_challenge("ssh://host.example", Time.now.to_i, 60)
-answer = signer.answer(challenge)
+A cryptographic verify **raises** on failure (`MalformedError` if the bytes did
+not decode, `AuthenticationError` if they decoded but did not verify) and never
+returns `false`. The one boolean is `identity_trusts_device`: the log is
+verified first, so `false` means "not a member", never "did not verify".
 
-spent = Hide::SpentNonces.new   # must outlive the request
-spent.accept(challenge, answer, public_key, Time.now.to_i)
-```
+## Native library
 
-The second acceptance of the same answer raises `ChallengeReplayedError`, and
-one presented after the window raises `ChallengeExpiredError`.
+The core is located in this order:
 
-## API
+1. `HIDE_LIBRARY`, if it names a file **and** `HIDE_ALLOW_LIBRARY_OVERRIDE=1`
+   is also set;
+2. beside the gem, in `lib/hide_protocol/`, where the platform gem puts it;
+3. the system loader, by name (`hide_ffi.dll`, `libhide_ffi.dylib`,
+   `libhide_ffi.so`).
 
-| | |
-|---|---|
-| `Hide.version` | version of the native core |
-| `Hide.encrypt(plaintext, recipients:, filename: nil, media_type: nil)` | binary String |
-| `Hide.decrypt(container, secret)` | `Decrypted` with `plaintext`, `filename`, `media_type` |
-| `Hide.armor_public_key` / `Hide.dearmor_public_key` | text form of a public key |
-| `Hide.inspect_key(bytes)` | `"raw"` or `"protected"` |
-| `Hide::SecretKey.generate` / `.open(bytes, passphrase = nil)` | keys |
-| `Hide::SigningIdentity.generate(passphrase)` | sealed key file bytes |
-| `Hide::SigningIdentity.open(bytes, passphrase = nil)` | `#public_key`, `#sign`, `#answer`, `#close` |
-| `Hide.verify(public_key, context, message, signature)` | raises unless it verifies |
-| `Hide.new_challenge(audience, now, valid_for)` | challenge bytes |
-| `Hide::SpentNonces#accept(challenge, signature, public_key, now)` | accepts once |
-| `Hide::PUBLIC_KEY_LEN` (1216), `Hide::MIN_PASSPHRASE_LEN` (8) | constants |
-| `Hide::SIGNATURE_LEN` (3373), `Hide::VERIFYING_KEY_LEN` (1984), `Hide::NONCE_LEN` (32) | constants |
-
-Encryption takes between 1 and 64 recipients, each public key exactly
-`Hide::PUBLIC_KEY_LEN` bytes.
-
-All binary values in and out are ASCII-8BIT (binary) Strings. Metadata comes
-back as UTF-8.
-
-### Errors
-
-Everything raises a subclass of `Hide::Error`:
-
-`InvalidArgumentError`, `AuthenticationError` (altered data, or not a
-container), `WrongPassphraseError`, `NoMatchingRecipientError` (this key was
-not a recipient), `NotAKeyError`, `TooLargeError`, `ClosedKeyError`,
-`ChallengeExpiredError`, `ChallengeReplayedError`.
-
-## Tests
+`HIDE_LIBRARY` is a development override: it replaces the entire cryptographic
+core, so a single settable environment variable must not be enough to redirect
+it. Against a local build:
 
 ```sh
-HIDE_LIBRARY=/path/to/libhide_ffi.so HIDE_ALLOW_LIBRARY_OVERRIDE=1 ruby -Ilib -Itest test/test_hide.rb
+cargo build --release -p hide-ffi
+export HIDE_LIBRARY="$PWD/target/release/libhide_ffi.so"   # hide_ffi.dll / libhide_ffi.dylib
+export HIDE_ALLOW_LIBRARY_OVERRIDE=1
+ruby -Ilib -Itest test/test_hide.rb
 ```
 
-## Licence
+## Key material
 
-Apache-2.0.
+`Hide::SecretKey`, `Hide::SigningIdentity` and `Hide::SpentNonces` are opaque
+handles. The seed bytes never cross into Ruby and this gem exposes no accessor
+for them; `inspect` and `to_s` show only whether the handle is open. Release
+with `#close`, or use the block form of `.generate` / `.open`, which always
+closes — including when the block raises. A closed handle raises
+`Hide::ClosedKeyError` on use.
+
+## Limits
+
+- Unaudited. Do not protect data you cannot afford to lose or expose.
+- An identity is a key, not a person: a verified signature proves possession of
+  a seed, nothing about who holds it.
+- Full threat model: [docs/threat-model.md](https://github.com/hide-protocol/hide/blob/main/docs/threat-model.md).
+
+## Links
+
+- Repository: <https://github.com/hide-protocol/hide>
+- Documentation: [docs/](https://github.com/hide-protocol/hide/tree/main/docs)
+- Specification: [spec/hide-0.1.md](https://github.com/hide-protocol/hide/blob/main/spec/hide-0.1.md)
+- [CHANGELOG](https://github.com/hide-protocol/hide/blob/main/CHANGELOG.md)

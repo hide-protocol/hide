@@ -3,13 +3,16 @@ name = "hide-mls"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
+authors.workspace = true
 license.workspace = true
 repository.workspace = true
 homepage.workspace = true
-keywords.workspace = true
-categories.workspace = true
+documentation = "https://docs.rs/hide-mls"
+readme = "README.md"
+keywords = ["mls", "rfc9420", "group-messaging", "e2ee", "encryption"]
+categories = ["cryptography"]
 publish.workspace = true
-description = "Group messaging for HIDE identities over MLS (RFC 9420)"
+description = "Group messaging for HIDE identities over MLS (RFC 9420). Experimental, unaudited."
 
 [dependencies]
 hide-identity = { path = "../hide-identity", version = "0.6.2" }

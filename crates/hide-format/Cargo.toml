@@ -3,13 +3,16 @@ name = "hide-format"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
+authors.workspace = true
 license.workspace = true
 repository.workspace = true
 homepage.workspace = true
-keywords.workspace = true
-categories.workspace = true
+documentation = "https://docs.rs/hide-format"
+readme = "README.md"
+keywords = ["cbor", "file-format", "encoding", "parser", "encryption"]
+categories = ["cryptography", "encoding"]
 publish.workspace = true
-description = "Wire format and container parsing for the HIDE protocol"
+description = "Wire format and bounded canonical CBOR container parsing for HIDE. Experimental, unaudited."
 
 [dependencies]
 thiserror.workspace = true

@@ -68,6 +68,18 @@ them fail, that is a protocol change, and it must be deliberate:
 
 While the version is 0.x, breaking the format is allowed. After 1.0 it is not.
 
+The **rejection vectors** under `conformance/vectors/rejections/` are frozen too.
+Each is a container that MUST be refused, with the reason in `rejections.txt`;
+both the Rust tests and `conformance/node/verify.mjs` consume them. A new
+class of malformed input should get a vector there, regenerated with
+`cargo run -p hide-object --features test-vectors --example generate_rejections`.
+
+## Stability and versioning
+
+What may change before 1.0, how a format change is signalled, and what a minor
+version promises is written down in [docs/stability.md](docs/stability.md).
+Read it before proposing a change to a public API or a wire layout.
+
 ## Tests
 
 New behaviour needs a test that would fail without it. For anything touching
@@ -79,6 +91,19 @@ once, and only the frozen vectors caught it.
 
 Adversarial cases are worth more than happy paths: truncation, reordering,
 duplication, trailing bytes, oversized lengths, and single-byte mutations.
+
+### Fuzzing
+
+Six libFuzzer targets live in `fuzz/` and run in CI on every push. Locally:
+
+```powershell
+cd fuzz
+cargo +nightly fuzz run format_header    # or object_open, keyring_open,
+                                         # identity_log, epoch_chain, transparency_proofs
+```
+
+A crash input belongs in a regression test, and usually also in
+`conformance/vectors/rejections/`.
 
 ## Commits and PRs
 

@@ -14,15 +14,24 @@ classifiers = [
   # Says plainly what the prose says: this is not ready for real data.
   "Development Status :: 3 - Alpha",
   "Intended Audience :: Developers",
+  "License :: OSI Approved :: Apache Software License",
+  "Operating System :: OS Independent",
   "Topic :: Security :: Cryptography",
   "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3.10",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
+  "Programming Language :: Python :: 3.13",
   "Programming Language :: Rust",
+  "Typing :: Typed",
 ]
 
 [project.urls]
 Homepage = "https://github.com/hide-protocol/hide"
 Source = "https://github.com/hide-protocol/hide"
 Issues = "https://github.com/hide-protocol/hide/issues"
+Documentation = "https://github.com/hide-protocol/hide/tree/main/docs"
+Changelog = "https://github.com/hide-protocol/hide/blob/main/CHANGELOG.md"
 
 [dependency-groups]
 dev = ["pytest>=8"]

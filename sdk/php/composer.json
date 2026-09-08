@@ -3,7 +3,17 @@
   "description": "PHP binding for the HIDE encrypted-file protocol. Experimental and unaudited.",
   "type": "library",
   "license": "Apache-2.0",
-  "keywords": ["encryption", "cryptography", "hide", "ffi"],
+  "homepage": "https://github.com/hide-protocol/hide",
+  "keywords": ["encryption", "cryptography", "ffi", "post-quantum", "ml-kem", "x25519", "e2ee"],
+  "authors": [
+    {
+      "name": "HIDE contributors"
+    }
+  ],
+  "support": {
+    "issues": "https://github.com/hide-protocol/hide/issues",
+    "source": "https://github.com/hide-protocol/hide"
+  },
   "require": {
     "php": ">=8.1",
     "ext-ffi": "*"

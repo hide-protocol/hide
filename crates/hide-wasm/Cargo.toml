@@ -3,9 +3,15 @@ name = "hide-wasm"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
+authors.workspace = true
 license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+readme = "README.md"
+keywords = ["wasm", "browser", "post-quantum", "encryption", "webassembly"]
+categories = ["cryptography", "wasm"]
 publish = false
-description = "WebAssembly bindings for the HIDE protocol"
+description = "WebAssembly bindings for HIDE: post-quantum encryption in the browser. Experimental, unaudited."
 
 [lib]
 crate-type = ["cdylib", "rlib"]

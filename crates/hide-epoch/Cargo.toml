@@ -3,13 +3,16 @@ name = "hide-epoch"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
+authors.workspace = true
 license.workspace = true
 repository.workspace = true
 homepage.workspace = true
-keywords.workspace = true
-categories.workspace = true
+documentation = "https://docs.rs/hide-epoch"
+readme = "README.md"
+keywords = ["forward-secrecy", "key-rotation", "erasure", "post-quantum", "encryption"]
+categories = ["cryptography"]
 publish.workspace = true
-description = "Forward security by erasure for the HIDE protocol: epoch-scoped recipient keys"
+description = "Forward security by erasure for HIDE: epoch-scoped recipient keys. Experimental, unaudited."
 
 [dependencies]
 hide-crypto = { path = "../hide-crypto", version = "0.6.2" }

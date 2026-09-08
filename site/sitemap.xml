@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<urlset xmlns="http://www.sitemap.org/schemas/sitemap/0.9">
+  <url>
+    <loc>https://hide-protocol.github.io/hide/</loc>
+    <changefreq>weekly</changefreq>
+  </url>
+  <url>
+    <loc>https://hide-protocol.github.io/hide/llms.txt</loc>
+    <changefreq>weekly</changefreq>
+  </url>
+</urlset>

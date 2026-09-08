@@ -3,13 +3,16 @@ name = "hide-object"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
+authors.workspace = true
 license.workspace = true
 repository.workspace = true
 homepage.workspace = true
+documentation = "https://docs.rs/hide-object"
+readme = "README.md"
 keywords.workspace = true
 categories.workspace = true
 publish.workspace = true
-description = "Sealed container encryption and decryption for the HIDE protocol"
+description = "Sealed container encryption with authenticated streaming for HIDE. Experimental, unaudited."
 
 [features]
 test-vectors = ["hide-crypto/test-vectors"]

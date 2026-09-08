@@ -159,10 +159,11 @@ jobs:
 
       - run: cargo build --release --locked -p hide-ffi
 
-      # pyproject declares a readme; without this the build fails outright.
-      - name: Stage the readme and licence
+      # sdk/python has its own README; copying the root one here would replace
+      # it on PyPI. The licence is not in the tree, so it is staged.
+      - name: Stage the licence
         shell: bash
-        run: cp README.md LICENSE sdk/python/
+        run: cp LICENSE sdk/python/
 
       # The wheel carries the compiled core, so installing it needs no
       # toolchain on the user's machine.
@@ -338,10 +339,10 @@ jobs:
             --out-dir sdk/wasm --target web
           cp LICENSE sdk/wasm/
 
-      # package.json lists both in "files"; npm omits a missing file silently,
-      # which would publish a package with a blank page on the registry.
-      - name: Stage the readme and licence
-        run: cp README.md LICENSE sdk/node/
+      # package.json lists LICENSE in "files"; npm omits a missing file silently.
+      # The README is sdk/node's own and must not be replaced by the root one.
+      - name: Stage the licence
+        run: cp LICENSE sdk/node/
 
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
         with:

@@ -12,16 +12,34 @@
   <PropertyGroup>
     <PackageId>HideProtocol</PackageId>
     <Version>0.6.2</Version>
-    <Description>.NET binding to the HIDE encrypted-file protocol. Experimental and unaudited.</Description>
+    <Description>.NET binding to HIDE: hybrid post-quantum file and message encryption (X25519 + ML-KEM-768, Ed25519 + ML-DSA-65). Experimental, unaudited.</Description>
+    <Authors>HIDE contributors</Authors>
+    <Copyright>Copyright HIDE contributors</Copyright>
     <PackageLicenseExpression>Apache-2.0</PackageLicenseExpression>
+    <PackageReadmeFile>README.md</PackageReadmeFile>
+    <PackageTags>encryption;post-quantum;cryptography;hpke;ml-kem;ml-dsa;x25519;e2ee;pqc</PackageTags>
+    <PackageReleaseNotes>https://github.com/hide-protocol/hide/blob/main/CHANGELOG.md</PackageReleaseNotes>
     <RepositoryUrl>https://github.com/hide-protocol/hide</RepositoryUrl>
     <PackageProjectUrl>https://github.com/hide-protocol/hide</PackageProjectUrl>
     <RepositoryType>git</RepositoryType>
+    <PublishRepositoryUrl>true</PublishRepositoryUrl>
+    <EmbedUntrackedSources>true</EmbedUntrackedSources>
+    <IncludeSymbols>true</IncludeSymbols>
+    <SymbolPackageFormat>snupkg</SymbolPackageFormat>
     <IsPackable>true</IsPackable>
   </PropertyGroup>
 
   <ItemGroup>
     <InternalsVisibleTo Include="HideProtocol.Tests" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.SourceLink.GitHub" Version="8.0.0" PrivateAssets="All" />
+  </ItemGroup>
+
+  <!-- The README is shared by the whole .NET SDK, one directory up. -->
+  <ItemGroup>
+    <None Include="..\README.md" Pack="true" PackagePath="\" />
   </ItemGroup>
 
   <!-- One package carries every RID; the runtime picks the matching folder and

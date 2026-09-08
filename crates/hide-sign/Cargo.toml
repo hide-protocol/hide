@@ -3,13 +3,16 @@ name = "hide-sign"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
+authors.workspace = true
 license.workspace = true
 repository.workspace = true
 homepage.workspace = true
-keywords.workspace = true
-categories.workspace = true
+documentation = "https://docs.rs/hide-sign"
+readme = "README.md"
+keywords = ["signature", "ml-dsa", "ed25519", "post-quantum", "hybrid"]
+categories = ["cryptography", "authentication"]
 publish.workspace = true
-description = "Hybrid Ed25519 + ML-DSA-65 signatures for the HIDE protocol"
+description = "Hybrid Ed25519 + ML-DSA-65 signatures for HIDE. Experimental, unaudited."
 
 [dependencies]
 hide-crypto = { path = "../hide-crypto", version = "0.6.2" }

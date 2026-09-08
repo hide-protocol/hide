@@ -1,0 +1,75 @@
+name: Interoperability report
+description: For independent implementers - a conformance vector or surface disagrees with your implementation.
+labels: ["interop"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Independent implementations are how a format earns trust, and a disagreement is valuable whichever side turns out to be wrong. The frozen vectors live in [conformance/vectors](https://github.com/hide-protocol/hide/tree/main/conformance/vectors); the normative text is [spec/hide-0.1.md](https://github.com/hide-protocol/hide/blob/main/spec/hide-0.1.md).
+
+        If the disagreement means a vector that should be *rejected* is accepted by HIDE, that is a security finding: use private vulnerability reporting per [SECURITY.md](https://github.com/hide-protocol/hide/blob/main/SECURITY.md) instead.
+  - type: input
+    id: vector
+    attributes:
+      label: Vector or artifact
+      description: Path under conformance/vectors, or "own container" if you produced it (attach it if it holds no real data).
+      placeholder: "conformance/vectors/rejections/trailing-bytes.hide"
+    validations:
+      required: true
+  - type: dropdown
+    id: surface
+    attributes:
+      label: HIDE surface you compared against
+      options:
+        - Rust crates
+        - CLI (hide)
+        - Independent Node verifier (conformance/node)
+        - Python SDK
+        - Node SDK
+        - WASM (browser)
+        - Go SDK
+        - Java SDK
+        - Ruby SDK
+        - PHP SDK
+        - .NET SDK
+        - Spec text only
+    validations:
+      required: true
+  - type: input
+    id: hide_version
+    attributes:
+      label: HIDE version or commit
+    validations:
+      required: true
+  - type: input
+    id: implementation
+    attributes:
+      label: Your implementation
+      description: Language, libraries used for X-Wing / HPKE / ML-DSA / CBOR, and a link if public.
+    validations:
+      required: true
+  - type: input
+    id: spec_section
+    attributes:
+      label: Spec section
+      placeholder: "spec/hide-0.1.md §5 (FINAL rule)"
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected result
+      description: What the spec, in your reading, says should happen, and what your implementation does.
+    validations:
+      required: true
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual result from HIDE
+      description: Exact output or error, and the command or API call that produced it.
+    validations:
+      required: true
+  - type: textarea
+    id: bytes
+    attributes:
+      label: Byte-level detail
+      description: Offsets, hex of the differing region, or intermediate values (header hash, chunk AAD, transcript) if you have them.
+      render: text

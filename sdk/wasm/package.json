@@ -1,7 +1,7 @@
 {
   "name": "@hide-protocol/wasm",
   "version": "0.6.2",
-  "description": "HIDE for the browser via WebAssembly. Experimental and unaudited.",
+  "description": "HIDE in the browser via WebAssembly: hybrid post-quantum encryption (X25519 + ML-KEM-768). Experimental, unaudited.",
   "type": "module",
   "license": "Apache-2.0",
   "main": "./hide_wasm.js",
@@ -22,12 +22,21 @@
     "post-quantum",
     "cryptography",
     "webassembly",
-    "ml-kem"
+    "ml-kem",
+    "x25519",
+    "pqc",
+    "quantum-resistant",
+    "file-encryption",
+    "e2ee",
+    "age"
   ],
   "repository": {
     "type": "git",
     "url": "git+https://github.com/hide-protocol/hide.git",
     "directory": "sdk/wasm"
+  },
+  "bugs": {
+    "url": "https://github.com/hide-protocol/hide/issues"
   },
   "homepage": "https://github.com/hide-protocol/hide"
 }

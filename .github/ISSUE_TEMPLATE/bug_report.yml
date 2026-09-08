@@ -1,0 +1,66 @@
+name: Bug report
+description: Something behaves differently from what README, spec or docs say.
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        **Do not report a suspected security vulnerability here.** Use GitHub's private vulnerability reporting as described in [SECURITY.md](https://github.com/hide-protocol/hide/blob/main/SECURITY.md).
+
+        HIDE is experimental and unaudited. A bug report is still welcome: a failing test is the most useful form.
+  - type: input
+    id: version
+    attributes:
+      label: Version or commit
+      description: Output of `hide --version`, the package version, or the git commit.
+      placeholder: "0.6.2 / abc1234"
+    validations:
+      required: true
+  - type: dropdown
+    id: surface
+    attributes:
+      label: Surface
+      options:
+        - CLI (hide)
+        - Desktop app
+        - Rust crate
+        - Python SDK
+        - Node SDK
+        - WASM (browser)
+        - Go SDK
+        - Java SDK
+        - Ruby SDK
+        - PHP SDK
+        - .NET SDK
+        - C ABI (hide-ffi)
+        - Documentation or spec
+    validations:
+      required: true
+  - type: input
+    id: platform
+    attributes:
+      label: Operating system and architecture
+      placeholder: "Windows 11 x86-64 / Ubuntu 24.04 aarch64 / macOS 15 arm64"
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      description: Exact commands or code. If a container is involved, say how it was produced; do not attach a container holding real data.
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behaviour
+      description: Quote the README, spec section or doc that says what should happen.
+    validations:
+      required: true
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual behaviour
+      description: Exact error message or output, unedited.
+    validations:
+      required: true
