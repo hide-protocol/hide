@@ -39,9 +39,18 @@ const MEMORY_KIB: u32 = 19 * 1024;
 const ITERATIONS: u32 = 2;
 const PARALLELISM: u32 = 1;
 
-/// Refuse absurd parameters from a malicious file before allocating for them.
-const MAX_MEMORY_KIB: u32 = 4 * 1024 * 1024;
+/// A key file is untrusted input, and Argon2 allocates exactly what the header
+/// asks for, so this ceiling is the only thing standing between a 95-byte file
+/// and a multi-gigabyte allocation (issue #6: a 4 GiB ceiling let a fuzzer
+/// reproducer request 2.37 GiB and pass). Writers only ever emit `MEMORY_KIB`,
+/// so a bound they never approach costs nothing; 256 MiB leaves room for a
+/// future raise of the baseline while staying well under what a machine
+/// opening a key can be expected to have free.
+const MAX_MEMORY_KIB: u32 = 256 * 1024;
 const MAX_ITERATIONS: u32 = 64;
+/// Each lane costs work and, in Argon2's threaded configuration, a thread;
+/// writers emit `PARALLELISM`, so anything past a small multiple is hostile.
+const MAX_PARALLELISM: u32 = 4;
 /// And refuse parameters so weak the passphrase is effectively unprotected. The
 /// header is authenticated, so this cannot be a downgrade of an honest file;
 /// it stops a file written by a careless or hostile implementation from
@@ -307,9 +316,14 @@ pub fn unprotect_seed(
             .try_into()
             .map_err(|_| KeyringError::Malformed)?,
     );
+    // `memory / 8 < parallelism` is Argon2's minimum of 8 blocks per lane; it
+    // is checked here so the failure is attributable to our bound instead of
+    // surfacing later from `Params::new`.
     if parallelism == 0
+        || parallelism > MAX_PARALLELISM
         || !(MIN_MEMORY_KIB..=MAX_MEMORY_KIB).contains(&memory)
         || !(MIN_ITERATIONS..=MAX_ITERATIONS).contains(&iterations)
+        || memory / 8 < parallelism
     {
         return Err(KeyringError::UnreasonableParameters);
     }
@@ -466,6 +480,38 @@ mod tests {
     fn refuses_a_file_demanding_absurd_memory() -> Result<(), KeyringError> {
         let mut sealed = protect(&secret(), "correct horse battery")?;
         sealed[10..14].copy_from_slice(&u32::MAX.to_be_bytes());
+        assert_eq!(
+            error_of(unprotect(&sealed, "correct horse battery")),
+            KeyringError::UnreasonableParameters
+        );
+        Ok(())
+    }
+
+    // Issue #6: the nightly fuzzer produced this file, which the old 4 GiB
+    // ceiling accepted and which then asked the allocator for 2.37 GiB
+    // (p_cost = 83, m_cost = 2 490 368 KiB). Pinned byte-for-byte so the fix
+    // is measured against the real input, not a hand-made approximation.
+    #[test]
+    fn refuses_the_fuzzer_reproducer_before_allocating() {
+        const REPRODUCER: [u8; SEALED_LEN] = [
+            0x48, 0x49, 0x44, 0x45, 0x2d, 0x4b, 0x45, 0x59, 0x02, 0x53, 0x00, 0x26, 0x00, 0x00,
+            0x00, 0x00, 0x00, 0x01, 0x2b, 0x2b, 0x55, 0x55, 0x55, 0x55, 0xff, 0xff, 0xff, 0xff,
+            0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0x55, 0x00, 0x01, 0x00,
+            0x00, 0x00, 0x00, 0x00, 0x01, 0x2b, 0x2b, 0x55, 0x55, 0x55, 0x55, 0xff, 0xff, 0xff,
+            0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+            0xff, 0xff, 0x01, 0x06, 0xff, 0xff, 0xdf, 0xff, 0xff, 0xff, 0xff, 0x03, 0xff, 0xff,
+            0xff, 0xff, 0xbf, 0xff, 0xff, 0xfd, 0xff, 0xff, 0xff, 0xff, 0x55,
+        ];
+        assert_eq!(
+            error_of(unprotect(&REPRODUCER, "correct horse battery")),
+            KeyringError::UnreasonableParameters
+        );
+    }
+
+    #[test]
+    fn refuses_a_file_demanding_absurd_parallelism() -> Result<(), KeyringError> {
+        let mut sealed = protect(&secret(), "correct horse battery")?;
+        sealed[9] = 0xff;
         assert_eq!(
             error_of(unprotect(&sealed, "correct horse battery")),
             KeyringError::UnreasonableParameters

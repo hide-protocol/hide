@@ -281,6 +281,15 @@ const index = (await readFile(new URL("rejections.txt", rejections), "utf8"))
   .filter((line) => line && !line.startsWith("#"))
   .map((line) => line.split("\t"));
 for (const [name, reason] of index) {
+  if (name.endsWith(".test-secret")) {
+    // A key file whose Argon2 header is hostile. An independent implementation
+    // must refuse it from the parameters alone, without deriving anything: the
+    // memory cost is at offset 10 and this one asks for gigabytes.
+    const key = await readFile(new URL(name, rejections));
+    const memoryKib = key.readUInt32BE(10);
+    assert.ok(memoryKib > 256 * 1024, `${name}: fixture demands ${memoryKib} KiB`);
+    continue;
+  }
   if (name.endsWith(".test-public")) {
     // A small-order X25519 point. The HPKE library may or may not reject it on
     // its own, so check the component directly: it must not be all zero.

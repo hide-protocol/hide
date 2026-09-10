@@ -9,3 +9,4 @@ truncated-before-final	stream ends before the FINAL record authenticates; no pla
 trailing-bytes-after-final	bytes after FINAL
 payload-salt-altered	payload key derives from the altered salt; first record fails
 small-order.test-public	X25519 component is a small-order point; refuse as a recipient
+argon2-memory.test-secret	key file header demands 2.4 GiB of Argon2 memory; refuse before allocating

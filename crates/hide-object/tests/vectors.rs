@@ -139,6 +139,16 @@ fn every_frozen_rejection_vector_is_refused() -> Result<(), Box<dyn Error>> {
         let (name, reason) = line.split_once('\t').expect("name<TAB>reason");
         assert!(!reason.is_empty(), "{name} has no reason");
         listed += 1;
+        if name.ends_with(".test-secret") {
+            // A key file, not a container: the cost parameters in its header
+            // are attacker-chosen and must be refused before Argon2 allocates.
+            let bytes = fs::read(directory.join(name))?;
+            assert!(
+                hide_keyring::unprotect(&bytes, "passphrase").is_err(),
+                "{name} must be refused: {reason}"
+            );
+            continue;
+        }
         if name.ends_with(".test-public") {
             let bytes = fs::read(directory.join(name))?;
             assert!(
@@ -161,6 +171,6 @@ fn every_frozen_rejection_vector_is_refused() -> Result<(), Box<dyn Error>> {
         .filter(|e| e.file_name() != "rejections.txt")
         .count();
     assert_eq!(on_disk, listed, "rejections.txt and the directory disagree");
-    assert!(listed >= 9, "expected the full set of rejection vectors");
+    assert!(listed >= 10, "expected the full set of rejection vectors");
     Ok(())
 }
