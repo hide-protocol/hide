@@ -5,6 +5,44 @@ and a format change is always called out here explicitly.
 
 ## Unreleased
 
+### Security
+
+- **A 95-byte key file could make `open` allocate 2.4 GiB.** The Argon2 memory
+  cost is read from the untrusted header and the ceiling was 4 GiB, which no
+  machine that opens key files has to spare; parallelism had no ceiling at
+  all. Found by the nightly fuzzer on its first full run (issue #6). Ceilings
+  are now 256 MiB and 4 lanes — thirteen times what any writer emits — and
+  the reproducer is frozen as rejection vector `argon2-memory.test-secret`,
+  refused by both the Rust and the independent Node verifier.
+- Identity and epoch log decoders reserved `Vec` capacity from the declared
+  entry count before reading a single entry; a five-byte input reserved tens
+  of megabytes. Reservation is now capped by what the input could contain.
+- `usize` truncation on 32-bit targets: a challenge length or an epoch index
+  above 2^32 selected the wrong bytes on wasm32 instead of being refused.
+- MLS messages had no size limit before reaching the third-party parser; 1 MiB
+  now. `hide unseal` read an armored message without a cap; 1 MiB now, the
+  same limit the desktop app already enforced.
+
+### Added
+
+- Two more fuzz targets, `challenge_decode` and `mls_message`, covering the
+  last two parsers of untrusted bytes without one. Eight in total.
+- `cargo deny` in the `supply-chain` job: licence allow-list, banned second
+  crypto stacks, unknown registries, and duplicate versions with every known
+  duplicate attributed so a new one is visible.
+- Repository agent instructions and skills under `.github/instructions/` and
+  `.github/skills/` (fuzz triage, release, adding a rejection vector).
+
+### Fixed
+
+- CI `sdks` failed on every push after a release because `npm ci` refuses the
+  lockfile's not-yet-published platform packages; the lockfile is regenerated
+  and the job uses `npm install`. Pages deploy enables the site itself.
+- `cargo test -p hide-object` without `--all-features` failed to compile the
+  signing tests instead of skipping them.
+
+### Changed
+
 - Nightly fuzzing: every target runs four hours in parallel, the corpus is
   carried forward night to night and minimised, and a crash or hang files a
   `fuzz`+`security` issue with the reproducer attached. The per-input timeout

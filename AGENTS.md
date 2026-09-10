@@ -40,3 +40,11 @@ Experimental encrypted-file protocol. Rust workspace; the CLI exists to exercise
 - Comments explain why, not what. No stubs or placeholder functions.
 - Dependency versions are pinned exactly, because the wire format depends on them.
 - Vectors are frozen artifacts: changing them is a protocol change and must be deliberate.
+
+## Agent config
+
+- `.github/instructions/hide-conventions.instructions.md` (always on): invariants and
+  verified gotchas — untrusted input, workspace layout, vectors/.gitignore, fuzzing, CI/release.
+- `.github/instructions/rust-crates.instructions.md` (`crates/**`, `apps/**` `.rs`): error
+  enums, bound-before-allocate, canonical re-encode, test style.
+- Skills: `.github/skills/fuzz-triage`, `release`, `add-rejection-vector` — step lists with commands.

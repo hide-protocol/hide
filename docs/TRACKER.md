@@ -33,10 +33,12 @@ done.
   identity-*, epoch-*, ssh-key and an ssh-agent that confirms on the tty.
 - **Desktop** (`apps/hide-desktop`): Tauri app and portable build over the same
   crates; `interop.rs` proves it opens CLI output and vice versa.
-- **Assurance**: 298 tests, six libFuzzer targets run 45 s on every push and
-  four hours nightly with a corpus carried forward (`fuzz-nightly.yml`; a
-  finding files an issue). Two real bugs in the first two runs: P11.3, P11.4.
-  Nine frozen rejection vectors shared with
+- **Assurance**: 306 tests, eight libFuzzer targets — one per parser of
+  untrusted bytes — run 45 s on every push and four hours nightly with a
+  corpus carried forward (`fuzz-nightly.yml`; a finding files an issue).
+  Three real bugs in the first three runs: P11.3, P11.4, P12.1. `cargo deny`
+  gates licences, banned crypto stacks and duplicate versions.
+  Ten frozen rejection vectors shared with
   the independent Node verifier, cross-surface conformance,
   `unsafe_code = "forbid"` outside `hide-ffi`, every dependency pinned exactly.
 
