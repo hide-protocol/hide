@@ -64,10 +64,17 @@ const BINDING_CONTEXT: &[u8] = b"HIDE/0.7 mls binding";
 const DEVICE_ID_LEN: usize = 32;
 const CREDENTIAL_LEN: usize = DEVICE_ID_LEN + VERIFYING_KEY_LENGTH + SIGNATURE_LENGTH;
 
+/// Largest wire message accepted from the network. `mls-rs` is third-party and
+/// unaudited, so nothing arbitrary is handed to its parser: a legitimate
+/// handshake or application message is orders of magnitude below this.
+pub const MAX_MLS_MESSAGE: usize = 1024 * 1024;
+
 #[derive(Debug, Error)]
 pub enum MlsError {
     #[error("this device is not trusted by the identity")]
     UntrustedDevice,
+    #[error("the message is larger than {MAX_MLS_MESSAGE} bytes")]
+    MessageTooLarge,
     #[error("the message came from a device the identity does not trust")]
     UntrustedSender,
     #[error("the credential is not a HIDE device binding")]
@@ -338,5 +345,8 @@ pub fn encode_message(message: &MlsMessage) -> Result<Vec<u8>, MlsError> {
 }
 
 pub fn decode_message(bytes: &[u8]) -> Result<MlsMessage, MlsError> {
+    if bytes.len() > MAX_MLS_MESSAGE {
+        return Err(MlsError::MessageTooLarge);
+    }
     MlsMessage::from_bytes(bytes).map_err(protocol)
 }

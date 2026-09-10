@@ -40,6 +40,11 @@ pub type EpochNumber = u64;
 /// claim it does. Refuse before allocating.
 const MAX_CHAIN_ENTRIES: usize = 1_000_000;
 
+/// Smallest possible CBOR encoding of one record: a 3-element array header
+/// plus a one-byte number and two byte strings. Used only to bound how much a
+/// declared count may pre-reserve, so an underestimate is safe.
+const MIN_RECORD_BYTES: usize = 4;
+
 const CHAIN_INFO: &[u8] = b"HIDE/0.6 epoch chain";
 
 /// X-Wing encapsulation key length, per draft-connolly-cfrg-xwing-kem.
@@ -290,7 +295,10 @@ pub fn decode_records(bytes: &[u8]) -> Result<Vec<EpochRecord>, EpochError> {
         return Err(EpochError::TooManyEntries(count as usize));
     }
 
-    let mut records = Vec::with_capacity(count as usize);
+    // The declared count is attacker-controlled and the ceiling above is a
+    // million, so reserving from it lets five bytes of input claim tens of
+    // megabytes. Reserve only what the remaining input could actually hold.
+    let mut records = Vec::with_capacity((count as usize).min(bytes.len() / MIN_RECORD_BYTES));
     for _ in 0..count {
         let fields = decoder
             .array()
@@ -348,6 +356,23 @@ mod tests {
         let chain = EpochChain::new().unwrap();
         assert_eq!(chain.current(), 0);
         assert!(chain.is_readable(0));
+    }
+
+    /// A five-byte input may claim a million records. Decoding must fail on
+    /// the truncated body rather than reserving tens of megabytes first.
+    #[test]
+    fn a_huge_declared_count_reserves_nothing() {
+        // CBOR array header declaring 999_999 elements, then nothing.
+        let mut bytes = Vec::new();
+        minicbor::Encoder::new(&mut bytes).array(999_999).unwrap();
+        assert_eq!(decode_records(&bytes), Err(EpochError::Malformed));
+        // Above the ceiling it is refused outright, also without reserving.
+        let mut huge = Vec::new();
+        minicbor::Encoder::new(&mut huge).array(u64::MAX).unwrap();
+        assert!(matches!(
+            decode_records(&huge),
+            Err(EpochError::TooManyEntries(_))
+        ));
     }
 
     #[test]

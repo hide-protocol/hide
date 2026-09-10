@@ -162,7 +162,12 @@ impl Challenge {
         let (length, rest) = rest
             .split_at_checked(8)
             .ok_or(SignError::MalformedChallenge)?;
-        let length = u64::from_be_bytes(length.try_into().expect("split at eight")) as usize;
+        // `as usize` would wrap on a 32-bit target and accept a length that
+        // does not fit, selecting the wrong slice.
+        let length = usize::try_from(u64::from_be_bytes(
+            length.try_into().expect("split at eight"),
+        ))
+        .map_err(|_| SignError::MalformedChallenge)?;
         let (audience, rest) = rest
             .split_at_checked(length)
             .ok_or(SignError::MalformedChallenge)?;
@@ -199,6 +204,19 @@ mod tests {
 
     fn challenge() -> Challenge {
         Challenge::new("ssh://host.example", NOW, WINDOW).expect("randomness is available")
+    }
+
+    /// A declared audience length above `usize::MAX` must be refused, not
+    /// truncated by an `as usize` cast that would wrap on a 32-bit target.
+    #[test]
+    fn an_oversized_audience_length_is_refused() {
+        let mut bytes = vec![0u8; NONCE_LENGTH];
+        bytes.extend_from_slice(&u64::MAX.to_be_bytes());
+        bytes.extend_from_slice(&[0u8; 16]);
+        assert!(matches!(
+            Challenge::decode(&bytes),
+            Err(SignError::MalformedChallenge)
+        ));
     }
 
     #[test]

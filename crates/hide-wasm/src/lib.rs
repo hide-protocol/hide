@@ -427,8 +427,10 @@ pub fn verify_epoch_chain(chain: &[u8]) -> Result<usize, JsValue> {
 #[wasm_bindgen(js_name = epochPublicKey)]
 pub fn epoch_public_key(chain: &[u8], epoch: u64) -> Result<Vec<u8>, JsValue> {
     let records = epoch_records(chain)?;
+    // `as usize` would wrap on wasm32 and select the wrong epoch.
+    let index = usize::try_from(epoch).map_err(|_| error("that epoch is beyond the chain"))?;
     let record = records
-        .get(epoch as usize)
+        .get(index)
         .ok_or_else(|| error("that epoch is beyond the chain"))?;
     Ok(record.public_key.clone())
 }

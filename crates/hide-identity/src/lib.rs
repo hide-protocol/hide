@@ -34,6 +34,11 @@ const ENTRY_CONTEXT: &[u8] = b"HIDE/0.6 identity entry";
 
 /// A log longer than this is refused before anything is allocated for it.
 const MAX_ENTRIES: usize = 100_000;
+
+/// Smallest plausible CBOR encoding of one entry: a 6-element array header
+/// plus six minimal items. Only used to bound a pre-reservation, so an
+/// underestimate is safe.
+const MIN_ENTRY_BYTES: usize = 7;
 /// Device labels are shown to humans; an unbounded one is a denial-of-service.
 const MAX_LABEL_BYTES: usize = 256;
 
@@ -579,7 +584,9 @@ pub fn decode(bytes: &[u8]) -> Result<Vec<Entry>, IdentityError> {
         return Err(IdentityError::TooManyEntries(count as usize));
     }
 
-    let mut entries = Vec::with_capacity(count as usize);
+    // The count comes from untrusted bytes, so reserving from it lets a few
+    // bytes of input claim megabytes. Cap it by what the input could hold.
+    let mut entries = Vec::with_capacity((count as usize).min(bytes.len() / MIN_ENTRY_BYTES));
     for _ in 0..count {
         let fields = decoder
             .array()
@@ -594,13 +601,13 @@ pub fn decode(bytes: &[u8]) -> Result<Vec<Entry>, IdentityError> {
             .bytes()
             .map_err(|_| IdentityError::Malformed)?
             .to_vec();
-        let label = decoder
-            .str()
-            .map_err(|_| IdentityError::Malformed)?
-            .to_owned();
+        // Length first: copying and then rejecting lets a malformed log make
+        // us allocate an oversized label we were always going to refuse.
+        let label = decoder.str().map_err(|_| IdentityError::Malformed)?;
         if label.len() > MAX_LABEL_BYTES {
             return Err(IdentityError::LabelTooLong);
         }
+        let label = label.to_owned();
 
         let event = match tag {
             1 => Event::Create {
@@ -661,4 +668,42 @@ pub fn decode(bytes: &[u8]) -> Result<Vec<Entry>, IdentityError> {
         return Err(IdentityError::Malformed);
     }
     Ok(entries)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A handful of bytes may claim a hundred thousand entries. Decoding must
+    /// fail on the truncated body rather than reserving megabytes first.
+    #[test]
+    fn a_huge_declared_count_reserves_nothing() {
+        let mut bytes = Vec::new();
+        minicbor::Encoder::new(&mut bytes).array(99_999).unwrap();
+        assert!(matches!(decode(&bytes), Err(IdentityError::Malformed)));
+
+        let mut huge = Vec::new();
+        minicbor::Encoder::new(&mut huge).array(u64::MAX).unwrap();
+        assert!(matches!(
+            decode(&huge),
+            Err(IdentityError::TooManyEntries(_))
+        ));
+    }
+
+    /// The label is rejected on its declared length, before it is copied.
+    #[test]
+    fn an_oversized_label_is_refused() {
+        let label = "x".repeat(MAX_LABEL_BYTES + 1);
+        let mut bytes = Vec::new();
+        let mut encoder = minicbor::Encoder::new(&mut bytes);
+        encoder
+            .array(1)
+            .and_then(|e| e.array(6))
+            .and_then(|e| e.u64(0))
+            .and_then(|e| e.u8(1))
+            .and_then(|e| e.bytes(&[0u8; 32]))
+            .and_then(|e| e.str(&label))
+            .unwrap();
+        assert!(matches!(decode(&bytes), Err(IdentityError::LabelTooLong)));
+    }
 }

@@ -351,6 +351,33 @@ fn read_bounded(path: &Path, limit: usize) -> Result<Zeroizing<Vec<u8>>> {
     Ok(bytes)
 }
 
+/// An armored message is meant to be pasted into a chat window, so it is small
+/// by construction. The same 1 MiB ceiling the desktop app applies, so a
+/// message accepted by one surface is accepted by the other.
+const MAX_ARMORED_MESSAGE: usize = 1024 * 1024;
+
+/// Reads armored text from a file or stdin, bounded. An unbounded read here
+/// would let a pipe or a huge file exhaust memory before any parsing happens.
+fn read_armored_message(input: Option<&Path>) -> Result<String> {
+    let mut bytes = Vec::new();
+    match input {
+        Some(path) => {
+            File::open(path)?
+                .take(MAX_ARMORED_MESSAGE as u64 + 1)
+                .read_to_end(&mut bytes)?;
+        }
+        None => {
+            io::stdin()
+                .take(MAX_ARMORED_MESSAGE as u64 + 1)
+                .read_to_end(&mut bytes)?;
+        }
+    }
+    if bytes.len() > MAX_ARMORED_MESSAGE {
+        return Err("that armored message is larger than 1 MiB; use `open` instead".into());
+    }
+    String::from_utf8(bytes).map_err(|_| "an armored message must be valid UTF-8".into())
+}
+
 fn new_output(path: &Path) -> Result<NamedTempFile> {
     if path.try_exists()? || path.symlink_metadata().is_ok() {
         return Err("output already exists; refusing to overwrite".into());
@@ -847,14 +874,7 @@ fn seal_message(
 }
 
 fn unseal_message(input: Option<&Path>, secret_path: &Path) -> Result<()> {
-    let text = match input {
-        Some(path) => std::fs::read_to_string(path)?,
-        None => {
-            let mut buffer = String::new();
-            io::stdin().read_to_string(&mut buffer)?;
-            buffer
-        }
-    };
+    let text = read_armored_message(input)?;
     let container = dearmor_message(&text)?;
     let secret = load_secret(secret_path)?;
 

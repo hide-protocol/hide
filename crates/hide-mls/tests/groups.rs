@@ -6,8 +6,8 @@
 
 use hide_identity::{IdentityLog, device_id};
 use hide_mls::{
-    MlsError, accept_from_trusted, client_for, decode_message, encode_message, sender_device,
-    untrusted_members,
+    MAX_MLS_MESSAGE, MlsError, accept_from_trusted, client_for, decode_message, encode_message,
+    sender_device, untrusted_members,
 };
 use hide_sign::SigningIdentity;
 
@@ -29,6 +29,17 @@ fn identity() -> (IdentityLog, SigningIdentity, SigningIdentity) {
 fn a_trusted_device_gets_a_client() {
     let (log, laptop, _) = identity();
     assert!(client_for(&log.membership(), &laptop).is_ok());
+}
+
+/// `mls-rs` is third-party and unaudited, so nothing arbitrarily large is
+/// handed to its parser: the size is refused before the message is read.
+#[test]
+fn an_oversized_message_is_refused_before_parsing() {
+    let oversized = vec![0u8; MAX_MLS_MESSAGE + 1];
+    assert!(matches!(
+        decode_message(&oversized),
+        Err(MlsError::MessageTooLarge)
+    ));
 }
 
 #[test]
