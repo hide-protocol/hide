@@ -101,7 +101,10 @@ Every bullet below was paid for by a real failure. Mechanism, not story.
   `dry_run=true` → `dry_run=false` → verify via registry APIs → clean-dir install →
   tracker row. See skill `release`.
 - `scripts/set-version.ps1 -Version X` bumps 23 files; `-Check` runs in CI `lint`.
-- GitHub Pages: `configure-pages` needs `enablement: true` or a human enables it once.
+- GitHub Pages: `configure-pages` with `enablement: true` still fails (`Resource not
+  accessible by integration` — GITHUB_TOKEN cannot create the site). Create it once with
+  an admin token: `gh api -X POST repos/hide-protocol/hide/pages -f build_type=workflow`,
+  then re-run `pages.yml`. Live: https://hide-protocol.github.io/hide/ (+ `llms.txt`).
 - Verify action versions with `gh api repos/<o>/<r>/git/matching-refs/tags/<tag>`;
   `dtolnay/rust-toolchain` and `ruby/setup-ruby` use BRANCHES, not tags.
 
