@@ -21,6 +21,7 @@ hide-identity = { path = "../crates/hide-identity" }
 hide-sign = { path = "../crates/hide-sign" }
 hide-epoch = { path = "../crates/hide-epoch" }
 hide-transparency = { path = "../crates/hide-transparency" }
+hide-mls = { path = "../crates/hide-mls" }
 
 [[bin]]
 name = "format_header"
@@ -60,6 +61,20 @@ bench = false
 [[bin]]
 name = "transparency_proofs"
 path = "fuzz_targets/transparency_proofs.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "challenge_decode"
+path = "fuzz_targets/challenge_decode.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "mls_message"
+path = "fuzz_targets/mls_message.rs"
 test = false
 doc = false
 bench = false
