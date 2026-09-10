@@ -21,6 +21,12 @@ test-vectors = ["hide-crypto/test-vectors"]
 name = "generate_vectors"
 required-features = ["test-vectors"]
 
+# The forgery tests reach into the test-only hooks; without this a plain
+# `cargo test -p hide-object` fails to compile instead of skipping them.
+[[test]]
+name = "signing"
+required-features = ["test-vectors"]
+
 [dependencies]
 hide-format = { path = "../hide-format", version = "0.7.0" }
 hide-crypto = { path = "../hide-crypto", version = "0.7.0" }

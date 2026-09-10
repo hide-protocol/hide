@@ -50,7 +50,12 @@ jobs:
       # llms.txt is committed once at the root (where llmstxt.org expects it in
       # the repo) and copied here rather than duplicated in site/.
       - run: cp llms.txt llms-full.txt site/
+      # `enablement` creates the Pages site through the API on first run; the
+      # alternative is a human clicking through Settings, which this repo has
+      # no other manual step for.
       - uses: actions/configure-pages@983d7736d9b0ae728b81ab479565c72886d7745b # v5
+        with:
+          enablement: true
       - uses: actions/upload-pages-artifact@7b1f4a764d45c48632c6b24a0339c27f5614fb0b # v4
         with:
           path: site

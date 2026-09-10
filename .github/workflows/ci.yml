@@ -144,7 +144,11 @@ jobs:
           HIDE_ALLOW_LIBRARY_OVERRIDE: "1"
         working-directory: sdk/node
         run: |
-          npm ci
+          # Not npm ci: at version-bump time the platform packages for the
+          # new version do not exist on npm yet, so the lockfile records them
+          # with an empty version and npm ci refuses it after every release.
+          # npm install still honours the lockfile for everything resolvable.
+          npm install --no-audit --no-fund
           npm run build
           node --test dist/index.test.js
 
@@ -248,8 +252,12 @@ jobs:
       # which was 189s of the 190s job. This installs a prebuilt binary.
       - uses: taiki-e/install-action@d438492cf8a250514fa2d34b30bc3c0dc37c65ff # v2
         with:
-          tool: cargo-audit
+          tool: cargo-audit,cargo-deny
       - run: cargo audit --deny warnings
+      # deny.toml adds what audit does not: licence allow-list, banned crates
+      # (a second crypto stack), unknown registries, and duplicate versions
+      # with every known duplicate attributed so a new one is visible.
+      - run: cargo deny check
 
   # Coverage-guided fuzzing of every parser that sees attacker bytes. Short on
   # every push so a regression that panics on malformed input is caught the
@@ -270,13 +278,16 @@ jobs:
       - name: Seed each corpus with the frozen vectors
         run: |
           set -euo pipefail
-          mkdir -p fuzz/corpus/{format_header,object_open,keyring_open,identity_log,epoch_chain,transparency_proofs}
+          mkdir -p fuzz/corpus/{format_header,object_open,keyring_open,identity_log,epoch_chain,transparency_proofs,challenge_decode,mls_message}
           cp conformance/vectors/*.hide fuzz/corpus/format_header/
           cp conformance/vectors/*.hide fuzz/corpus/object_open/
           cp conformance/vectors/*.test-secret conformance/vectors/*.test-seed fuzz/corpus/keyring_open/
           cp conformance/vectors/subsystems/identity-*.bin fuzz/corpus/identity_log/
           cp conformance/vectors/subsystems/epoch-*.bin fuzz/corpus/epoch_chain/
           cp conformance/vectors/subsystems/*root*.bin fuzz/corpus/transparency_proofs/
+          # challenge_decode and mls_message have no frozen vectors: a challenge
+          # carries a fresh nonce and an MLS message a fresh group state, so
+          # neither is a stable artifact. They start from the empty corpus.
       - name: Fuzz every target for 45 seconds
         working-directory: fuzz
         # rust-toolchain.toml pins stable for the repo; cargo-fuzz needs
@@ -285,7 +296,7 @@ jobs:
         # against a static libc.
         run: |
           set -euo pipefail
-          for target in format_header object_open keyring_open identity_log epoch_chain transparency_proofs; do
+          for target in format_header object_open keyring_open identity_log epoch_chain transparency_proofs challenge_decode mls_message; do
             echo "::group::$target"
             cargo +nightly fuzz run --target x86_64-unknown-linux-gnu "$target" -- -max_total_time=45 -timeout=60 -rss_limit_mb=2048
             echo "::endgroup::"
