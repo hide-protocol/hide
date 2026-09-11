@@ -18,3 +18,60 @@ updates:
     open-pull-requests-limit: 5
     commit-message:
       prefix: "build(deps)"
+  # Outside the cargo workspace, so the entry above never sees it.
+  - package-ecosystem: cargo
+    directory: /apps/hide-desktop/src-tauri
+    schedule:
+      interval: weekly
+    commit-message:
+      prefix: "build(deps)"
+  - package-ecosystem: cargo
+    directory: /fuzz
+    schedule:
+      interval: weekly
+    commit-message:
+      prefix: "build(deps)"
+  # The independent Node verifier's crypto libraries ARE the second opinion on
+  # the wire format; a stale one is a weaker check.
+  - package-ecosystem: npm
+    directories:
+      - /sdk/node
+      - /conformance/node
+      - /apps/hide-desktop
+    schedule:
+      interval: weekly
+    commit-message:
+      prefix: "build(deps)"
+    groups:
+      npm-minor:
+        update-types: ["minor", "patch"]
+  - package-ecosystem: pip
+    directory: /sdk/python
+    schedule:
+      interval: weekly
+    commit-message:
+      prefix: "build(deps)"
+  - package-ecosystem: nuget
+    directory: /sdk/dotnet/HideProtocol
+    schedule:
+      interval: weekly
+    commit-message:
+      prefix: "build(deps)"
+  - package-ecosystem: gomod
+    directory: /sdk/go
+    schedule:
+      interval: weekly
+    commit-message:
+      prefix: "build(deps)"
+  - package-ecosystem: composer
+    directory: /sdk/php
+    schedule:
+      interval: weekly
+    commit-message:
+      prefix: "build(deps)"
+  - package-ecosystem: maven
+    directory: /sdk/java
+    schedule:
+      interval: weekly
+    commit-message:
+      prefix: "build(deps)"
