@@ -48,6 +48,9 @@ mls-rs-crypto-rustcrypto = "=0.22.1"
 
 [workspace.lints.rust]
 unsafe_code = "forbid"
+# cargo-fuzz sets `cfg(fuzzing)`; declaring it is what lets a crate take a
+# fuzz-only shortcut without tripping `unexpected_cfgs`.
+unexpected_cfgs = { level = "warn", check-cfg = ['cfg(fuzzing)'] }
 
 [workspace.lints.clippy]
 all = "warn"

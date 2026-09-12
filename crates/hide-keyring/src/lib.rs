@@ -386,6 +386,17 @@ fn derive(
     iterations: u32,
     parallelism: u32,
 ) -> Result<Zeroizing<[u8; 32]>, KeyringError> {
+    // Under the fuzzer every structurally valid header pays a real Argon2
+    // pass, which is 8 MiB and milliseconds per input: the keyring target did
+    // half a million executions in four hours while its siblings did billions.
+    // The parameters have already been bounds-checked by the caller, so the
+    // fuzz build derives at the floor and spends its time on the parsing and
+    // AEAD paths instead. cargo-fuzz sets `cfg(fuzzing)`; nothing else does.
+    #[cfg(fuzzing)]
+    let (memory, iterations) = {
+        let _ = (memory, iterations);
+        (MIN_MEMORY_KIB, 1)
+    };
     let params = Params::new(memory, iterations, parallelism, Some(32))
         .map_err(|_| KeyringError::UnreasonableParameters)?;
     let argon = Argon2::new(Algorithm::Argon2id, Version::V0x13, params);
