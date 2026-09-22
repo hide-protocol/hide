@@ -27,7 +27,7 @@
     "prepack": "npm run build"
   },
   "dependencies": {
-    "koffi": "3.2.1"
+    "koffi": "3.3.1"
   },
   "optionalDependencies": {
     "@hide-protocol/darwin-arm64": "0.7.0",
@@ -39,7 +39,7 @@
     "@hide-protocol/win32-x64": "0.7.0"
   },
   "devDependencies": {
-    "@types/node": "26.4.1",
+    "@types/node": "26.6.2",
     "typescript": "7.0.2"
   },
   "keywords": [
