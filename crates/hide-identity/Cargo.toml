@@ -15,9 +15,9 @@ publish.workspace = true
 description = "Device enrollment, revocation and recovery for a HIDE identity. Experimental, unaudited."
 
 [dependencies]
-hide-sign = { path = "../hide-sign", version = "0.9.0" }
+hide-sign = { path = "../hide-sign", version = "0.9.1" }
 # EpochBinding verifies the chain it binds (spec §16.4).
-hide-epoch = { path = "../hide-epoch", version = "0.9.0" }
+hide-epoch = { path = "../hide-epoch", version = "0.9.1" }
 sha2.workspace = true
 zeroize.workspace = true
 thiserror.workspace = true
@@ -26,7 +26,7 @@ minicbor.workspace = true
 [dev-dependencies]
 proptest.workspace = true
 # EpochBinding verifies the chain it binds (spec §16.4).
-hide-epoch = { path = "../hide-epoch", version = "0.9.0" }
+hide-epoch = { path = "../hide-epoch", version = "0.9.1" }
 # Only the subsystem vector checker needs these: it validates the epoch and
 # transparency vectors alongside the identity ones.
 hide-transparency = { path = "../hide-transparency" }

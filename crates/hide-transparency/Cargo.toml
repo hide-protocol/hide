@@ -15,7 +15,7 @@ publish.workspace = true
 description = "Append-only Merkle log with inclusion and consistency proofs for HIDE. Experimental, unaudited."
 
 [dependencies]
-hide-sign = { path = "../hide-sign", version = "0.9.0" }
+hide-sign = { path = "../hide-sign", version = "0.9.1" }
 sha2.workspace = true
 thiserror.workspace = true
 minicbor.workspace = true

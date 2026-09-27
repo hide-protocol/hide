@@ -15,7 +15,7 @@ publish.workspace = true
 description = "Hybrid Ed25519 + ML-DSA-65 signatures for HIDE. Experimental, unaudited."
 
 [dependencies]
-hide-crypto = { path = "../hide-crypto", version = "0.9.0" }
+hide-crypto = { path = "../hide-crypto", version = "0.9.1" }
 ed25519-dalek.workspace = true
 ml-dsa.workspace = true
 hkdf.workspace = true

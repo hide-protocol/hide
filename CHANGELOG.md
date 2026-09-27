@@ -3,7 +3,7 @@
 This project is pre-1.0. The wire format may change while the version is 0.x,
 and a format change is always called out here explicitly.
 
-## Unreleased
+## 0.9.1 — 2026-09-27
 
 Closes every known limitation of the 1.0 freeze ([spec §15](spec/hide-1.md#15-known-limitations-of-the-10-freeze))
 **without changing any byte of the frozen wire**: every 0.9.0 container, key
