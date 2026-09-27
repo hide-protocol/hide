@@ -111,12 +111,12 @@ prints one line per registry.
 ```powershell
 $d = New-Item -ItemType Directory "$env:TEMP\hide-rel-$([guid]::NewGuid())"; Set-Location $d
 npm init -y | Out-Null; npm install hide-protocol@X.Y.Z; node -e "require('hide-protocol')"
-python -m venv .venv; .\.venv\Scripts\pip install hide-protocol==X.Y.Z; .\.venv\Scripts\python -c "import hide"
+python -m venv .venv; .\.venv\Scripts\pip install hide-protocol==X.Y.Z; .\.venv\Scripts\python -c "import hide_protocol"   # module is hide_protocol, not hide
 cargo install hide-cli --version X.Y.Z --root . ; .\bin\hide --version
 ```
 
-Download one release asset, verify against `SHA256SUMS`, open `conformance/vectors/hello.hide`
-with the published binary. Return to the repo afterwards.
+Download one release asset, verify against `SHA256SUMS`, open `conformance/vectors/identity.hide`
+with the published binary: `hide --experimental open identity.hide --secret identity.test-seed -o out` (flag is `--secret`). Return to the repo afterwards.
 
 Verify its build provenance too (keyless Sigstore attestation from the `publish`
 job; stored by GitHub, not as an asset, so the count stays 15):
