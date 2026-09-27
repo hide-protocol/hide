@@ -3,7 +3,12 @@
 This project is pre-1.0. The wire format may change while the version is 0.x,
 and a format change is always called out here explicitly.
 
-## Unreleased
+## 0.8.0
+
+**Hardening release.** The container format is unchanged: every frozen vector
+from 0.1.0 onward still opens. Key files, identity and epoch logs, MLS
+messages and armored input are now refused earlier and more cheaply when
+malformed.
 
 ### Security
 
@@ -43,6 +48,10 @@ and a format change is always called out here explicitly.
 
 ### Changed
 
+- Dependency updates: clap 4.6.7, `actions/cache` 6.1, `actions/setup-dotnet`
+  6.0, `actions/deploy-pages` 5.0, `taiki-e/install-action` 2.87.12,
+  Microsoft.SourceLink.GitHub 10.0.401, Maven gpg/javadoc/source/surefire
+  plugins, and the desktop npm minor group.
 - Nightly fuzzing: every target runs four hours in parallel, the corpus is
   carried forward night to night and minimised, and a crash or hang files a
   `fuzz`+`security` issue with the reproducer attached. The per-input timeout

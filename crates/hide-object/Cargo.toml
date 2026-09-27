@@ -28,9 +28,9 @@ name = "signing"
 required-features = ["test-vectors"]
 
 [dependencies]
-hide-format = { path = "../hide-format", version = "0.7.0" }
-hide-crypto = { path = "../hide-crypto", version = "0.7.0" }
-hide-sign = { path = "../hide-sign", version = "0.7.0" }
+hide-format = { path = "../hide-format", version = "0.8.0" }
+hide-crypto = { path = "../hide-crypto", version = "0.8.0" }
+hide-sign = { path = "../hide-sign", version = "0.8.0" }
 thiserror.workspace = true
 zeroize.workspace = true
 
