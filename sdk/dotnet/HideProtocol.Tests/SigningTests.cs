@@ -7,7 +7,7 @@ namespace HideProtocol.Tests;
 public class SigningTests
 {
     private const string Passphrase = "correct horse battery";
-    private static ReadOnlySpan<byte> Context => "HIDE/0.5 dotnet test"u8;
+    private static ReadOnlySpan<byte> Context => "example/dotnet test"u8;
 
     private static SigningIdentity Identity() =>
         SigningIdentity.Load(SigningIdentity.Generate(Passphrase), Passphrase);
@@ -54,6 +54,18 @@ public class SigningTests
 
         Assert.Throws<AuthenticationException>(() =>
             Hide.Verify(signer.PublicKey(), Context, "the message"u8, signature));
+    }
+
+    // Spec §15.2: the generic API must not mint protocol signatures.
+    [Theory]
+    [InlineData("HIDE/0.6 identity entry")]
+    [InlineData("HIDE/1.0 container")]
+    [InlineData("HIDE/")]
+    public void ReservedProtocolContextsAreRefused(string context)
+    {
+        using SigningIdentity signer = Identity();
+        Assert.Throws<ArgumentException>(() =>
+            signer.Sign(Encoding.UTF8.GetBytes(context), "the message"u8));
     }
 
     [Fact]

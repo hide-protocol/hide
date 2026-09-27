@@ -403,6 +403,22 @@ test('a different context does not verify', function (): void {
     }
 });
 
+test('reserved protocol contexts are refused', function (): void {
+    // Spec §15.2: the generic API must not mint protocol signatures.
+    [$identity] = newIdentity();
+    try {
+        foreach (['HIDE/0.6 identity entry', 'HIDE/1.0 container', 'HIDE/'] as $context) {
+            assertThrows(
+                InvalidArgumentException::class,
+                static fn () => $identity->sign($context, 'm'),
+                "signed under reserved context {$context}",
+            );
+        }
+    } finally {
+        $identity->close();
+    }
+});
+
 test('one identity cannot be impersonated by another', function (): void {
     [$alice] = newIdentity();
     [$mallory] = newIdentity('another passphrase entirely');
@@ -603,6 +619,142 @@ test('a consistency proof catches a rewritten history', function (): void {
             Fixtures::get('REWRITTEN_ROOT'),
         ),
         'a rewritten history was consistent',
+    );
+});
+
+/**
+ * Exactly AuthenticationException: a MalformedException here would mean the
+ * check never got as far as verifying, and the test would pass for the wrong reason.
+ */
+function assertForgery(callable $body, string $message): void
+{
+    try {
+        $body();
+    } catch (Throwable $error) {
+        if ($error::class === AuthenticationException::class) {
+            return;
+        }
+        throw new AssertionError($message . ' — got ' . $error::class . ': ' . $error->getMessage());
+    }
+
+    throw new AssertionError($message . ' — nothing was thrown');
+}
+
+test('a pinned identity verifies against its root', function (): void {
+    assertSame(
+        2,
+        Hide::verifyIdentityPinned(
+            Fixtures::get('BINDING_IDENTITY_LOG'),
+            Fixtures::get('BINDING_RECOVERY'),
+            Fixtures::get('BINDING_ROOT'),
+        ),
+        'the pinned log trusts two devices',
+    );
+});
+
+test('a hijacked log is refused even with a forged recovery binding', function (): void {
+    assertForgery(
+        static fn () => Hide::verifyIdentityPinned(
+            Fixtures::get('BINDING_HIJACKED_LOG'),
+            Fixtures::get('BINDING_RECOVERY'),
+            Fixtures::get('BINDING_ROOT'),
+        ),
+        'a hijacked log verified under the real binding',
+    );
+    assertForgery(
+        static fn () => Hide::verifyIdentityPinned(
+            Fixtures::get('BINDING_HIJACKED_LOG'),
+            Fixtures::get('BINDING_RECOVERY_FORGED'),
+            Fixtures::get('BINDING_ROOT'),
+        ),
+        'a hijacked log verified under a forged binding',
+    );
+});
+
+test('a log under another root is refused', function (): void {
+    assertForgery(
+        static fn () => Hide::verifyIdentityPinned(
+            Fixtures::get('BINDING_IDENTITY_LOG'),
+            Fixtures::get('BINDING_RECOVERY'),
+            str_repeat("\0", 32),
+        ),
+        'a log verified against a root that is not its own',
+    );
+});
+
+test('a truncated recovery binding is malformed', function (): void {
+    assertThrows(
+        MalformedException::class,
+        static fn () => Hide::verifyIdentityPinned(
+            Fixtures::get('BINDING_IDENTITY_LOG'),
+            substr(Fixtures::get('BINDING_RECOVERY'), 0, 100),
+            Fixtures::get('BINDING_ROOT'),
+        ),
+        'a truncated binding was not reported as malformed',
+    );
+});
+
+test('an epoch chain bound to the identity verifies', function (): void {
+    assertSame(
+        3,
+        Hide::verifyEpochChainBound(
+            Fixtures::get('BINDING_IDENTITY_LOG'),
+            Fixtures::get('BINDING_RECOVERY'),
+            Fixtures::get('BINDING_ROOT'),
+            Fixtures::get('EPOCH_CHAIN'),
+            Fixtures::get('BINDING_EPOCH'),
+        ),
+        'the bound chain holds 3 epochs',
+    );
+});
+
+test('an epoch chain bound by a stranger is refused', function (): void {
+    assertForgery(
+        static fn () => Hide::verifyEpochChainBound(
+            Fixtures::get('BINDING_IDENTITY_LOG'),
+            Fixtures::get('BINDING_RECOVERY'),
+            Fixtures::get('BINDING_ROOT'),
+            Fixtures::get('EPOCH_CHAIN'),
+            Fixtures::get('BINDING_EPOCH_STRANGER'),
+        ),
+        'a stranger bound the chain',
+    );
+});
+
+test('a checkpoint verifies and yields size and root', function (): void {
+    $checkpoint = Hide::verifyCheckpoint(
+        Fixtures::get('CHECKPOINT_3'),
+        'log.example/hide',
+        Fixtures::get('CHECKPOINT_LOG_KEY'),
+    );
+    assertSame(3, $checkpoint['size'], 'the checkpoint names a tree of size 3');
+    assertSame(32, strlen($checkpoint['root']), 'the root is 32 bytes');
+});
+
+test('a checkpoint is refused when altered, misattributed or mis-keyed', function (): void {
+    assertForgery(
+        static fn () => Hide::verifyCheckpoint(
+            Fixtures::get('CHECKPOINT_TAMPERED'),
+            'log.example/hide',
+            Fixtures::get('CHECKPOINT_LOG_KEY'),
+        ),
+        'a tampered note verified',
+    );
+    assertForgery(
+        static fn () => Hide::verifyCheckpoint(
+            Fixtures::get('CHECKPOINT_3'),
+            'other.example',
+            Fixtures::get('CHECKPOINT_LOG_KEY'),
+        ),
+        'a note verified under another origin',
+    );
+    assertForgery(
+        static fn () => Hide::verifyCheckpoint(
+            Fixtures::get('CHECKPOINT_3'),
+            'log.example/hide',
+            Fixtures::get('CHECKPOINT_WITNESS_KEY'),
+        ),
+        'a note verified under the witness key',
     );
 });
 

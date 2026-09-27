@@ -774,13 +774,189 @@ async function verifyTransparency(read) {
 
 // ---------------------------------------------------------------------------
 
+// ---------------------------------------------------------------------------
+// §16 Relying-party structures: recovery binding, epoch binding, signed
+// checkpoints, leaves and proof encoding. Written from the spec text.
+// ---------------------------------------------------------------------------
+
+const RECOVERY_BINDING_CONTEXT = ascii("HIDE/1.0 recovery binding");
+const EPOCH_BINDING_CONTEXT = ascii("HIDE/1.0 epoch binding");
+const CHECKPOINT_CONTEXT = ascii("HIDE/1.0 checkpoint");
+const RECOVERY_BINDING_LEN = 32 + VERIFYING_KEY_LEN + SIGNATURE_LEN;
+const EPOCH_BINDING_LEN = 32 * 3 + 8 + 32 + SIGNATURE_LEN;
+const MAX_NOTE_BYTES = 196_608;
+const DASH = "\u2014 ";
+
+export function verifyRecoveryBinding(bytes, entries, pinnedRoot) {
+  if (bytes.length !== RECOVERY_BINDING_LEN) throw new Rejection("Malformed");
+  const root = bytes.subarray(0, 32);
+  const recoveryKey = bytes.subarray(32, 32 + VERIFYING_KEY_LEN);
+  const signature = bytes.subarray(32 + VERIFYING_KEY_LEN);
+  if (!root.equals(pinnedRoot) || !entries[0]?.link.equals(root)) throw new Rejection("WrongIdentity");
+  if (TAGS[entries[0].tag] !== "Create") throw new Rejection("BadRoot");
+  if (!verifyHybrid(entries[0].payload, RECOVERY_BINDING_CONTEXT, concat(root, recoveryKey), signature)) {
+    throw new Rejection("BadBinding");
+  }
+  return { recoveryKey, ...replayIdentity(entries, recoveryKey) };
+}
+
+export function verifyEpochBinding(bytes, identity, entries, records) {
+  if (bytes.length !== EPOCH_BINDING_LEN) throw new Rejection("Malformed");
+  const [root, head, chainHead] = [0, 32, 64].map((at) => bytes.subarray(at, at + 32));
+  const epochs = bytes.readBigUInt64BE(96);
+  const signer = bytes.subarray(104, 136);
+  if (!root.equals(entries[0].link)) throw new Rejection("WrongIdentity");
+  if (!entries.some((entry) => entry.link.equals(head))) throw new Rejection("StaleBinding");
+  const computedHead = verifyEpochs(records);
+  if (BigInt(records.length) !== epochs || records.length === 0 || !computedHead.equals(chainHead)) {
+    throw new Rejection("StaleBinding");
+  }
+  const device = identity.devices.get(hex(signer));
+  if (!device) throw new Rejection("Unauthorised");
+  if (!verifyHybrid(device.key, EPOCH_BINDING_CONTEXT, bytes.subarray(0, 136), bytes.subarray(136))) {
+    throw new Rejection("BadBinding");
+  }
+}
+
+const validName = (name) => name.length > 0 && name.length <= 256 && /^[\x21-\x2a\x2c-\x7e]+$/.test(name);
+
+export function noteKeyId(name, verifyingKey) {
+  return sha256(ascii(name), Buffer.from([0x0a, 0xff]), ascii("HIDE/1.0 hide-sign"), verifyingKey).subarray(0, 4);
+}
+
+export function verifyCheckpointNote(bytes, origin, logKey, witnesses = [], threshold = 0) {
+  if (bytes.length > MAX_NOTE_BYTES) throw new Rejection("Malformed");
+  let note;
+  try {
+    note = new TextDecoder("utf-8", { fatal: true }).decode(bytes);
+  } catch {
+    throw new Rejection("Malformed");
+  }
+  if (/[\x00-\x09\x0b-\x1f\x7f]/.test(note) || !note.endsWith("\n")) throw new Rejection("Malformed");
+  const split = note.lastIndexOf("\n\n");
+  if (split < 0) throw new Rejection("Malformed");
+  const text = note.slice(0, split + 1);
+  const lines = note.slice(split + 2).split("\n").slice(0, -1);
+  if (lines.length === 0 || lines.length > 32) throw new Rejection("Malformed");
+  const signatures = lines.map((line) => {
+    if (!line.startsWith(DASH)) throw new Rejection("Malformed");
+    const [name, encoded, ...rest] = line.slice(DASH.length).split(" ");
+    if (rest.length || !validName(name)) throw new Rejection("Malformed");
+    const raw = Buffer.from(encoded, "base64");
+    if (raw.length < 5 || raw.toString("base64") !== encoded) throw new Rejection("Malformed");
+    return { name, keyId: raw.subarray(0, 4), signature: raw.subarray(4) };
+  });
+  const [noteOrigin, sizeText, rootText, ...extra] = text.split("\n").slice(0, -1);
+  if (extra.length || !validName(noteOrigin ?? "") || !/^(0|[1-9][0-9]*)$/.test(sizeText ?? "")) throw new Rejection("Malformed");
+  const size = BigInt(sizeText);
+  if (size > U64_MAX) throw new Rejection("Malformed");
+  const root = Buffer.from(rootText ?? "", "base64");
+  if (root.length !== 32 || root.toString("base64") !== rootText) throw new Rejection("Malformed");
+  if (noteOrigin !== origin) throw new Rejection("WrongOrigin");
+  const signedBy = (name, key) => {
+    const id = noteKeyId(name, key);
+    let found = false;
+    for (const line of signatures.filter((s) => s.name === name && s.keyId.equals(id))) {
+      if (!verifyHybrid(key, CHECKPOINT_CONTEXT, ascii(text), line.signature)) throw new Rejection("BadSignature");
+      found = true;
+    }
+    return found;
+  };
+  if (!signedBy(origin, logKey)) throw new Rejection("Unsigned");
+  const counted = new Set([origin]);
+  let cosigned = 0;
+  for (const [name, key] of witnesses) {
+    if (counted.has(name)) continue;
+    if (signedBy(name, key)) {
+      counted.add(name);
+      cosigned++;
+    }
+  }
+  if (cosigned < threshold) throw new Rejection("Unsigned");
+  return { origin: noteOrigin, size, root };
+}
+
+export function decodeProof(tag, bytes) {
+  if (bytes.length < 18 || bytes[0] !== tag) throw new Rejection("Malformed");
+  const count = bytes[17];
+  if (count > MAX_PROOF_LEN) throw new Rejection("ProofTooLong");
+  if (bytes.length !== 18 + 32 * count) throw new Rejection("Malformed");
+  return { first: bytes.readBigUInt64BE(1), second: bytes.readBigUInt64BE(9), path: hashes(bytes.subarray(18)) };
+}
+
+const identityLeaf = (root, recoveryId, head, entries) =>
+  concat(ascii("HIDE/1.0 identity leaf"), root, recoveryId, head, u64be(entries));
+const epochLeaf = (root, chainHead, epochs) => concat(ascii("HIDE/1.0 epoch leaf"), root, chainHead, u64be(epochs));
+
+async function verifyRelyingParty(read) {
+  const lines = [];
+  const pinned = await read("binding-root.bin");
+  const entries = decodeIdentity(await read("binding-identity-log.bin")).entries;
+  const hijacked = decodeIdentity(await read("binding-hijacked-log.bin")).entries;
+  const binding = await read("binding-recovery.bin");
+  const forged = await read("binding-recovery-forged.bin");
+  const recoveryKey = await read("binding-recovery-key.bin");
+
+  const identity = verifyRecoveryBinding(binding, entries, pinned);
+  assert.ok(identity.recoveryKey.equals(recoveryKey), "bound recovery key differs from binding-recovery-key.bin");
+  assert.equal(identity.devices.size, 2);
+  lines.push("binding: binding-recovery.bin binds the pinned root to binding-recovery-key.bin; the log replays to 2 devices");
+
+  const attackerKey = forged.subarray(32, 32 + VERIFYING_KEY_LEN);
+  const bare = replayIdentity(hijacked, attackerKey);
+  assert.equal(bare.devices.size, 1, "premise: the hijacked log replays under the attacker's key");
+  const whyGenuine = expectRejection(() => verifyRecoveryBinding(binding, hijacked, pinned), "Unauthorised", 2);
+  const whyForged = expectRejection(() => verifyRecoveryBinding(forged, hijacked, pinned), "BadBinding");
+  lines.push(`binding: §15.1 hijack replays bare, and is refused under the genuine binding (${whyGenuine}) and the forged one (${whyForged})`);
+
+  const records = decodeEpochs(await read("epoch-chain.bin"));
+  verifyEpochBinding(await read("binding-epoch.bin"), identity, entries, records);
+  expectRejection(() => verifyEpochBinding(preloaded.get("binding-epoch-stranger.bin"), identity, entries, records), "Unauthorised");
+  lines.push("binding: binding-epoch.bin ties epoch-chain.bin to the identity; binding-epoch-stranger.bin (unenrolled signer) is refused");
+
+  const logKey = await read("checkpoint-log-key.bin");
+  const witnessKey = await read("checkpoint-witness-key.bin");
+  const witnesses = [["witness.example/w1", witnessKey]];
+  const origin = "log.example/hide";
+  const old = verifyCheckpointNote(await read("checkpoint-2.note"), origin, logKey, witnesses, 1);
+  const current = verifyCheckpointNote(await read("checkpoint-3.note"), origin, logKey, witnesses, 1);
+  assert.equal(old.size, 2n);
+  assert.equal(current.size, 3n);
+  const whyNote = expectRejection(() => verifyCheckpointNote(preloaded.get("checkpoint-tampered.note"), origin, logKey, witnesses, 1), "BadSignature");
+  lines.push(`checkpoint: checkpoint-2/3.note verify under the log key with 1 witness; checkpoint-tampered.note is refused (${whyNote})`);
+
+  const recoveryId = deviceId(recoveryKey);
+  const chainHead = records.at(-1).link;
+  const leaves = [
+    identityLeaf(pinned, recoveryId, entries[0].link, 1n),
+    identityLeaf(pinned, recoveryId, entries.at(-1).link, 2n),
+    epochLeaf(pinned, chainHead, BigInt(records.length)),
+  ].map((leaf) => sha256(Buffer.from([0x00]), leaf));
+  const inclusion = decodeProof(0x01, await read("checkpoint-inclusion.bin"));
+  verifyInclusion({ index: inclusion.first, size: inclusion.second, path: inclusion.path }, leaves[1], current.root);
+  const consistency = decodeProof(0x02, await read("checkpoint-consistency.bin"));
+  verifyConsistency({ oldSize: consistency.first, newSize: consistency.second, path: consistency.path }, old.root, current.root);
+  const rebuilt = nodeHash(nodeHash(leaves[0], leaves[1]), leaves[2]);
+  assert.ok(rebuilt.equals(current.root), "the three §16.3 leaves do not hash to checkpoint-3's root");
+  expectRejection(() => decodeProof(0x01, preloaded.get("checkpoint-consistency.bin")), "Malformed");
+  lines.push("checkpoint: the §16.3 leaves recomputed from the spec hash to checkpoint-3's root; decoded inclusion (1 of 3) and consistency (2 -> 3) proofs fold");
+  return lines;
+}
+
+// expectRejection takes a synchronous callback, so these are read up front.
+const preloaded = new Map();
+
 export async function verifySubsystems(vectorsDirUrl) {
   const dir = new URL("subsystems/", vectorsDirUrl);
   const read = async (name) => Buffer.from(await readFile(new URL(name, dir)));
+  for (const name of ["binding-epoch-stranger.bin", "checkpoint-consistency.bin", "checkpoint-tampered.note"]) {
+    preloaded.set(name, await read(name));
+  }
   return [
     ...(await verifyIdentity(read)),
     ...(await verifyEpochChain(read)),
     ...(await verifyTransparency(read)),
+    ...(await verifyRelyingParty(read)),
   ];
 }
 

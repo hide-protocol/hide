@@ -114,3 +114,11 @@ Status of each criterion in [stability.md](stability.md#what-10-requires), as of
 | 4 | HPKE-PQ published as an RFC | Blocked, external; the maintainers chose to wait for the RFC rather than freeze on the draft |
 | 5 | Epoch secrets persisted | Done in 0.9.0: passphrase-sealed epoch keystore in `hide-keyring` (`epoch_store.rs`), CLI `--epoch-store`, restore test in `hide-epoch/tests/restore.rs` |
 | 6 | No evolving crate in the container path | Wire frozen in 0.9.0 (versioning via critical flags and ignorable extensions); the `hide-format` Rust API stays evolving until 1.0 |
+
+Known limitations of the freeze ([spec §15](../spec/hide-1.md#15-known-limitations-of-the-10-freeze)):
+closed after 0.9.0 without changing any frozen byte, so the one-year clock was not restarted. 15.2,
+15.5 and 15.7 are API and reader rules; 15.1, 15.3 and 15.4 are closed by the relying-party
+structures of spec §16 (recovery binding, signed checkpoints, leaves and proof encoding, epoch
+binding), each with frozen vectors and an independent Node verifier; 15.8 is fixed in `hide-mls`;
+15.9 is closed by §16 naming logs by link; 15.6 is a documented decision to keep the label
+spellings.

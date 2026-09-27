@@ -683,7 +683,10 @@ export function keyFileProblem(bytes) {
 export function publicKeyProblem(bytes) {
   if (bytes.length === 1216) {
     const x25519 = bytes.subarray(1184, 1216);
-    return X25519_SMALL_ORDER.some((point) => point.equals(x25519)) ? "small-order X25519 component" : null;
+    if (X25519_SMALL_ORDER.some((point) => point.equals(x25519))) return "small-order X25519 component";
+    // §9.5: canonical means bit 255 clear and u < p = 2^255 - 19 (little-endian).
+    const u = BigInt(`0x${Buffer.from(x25519).reverse().toString("hex")}`);
+    return u >= (1n << 255n) - 19n ? "non-canonical X25519 component" : null;
   }
   if (bytes.length === VERIFYING_KEY_LEN) return hasSmallOrder(bytes.subarray(0, 32)) ? "small-order Ed25519 component" : null;
   return `length ${bytes.length}`;

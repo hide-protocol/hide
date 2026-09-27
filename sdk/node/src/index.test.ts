@@ -25,12 +25,26 @@ import {
   inspectKey,
   newChallenge,
   verify,
+  verifyCheckpoint,
   verifyConsistency,
   verifyEpochChain,
+  verifyEpochChainBound,
   verifyIdentity,
+  verifyIdentityPinned,
   verifyInclusion,
 } from "./index.js";
 import {
+  bindingEpoch,
+  bindingEpochStranger,
+  bindingHijackedLog,
+  bindingIdentityLog,
+  bindingRecovery,
+  bindingRecoveryForged,
+  bindingRoot,
+  checkpoint3,
+  checkpointLogKey,
+  checkpointTampered,
+  checkpointWitnessKey,
   consistencyPath,
   epochBroken,
   epochChain,
@@ -214,7 +228,7 @@ test("a corrupt container yields an authentication error, not a crash", () => {
 });
 
 const PASSPHRASE = "correct horse battery staple";
-const CONTEXT = Buffer.from("HIDE/0.5 node test");
+const CONTEXT = Buffer.from("example/node test");
 const MESSAGE = Buffer.from("the message");
 
 function identity(): SigningIdentity {
@@ -256,6 +270,18 @@ test("a different context does not verify", () => {
         verify(signer.publicKey(), Buffer.from("another context"), MESSAGE, signature),
       AuthenticationError,
     );
+  } finally {
+    signer.close();
+  }
+});
+
+// Spec §15.2: the generic API must not mint protocol signatures.
+test("reserved protocol contexts are refused", () => {
+  const signer = identity();
+  try {
+    for (const context of ["HIDE/0.6 identity entry", "HIDE/1.0 container", "HIDE/"]) {
+      assert.throws(() => signer.sign(Buffer.from(context), MESSAGE), RangeError);
+    }
   } finally {
     signer.close();
   }
@@ -418,5 +444,96 @@ test("a consistency proof catches a rewritten history", () => {
   assert.throws(
     () => verifyConsistency(5, 8, consistencyPath, rootAt5, rewrittenRoot),
     AuthenticationError,
+  );
+});
+
+// Exactly AuthenticationError: a MalformedError here would mean the check never
+// got as far as verifying, and the test would pass for the wrong reason.
+function assertForgery(call: () => unknown): void {
+  assert.throws(call, (error: unknown) => {
+    assert.ok(error instanceof AuthenticationError);
+    assert.ok(!(error instanceof MalformedError));
+    return true;
+  });
+}
+
+test("a pinned identity verifies against its root", () => {
+  assert.equal(
+    verifyIdentityPinned(bindingIdentityLog, bindingRecovery, bindingRoot),
+    2,
+  );
+});
+
+test("a hijacked log is refused even with a forged recovery binding", () => {
+  assertForgery(() =>
+    verifyIdentityPinned(bindingHijackedLog, bindingRecovery, bindingRoot),
+  );
+  assertForgery(() =>
+    verifyIdentityPinned(bindingHijackedLog, bindingRecoveryForged, bindingRoot),
+  );
+});
+
+test("a log under another root is refused", () => {
+  assertForgery(() =>
+    verifyIdentityPinned(bindingIdentityLog, bindingRecovery, Buffer.alloc(32)),
+  );
+});
+
+test("a truncated recovery binding is malformed", () => {
+  assert.throws(
+    () =>
+      verifyIdentityPinned(
+        bindingIdentityLog,
+        bindingRecovery.subarray(0, 100),
+        bindingRoot,
+      ),
+    MalformedError,
+  );
+});
+
+test("an epoch chain bound to the identity verifies", () => {
+  assert.equal(
+    verifyEpochChainBound(
+      bindingIdentityLog,
+      bindingRecovery,
+      bindingRoot,
+      epochChain,
+      bindingEpoch,
+    ),
+    3,
+  );
+});
+
+test("an epoch chain bound by a stranger is refused", () => {
+  assertForgery(() =>
+    verifyEpochChainBound(
+      bindingIdentityLog,
+      bindingRecovery,
+      bindingRoot,
+      epochChain,
+      bindingEpochStranger,
+    ),
+  );
+});
+
+test("a checkpoint verifies and yields size and root", () => {
+  const { size, root } = verifyCheckpoint(
+    checkpoint3,
+    "log.example/hide",
+    checkpointLogKey,
+  );
+  assert.equal(size, 3n);
+  assert.equal(root.length, 32);
+});
+
+test("a checkpoint is refused when altered, misattributed or mis-keyed", () => {
+  assertForgery(() =>
+    verifyCheckpoint(checkpointTampered, "log.example/hide", checkpointLogKey),
+  );
+  assertForgery(() =>
+    verifyCheckpoint(checkpoint3, "other.example", checkpointLogKey),
+  );
+  assertForgery(() =>
+    verifyCheckpoint(checkpoint3, "log.example/hide", checkpointWitnessKey),
   );
 });

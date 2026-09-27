@@ -610,3 +610,93 @@ export function verifyConsistency(
     ),
   );
 }
+
+/**
+ * Verifies an identity log against the 32-byte root the caller pinned out of
+ * band, and returns how many devices it trusts now. `recoveryBinding`
+ * establishes the recovery key, so a log extended by a Recover under a
+ * stranger's key fails.
+ *
+ * Throws `MalformedError` for bytes that do not decode, `AuthenticationError`
+ * for a log that is not this identity's, and `RangeError` for a pinned root
+ * that is not 32 bytes.
+ */
+export function verifyIdentityPinned(
+  log: Uint8Array,
+  recoveryBinding: Uint8Array,
+  pinnedRoot: Uint8Array,
+): number {
+  const devices: [number] = [0];
+  check(
+    fns.identityVerifyPinned(
+      log,
+      log.length,
+      recoveryBinding,
+      recoveryBinding.length,
+      pinnedRoot,
+      pinnedRoot.length,
+      devices,
+    ),
+  );
+  return devices[0];
+}
+
+/**
+ * Verifies that an epoch chain belongs to the pinned identity: `epochBinding`
+ * must be signed by a device the log trusts now, over this exact chain.
+ * Returns how many epochs the chain holds.
+ */
+export function verifyEpochChainBound(
+  log: Uint8Array,
+  recoveryBinding: Uint8Array,
+  pinnedRoot: Uint8Array,
+  chain: Uint8Array,
+  epochBinding: Uint8Array,
+): number {
+  const epochs: [number] = [0];
+  check(
+    fns.epochVerifyBound(
+      log,
+      log.length,
+      recoveryBinding,
+      recoveryBinding.length,
+      pinnedRoot,
+      pinnedRoot.length,
+      chain,
+      chain.length,
+      epochBinding,
+      epochBinding.length,
+      epochs,
+    ),
+  );
+  return epochs[0];
+}
+
+/**
+ * Verifies a signed checkpoint note from the log `origin` under `logPublic`,
+ * and returns the tree size and its 32-byte root. Throws `AuthenticationError`
+ * when the note was altered, names another origin, or has another signer.
+ */
+export function verifyCheckpoint(
+  note: Uint8Array,
+  origin: string,
+  logPublic: Uint8Array,
+): { size: bigint; root: Buffer } {
+  if (origin.includes("\0")) {
+    throw new RangeError("origin must not contain a NUL character");
+  }
+  const size: [number | bigint] = [0];
+  const out = emptyBuffer();
+  check(
+    fns.checkpointVerify(
+      note,
+      note.length,
+      origin,
+      logPublic,
+      logPublic.length,
+      size,
+      out,
+    ),
+  );
+  return { size: BigInt(size[0]), root: take(out) };
+}

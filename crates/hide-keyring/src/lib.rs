@@ -203,6 +203,34 @@ impl From<CryptoError> for KeyringError {
 
 pub const MIN_PASSPHRASE_LEN: usize = 8;
 
+/// The passphrase exactly as a writer feeds it to Argon2: Unicode NFC.
+///
+/// Before this, the raw UTF-8 was used, so "é" typed as U+00E9 on one system
+/// and as "e" + U+0301 on another derived different keys (spec §15.5).
+pub fn normalize_passphrase(passphrase: &str) -> Zeroizing<String> {
+    use unicode_normalization::UnicodeNormalization as _;
+    Zeroizing::new(passphrase.nfc().collect())
+}
+
+/// Every spelling a reader tries, in order: NFC (what writers emit now), then
+/// the raw input and NFD (what an older writer may have hashed). Duplicates are
+/// dropped, so an ASCII passphrase costs exactly one Argon2 pass; only a wrong
+/// non-ASCII passphrase pays for up to three.
+pub(crate) fn passphrase_candidates(passphrase: &str) -> Vec<Zeroizing<String>> {
+    use unicode_normalization::UnicodeNormalization as _;
+    let mut out: Vec<Zeroizing<String>> = Vec::with_capacity(3);
+    for candidate in [
+        normalize_passphrase(passphrase),
+        Zeroizing::new(passphrase.to_owned()),
+        Zeroizing::new(passphrase.nfd().collect()),
+    ] {
+        if !out.iter().any(|seen| **seen == *candidate) {
+            out.push(candidate);
+        }
+    }
+    out
+}
+
 /// Whether a stored key needs a passphrase, so a caller can prompt only when needed.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum KeyFormat {
@@ -237,6 +265,7 @@ fn protect_seed(
     passphrase: &str,
     purpose: KeyPurpose,
 ) -> Result<Vec<u8>, KeyringError> {
+    let passphrase = normalize_passphrase(passphrase);
     if passphrase.chars().count() < MIN_PASSPHRASE_LEN {
         return Err(KeyringError::PassphraseTooShort(MIN_PASSPHRASE_LEN));
     }
@@ -258,7 +287,7 @@ fn protect_seed(
     header.push(purpose.tag());
     debug_assert_eq!(header.len(), HEADER_LEN);
 
-    let wrapping = Argon2Params::WRITER.derive(passphrase, &salt)?;
+    let wrapping = Argon2Params::WRITER.derive(&passphrase, &salt)?;
     let cipher = ChaCha20Poly1305::new((&*wrapping).into());
     let sealed = cipher
         .encrypt(
@@ -391,23 +420,24 @@ pub fn unprotect_seed(
     let salt = &bytes[18..18 + SALT_LEN];
     let nonce = &bytes[18 + SALT_LEN..18 + SALT_LEN + NONCE_LEN];
     let header = &bytes[..header_len];
-
-    let wrapping = params.derive(passphrase, salt)?;
-    let cipher = ChaCha20Poly1305::new((&*wrapping).into());
     let nonce: [u8; NONCE_LEN] = nonce.try_into().map_err(|_| KeyringError::Malformed)?;
-    let seed = cipher
-        .decrypt(
+
+    for candidate in passphrase_candidates(passphrase) {
+        let wrapping = params.derive(&candidate, salt)?;
+        let cipher = ChaCha20Poly1305::new((&*wrapping).into());
+        if let Ok(seed) = cipher.decrypt(
             (&nonce).into(),
             Payload {
                 msg: &bytes[header_len..],
                 aad: header,
             },
-        )
-        .map_err(|_| KeyringError::WrongPassphrase)?;
-
-    let mut out = Zeroizing::new([0u8; SEED_LEN]);
-    out.copy_from_slice(&Zeroizing::new(seed)[..]);
-    Ok((out, purpose))
+        ) {
+            let mut out = Zeroizing::new([0u8; SEED_LEN]);
+            out.copy_from_slice(&Zeroizing::new(seed)[..]);
+            return Ok((out, purpose));
+        }
+    }
+    Err(KeyringError::WrongPassphrase)
 }
 
 /// Base64 wrapper so a public key can be pasted into a message or a chat.
@@ -523,6 +553,109 @@ mod tests {
         assert_eq!(first.len(), SEALED_LEN);
         assert_eq!(second.len(), SEALED_LEN);
         Ok(())
+    }
+
+    const NFC: &str = "parol\u{0103} \u{00e9}t\u{00e9} sigur\u{0103}";
+    const NFD: &str = "parola\u{0306} e\u{0301}te\u{0301} sigura\u{0306}";
+
+    /// A key file sealed by 0.9.0 and earlier, which hashed the raw UTF-8.
+    fn seal_raw_like_0_9(seed: &[u8; SEED_LEN], passphrase: &str) -> Vec<u8> {
+        let salt = [0x11u8; SALT_LEN];
+        let nonce = [0x22u8; NONCE_LEN];
+        let mut header = Vec::new();
+        header.extend_from_slice(MAGIC);
+        header.push(FORMAT_VERSION);
+        header.extend_from_slice(&Argon2Params::WRITER.encode());
+        header.extend_from_slice(&salt);
+        header.extend_from_slice(&nonce);
+        header.push(KeyPurpose::Identity.tag());
+        let key = Argon2Params::WRITER.derive(passphrase, &salt).expect("kek");
+        let sealed = ChaCha20Poly1305::new((&*key).into())
+            .encrypt(
+                (&nonce).into(),
+                Payload {
+                    msg: seed,
+                    aad: &header,
+                },
+            )
+            .expect("seal");
+        [header, sealed].concat()
+    }
+
+    /// §15.5: the same passphrase typed in NFC or NFD opens the same file.
+    #[test]
+    fn nfc_and_nfd_spellings_open_the_same_file() -> Result<(), KeyringError> {
+        assert_ne!(NFC, NFD);
+        assert_eq!(&*normalize_passphrase(NFD), NFC);
+        let sealed = protect_identity(&[7; SEED_LEN], NFD)?;
+        for typed in [NFC, NFD] {
+            let (seed, _) = unprotect_seed(&sealed, typed)?;
+            assert_eq!(*seed, [7; SEED_LEN], "{typed:?} did not open it");
+        }
+        Ok(())
+    }
+
+    /// Files written before normalisation keep opening, whichever form the
+    /// passphrase is typed in now.
+    #[test]
+    fn files_sealed_under_a_raw_passphrase_still_open() -> Result<(), KeyringError> {
+        for raw in [NFC, NFD] {
+            let legacy = seal_raw_like_0_9(&[9; SEED_LEN], raw);
+            for typed in [NFC, NFD] {
+                let (seed, _) = unprotect_seed(&legacy, typed)?;
+                assert_eq!(*seed, [9; SEED_LEN], "sealed {raw:?}, typed {typed:?}");
+            }
+            assert_eq!(
+                error_of(unprotect_seed(&legacy, "parola ete sigura")),
+                KeyringError::WrongPassphrase
+            );
+        }
+        Ok(())
+    }
+
+    /// Writers hash NFC: pinned by opening with the NFC bytes through the
+    /// single-candidate primitive, not through the fallback reader.
+    #[test]
+    fn writers_hash_the_nfc_form() -> Result<(), KeyringError> {
+        let sealed = protect_identity(&[5; SEED_LEN], NFD)?;
+        let params = Argon2Params::parse(&sealed[9..9 + PARAMS_LEN])?;
+        let key = params.derive(NFC, &sealed[18..18 + SALT_LEN])?;
+        let nonce: [u8; NONCE_LEN] = sealed[34..46].try_into().expect("12 bytes");
+        assert!(
+            ChaCha20Poly1305::new((&*key).into())
+                .decrypt(
+                    (&nonce).into(),
+                    Payload {
+                        msg: &sealed[HEADER_LEN..],
+                        aad: &sealed[..HEADER_LEN]
+                    },
+                )
+                .is_ok(),
+            "the writer did not hash the NFC form"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn an_ascii_passphrase_has_one_candidate() {
+        assert_eq!(passphrase_candidates("correct horse battery").len(), 1);
+        // A fully normalised input in either form collapses to {NFC, NFD};
+        // only a mixed one needs a third attempt.
+        assert_eq!(passphrase_candidates(NFD).len(), 2);
+        assert_eq!(passphrase_candidates(NFC).len(), 2);
+        assert_eq!(passphrase_candidates("\u{00e9}e\u{0301}xxxxxx").len(), 3);
+    }
+
+    /// The 8-character minimum counts the normalised form, so "e" + U+0301 is
+    /// one character, as a user would count it.
+    #[test]
+    fn the_minimum_length_counts_normalised_characters() {
+        let seven = "e\u{0301}e\u{0301}e\u{0301}e\u{0301}e\u{0301}e\u{0301}e\u{0301}";
+        assert_eq!(seven.chars().count(), 14);
+        assert_eq!(
+            protect(&secret(), seven).unwrap_err(),
+            KeyringError::PassphraseTooShort(MIN_PASSPHRASE_LEN)
+        );
     }
 
     #[test]

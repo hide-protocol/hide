@@ -40,8 +40,9 @@ This document states what HIDE defends, against whom, and what it does not. Ever
 1. **Sender ↔ recipient key.** HIDE has no directory. A public key arrives over a channel you already trust, or you compare a fingerprint out of band. Nothing in HIDE proves a key belongs to a person.
 2. **Container ↔ decrypting application.** The filename in metadata is untrusted; an application must never use it to choose an output path. Plaintext is not published until FINAL authenticates.
 3. **Rust core ↔ host language.** Every SDK crosses one C ABI. Key material never crosses it; handles do. A browser page is one trust domain: any script on it can use the key.
-4. **Identity log ↔ verifier.** The log is public and self-verifying. The offline recovery key's public half is the root of trust a verifier must obtain independently.
-5. **Epoch holder ↔ everyone.** Forward security exists only if the holder erases. Nothing external can confirm erasure happened.
+4. **Identity log ↔ verifier.** The log is public and self-verifying. The root of trust a verifier must obtain independently is the 32-byte identity root (spec §16.1), verified through the founder's recovery binding, or the recovery key itself. A log verified with a recovery key taken from the same untrusted source proves nothing: anyone can append a Recover under their own key (spec §15.1).
+5. **Epoch holder ↔ everyone.** Forward security exists only if the holder erases. Nothing external can confirm erasure happened. A chain obtained from anyone but the recipient is trusted only through an epoch binding from a currently trusted device (spec §16.4).
+6. **Transparency log ↔ client.** A signed checkpoint (spec §16.2) says which log published a root; only witness cosignatures from parties the client trusts make a split view detectable. No log or witness is operated by this project.
 
 ## Property × adversary
 

@@ -129,6 +129,24 @@ final class Binding
                                  size_t old_root_len,
                                  const uint8_t *new_root,
                                  size_t new_root_len);
+
+                    int32_t hide_identity_verify_pinned(const uint8_t *log, size_t log_len,
+                            const uint8_t *recovery_binding,
+                            size_t recovery_binding_len,
+                            const uint8_t *pinned_root,
+                            size_t pinned_root_len,
+                            size_t *out_devices);
+                    int32_t hide_epoch_verify_bound(const uint8_t *log, size_t log_len,
+                            const uint8_t *recovery_binding,
+                            size_t recovery_binding_len,
+                            const uint8_t *pinned_root, size_t pinned_root_len,
+                            const uint8_t *chain, size_t chain_len,
+                            const uint8_t *epoch_binding,
+                            size_t epoch_binding_len, size_t *out_epochs);
+                    int32_t hide_checkpoint_verify(const uint8_t *note, size_t note_len,
+                               const char *origin,
+                               const uint8_t *log_public, size_t log_public_len,
+                               uint64_t *out_size, HideBuffer *out_root);
         C;
 
     private static ?\FFI $ffi = null;

@@ -92,6 +92,16 @@ func TestAnotherIdentityCannotBeImpersonated(t *testing.T) {
 	}
 }
 
+// Spec §15.2: the generic API must not mint protocol signatures.
+func TestReservedProtocolContextsAreRefused(t *testing.T) {
+	identity := newIdentity(t)
+	for _, context := range []string{"HIDE/0.6 identity entry", "HIDE/1.0 container", "HIDE/"} {
+		if _, err := identity.Sign([]byte(context), []byte("m")); !errors.Is(err, ErrInvalidArgument) {
+			t.Fatalf("context %q: want ErrInvalidArgument, got %v", context, err)
+		}
+	}
+}
+
 func TestEncryptionOnlyKeyCannotSign(t *testing.T) {
 	key, err := GenerateKey()
 	if err != nil {

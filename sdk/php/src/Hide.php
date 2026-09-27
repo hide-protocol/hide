@@ -442,4 +442,132 @@ final class Hide
             Binding::release($newBytes);
         }
     }
+
+    /**
+     * Verifies an identity log against the root the caller pinned out of band.
+     *
+     * $recoveryBinding establishes the recovery key, so a log extended by a
+     * Recover under a stranger's key fails — a bare verifyIdentity() with a
+     * recovery key taken from the same untrusted source does not catch that.
+     * Returns how many devices the log trusts now; throws MalformedException
+     * for bytes that do not decode and AuthenticationException for a log that
+     * is not this identity's.
+     */
+    public static function verifyIdentityPinned(
+        string $log,
+        string $recoveryBinding,
+        string $pinnedRoot,
+    ): int {
+        $ffi = Binding::ffi();
+        $bytes = Binding::bytes($log);
+        $binding = Binding::bytes($recoveryBinding);
+        $root = Binding::bytes($pinnedRoot);
+        $devices = $ffi->new('size_t');
+
+        try {
+            Binding::check($ffi->hide_identity_verify_pinned(
+                $ffi->cast('uint8_t *', $bytes),
+                strlen($log),
+                $ffi->cast('uint8_t *', $binding),
+                strlen($recoveryBinding),
+                $ffi->cast('uint8_t *', $root),
+                strlen($pinnedRoot),
+                \FFI::addr($devices),
+            ));
+        } finally {
+            Binding::release($bytes);
+            Binding::release($binding);
+            Binding::release($root);
+        }
+
+        return (int) $devices->cdata;
+    }
+
+    /**
+     * Verifies that an epoch chain belongs to the pinned identity.
+     *
+     * $epochBinding must be signed by a device the log trusts now, over this
+     * exact chain. Returns how many epochs the chain holds.
+     */
+    public static function verifyEpochChainBound(
+        string $log,
+        string $recoveryBinding,
+        string $pinnedRoot,
+        string $chain,
+        string $epochBinding,
+    ): int {
+        $ffi = Binding::ffi();
+        $bytes = Binding::bytes($log);
+        $binding = Binding::bytes($recoveryBinding);
+        $root = Binding::bytes($pinnedRoot);
+        $chainBytes = Binding::bytes($chain);
+        $epochBytes = Binding::bytes($epochBinding);
+        $epochs = $ffi->new('size_t');
+
+        try {
+            Binding::check($ffi->hide_epoch_verify_bound(
+                $ffi->cast('uint8_t *', $bytes),
+                strlen($log),
+                $ffi->cast('uint8_t *', $binding),
+                strlen($recoveryBinding),
+                $ffi->cast('uint8_t *', $root),
+                strlen($pinnedRoot),
+                $ffi->cast('uint8_t *', $chainBytes),
+                strlen($chain),
+                $ffi->cast('uint8_t *', $epochBytes),
+                strlen($epochBinding),
+                \FFI::addr($epochs),
+            ));
+        } finally {
+            Binding::release($bytes);
+            Binding::release($binding);
+            Binding::release($root);
+            Binding::release($chainBytes);
+            Binding::release($epochBytes);
+        }
+
+        return (int) $epochs->cdata;
+    }
+
+    /**
+     * Verifies a signed checkpoint note from the log named $origin, under the
+     * log's 1984-byte public key.
+     *
+     * Returns ['size' => int, 'root' => string]: the tree size and its 32-byte
+     * root. Throws AuthenticationException when the note was altered, names
+     * another origin, or is not signed under $logPublic.
+     *
+     * @return array{size: int, root: string}
+     */
+    public static function verifyCheckpoint(string $note, string $origin, string $logPublic): array
+    {
+        $ffi = Binding::ffi();
+        $bytes = Binding::bytes($note);
+        $originText = Binding::cString($origin, 'origin');
+        $key = Binding::bytes($logPublic);
+        $size = $ffi->new('uint64_t');
+        $out = Binding::emptyBuffer();
+
+        try {
+            Binding::check($ffi->hide_checkpoint_verify(
+                $ffi->cast('uint8_t *', $bytes),
+                strlen($note),
+                $originText,
+                $ffi->cast('uint8_t *', $key),
+                strlen($logPublic),
+                \FFI::addr($size),
+                \FFI::addr($out),
+            ));
+        } catch (\Throwable $error) {
+            // On failure the core leaves $out untouched; freeing it releases the scratch space.
+            Binding::take($out);
+            throw $error;
+        } finally {
+            Binding::release($bytes);
+            Binding::release($originText);
+            Binding::release($key);
+        }
+
+        return ['size' => (int) $size->cdata, 'root' => Binding::take($out)];
+    }
 }

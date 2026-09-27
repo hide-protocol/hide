@@ -263,7 +263,7 @@ class TestHide < Minitest::Test
   end
 
   PASSPHRASE = "correct horse battery staple"
-  CONTEXT = "HIDE/0.5 ruby test"
+  CONTEXT = "example/ruby test"
 
   def test_signs_and_verifies
     identity do |signer|
@@ -302,6 +302,15 @@ class TestHide < Minitest::Test
         assert_raises(Hide::AuthenticationError) do
           Hide.verify(signer.public_key, CONTEXT, "the message", signature)
         end
+      end
+    end
+  end
+
+  # Spec §15.2: the generic API must not mint protocol signatures.
+  def test_reserved_protocol_contexts_are_refused
+    identity do |signer|
+      ["HIDE/0.6 identity entry", "HIDE/1.0 container", "HIDE/"].each do |context|
+        assert_raises(Hide::InvalidArgumentError) { signer.sign(context, "the message") }
       end
     end
   end
@@ -433,7 +442,90 @@ class TestHide < Minitest::Test
     end
   end
 
+  def test_a_pinned_identity_verifies_against_its_root
+    assert_equal 2, Hide.verify_identity_pinned(
+      Fixtures::BINDING_IDENTITY_LOG, Fixtures::BINDING_RECOVERY, Fixtures::BINDING_ROOT
+    )
+  end
+
+  def test_a_hijacked_log_is_refused_even_with_a_forged_recovery_binding
+    assert_forgery do
+      Hide.verify_identity_pinned(
+        Fixtures::BINDING_HIJACKED_LOG, Fixtures::BINDING_RECOVERY, Fixtures::BINDING_ROOT
+      )
+    end
+    assert_forgery do
+      Hide.verify_identity_pinned(
+        Fixtures::BINDING_HIJACKED_LOG, Fixtures::BINDING_RECOVERY_FORGED, Fixtures::BINDING_ROOT
+      )
+    end
+  end
+
+  def test_a_log_under_another_root_is_refused
+    assert_forgery do
+      Hide.verify_identity_pinned(
+        Fixtures::BINDING_IDENTITY_LOG, Fixtures::BINDING_RECOVERY, "\x00".b * 32
+      )
+    end
+  end
+
+  def test_a_truncated_recovery_binding_is_malformed
+    assert_raises(Hide::MalformedError) do
+      Hide.verify_identity_pinned(
+        Fixtures::BINDING_IDENTITY_LOG, Fixtures::BINDING_RECOVERY[0, 100], Fixtures::BINDING_ROOT
+      )
+    end
+  end
+
+  def test_an_epoch_chain_bound_to_the_identity_verifies
+    assert_equal 3, Hide.verify_epoch_chain_bound(
+      Fixtures::BINDING_IDENTITY_LOG, Fixtures::BINDING_RECOVERY, Fixtures::BINDING_ROOT,
+      Fixtures::EPOCH_CHAIN, Fixtures::BINDING_EPOCH
+    )
+  end
+
+  def test_an_epoch_chain_bound_by_a_stranger_is_refused
+    assert_forgery do
+      Hide.verify_epoch_chain_bound(
+        Fixtures::BINDING_IDENTITY_LOG, Fixtures::BINDING_RECOVERY, Fixtures::BINDING_ROOT,
+        Fixtures::EPOCH_CHAIN, Fixtures::BINDING_EPOCH_STRANGER
+      )
+    end
+  end
+
+  def test_a_checkpoint_verifies_and_yields_size_and_root
+    size, root = Hide.verify_checkpoint(
+      Fixtures::CHECKPOINT_3, "log.example/hide", Fixtures::CHECKPOINT_LOG_KEY
+    )
+    assert_equal 3, size
+    assert_equal 32, root.bytesize
+    assert_equal Encoding::BINARY, root.encoding
+  end
+
+  def test_a_checkpoint_is_refused_when_altered_misattributed_or_mis_keyed
+    assert_forgery do
+      Hide.verify_checkpoint(
+        Fixtures::CHECKPOINT_TAMPERED, "log.example/hide", Fixtures::CHECKPOINT_LOG_KEY
+      )
+    end
+    assert_forgery do
+      Hide.verify_checkpoint(Fixtures::CHECKPOINT_3, "other.example", Fixtures::CHECKPOINT_LOG_KEY)
+    end
+    assert_forgery do
+      Hide.verify_checkpoint(
+        Fixtures::CHECKPOINT_3, "log.example/hide", Fixtures::CHECKPOINT_WITNESS_KEY
+      )
+    end
+  end
+
   private
+
+  # Exactly AuthenticationError: a MalformedError here would mean the check
+  # never got as far as verifying, and the test would pass for the wrong reason.
+  def assert_forgery(&block)
+    error = assert_raises(Hide::AuthenticationError, &block)
+    assert_instance_of Hide::AuthenticationError, error
+  end
 
   def identity(&block)
     Hide::SigningIdentity.load(

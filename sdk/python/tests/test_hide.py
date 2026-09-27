@@ -129,7 +129,7 @@ def test_empty_payloads_are_valid() -> None:
 
 
 PASSPHRASE = "correct horse battery staple"
-CONTEXT = b"HIDE/0.5 python test"
+CONTEXT = b"example/python test"
 
 
 def identity() -> hide.SigningIdentity:
@@ -168,6 +168,15 @@ def test_another_identity_cannot_be_impersonated() -> None:
         signature = impostor.sign(CONTEXT, b"the message")
         with pytest.raises(hide.AuthenticationError):
             hide.verify(signer.public_key(), CONTEXT, b"the message", signature)
+
+
+def test_reserved_protocol_contexts_are_refused() -> None:
+    # Spec §15.2: the generic API must not sign identity entries, MLS bindings
+    # or container signatures on a caller's behalf.
+    with identity() as signer:
+        for context in (b"HIDE/0.6 identity entry", b"HIDE/1.0 container", b"HIDE/"):
+            with pytest.raises(ValueError):
+                signer.sign(context, b"the message")
 
 
 def test_an_encryption_only_key_cannot_sign() -> None:
@@ -287,3 +296,81 @@ def test_a_consistency_proof_catches_a_rewritten_history() -> None:
         hide.verify_consistency(
             5, 8, fx.CONSISTENCY_PATH, fx.ROOT_AT_5, fx.REWRITTEN_ROOT
         )
+
+
+def _forgery(call) -> None:
+    # Exactly AuthenticationError: a Malformed here would mean the check never
+    # got as far as verifying, and the test would pass for the wrong reason.
+    with pytest.raises(hide.AuthenticationError) as caught:
+        call()
+    assert caught.type is hide.AuthenticationError
+
+
+def test_a_pinned_identity_verifies_against_its_root() -> None:
+    devices = hide.verify_identity_pinned(
+        fx.BINDING_IDENTITY_LOG, fx.BINDING_RECOVERY, fx.BINDING_ROOT
+    )
+    assert devices == 2
+
+
+def test_a_hijacked_log_is_refused_even_with_a_forged_recovery_binding() -> None:
+    _forgery(lambda: hide.verify_identity_pinned(
+        fx.BINDING_HIJACKED_LOG, fx.BINDING_RECOVERY, fx.BINDING_ROOT
+    ))
+    _forgery(lambda: hide.verify_identity_pinned(
+        fx.BINDING_HIJACKED_LOG, fx.BINDING_RECOVERY_FORGED, fx.BINDING_ROOT
+    ))
+
+
+def test_a_log_under_another_root_is_refused() -> None:
+    _forgery(lambda: hide.verify_identity_pinned(
+        fx.BINDING_IDENTITY_LOG, fx.BINDING_RECOVERY, bytes(32)
+    ))
+
+
+def test_a_truncated_recovery_binding_is_malformed() -> None:
+    with pytest.raises(hide.Malformed):
+        hide.verify_identity_pinned(
+            fx.BINDING_IDENTITY_LOG, fx.BINDING_RECOVERY[:100], fx.BINDING_ROOT
+        )
+
+
+def test_an_epoch_chain_bound_to_the_identity_verifies() -> None:
+    epochs = hide.verify_epoch_chain_bound(
+        fx.BINDING_IDENTITY_LOG,
+        fx.BINDING_RECOVERY,
+        fx.BINDING_ROOT,
+        fx.EPOCH_CHAIN,
+        fx.BINDING_EPOCH,
+    )
+    assert epochs == 3
+
+
+def test_an_epoch_chain_bound_by_a_stranger_is_refused() -> None:
+    _forgery(lambda: hide.verify_epoch_chain_bound(
+        fx.BINDING_IDENTITY_LOG,
+        fx.BINDING_RECOVERY,
+        fx.BINDING_ROOT,
+        fx.EPOCH_CHAIN,
+        fx.BINDING_EPOCH_STRANGER,
+    ))
+
+
+def test_a_checkpoint_verifies_and_yields_size_and_root() -> None:
+    size, root = hide.verify_checkpoint(
+        fx.CHECKPOINT_3, "log.example/hide", fx.CHECKPOINT_LOG_KEY
+    )
+    assert size == 3
+    assert len(root) == 32
+
+
+def test_a_checkpoint_is_refused_when_altered_misattributed_or_mis_keyed() -> None:
+    _forgery(lambda: hide.verify_checkpoint(
+        fx.CHECKPOINT_TAMPERED, "log.example/hide", fx.CHECKPOINT_LOG_KEY
+    ))
+    _forgery(lambda: hide.verify_checkpoint(
+        fx.CHECKPOINT_3, "other.example", fx.CHECKPOINT_LOG_KEY
+    ))
+    _forgery(lambda: hide.verify_checkpoint(
+        fx.CHECKPOINT_3, "log.example/hide", fx.CHECKPOINT_WITNESS_KEY
+    ))

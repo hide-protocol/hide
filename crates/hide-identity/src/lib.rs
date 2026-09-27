@@ -28,6 +28,12 @@ use sha2::{Digest, Sha256};
 use std::collections::BTreeMap;
 use thiserror::Error;
 
+mod bindings;
+pub use bindings::{
+    EPOCH_BINDING_CONTEXT, EPOCH_BINDING_LENGTH, EpochBinding, RECOVERY_BINDING_CONTEXT,
+    RECOVERY_BINDING_LENGTH, RecoveryBinding,
+};
+
 /// Domain separation for the signature over an entry. A signature made here can
 /// never be replayed as a file signature or a challenge response.
 const ENTRY_CONTEXT: &[u8] = b"HIDE/0.6 identity entry";
@@ -113,6 +119,12 @@ pub enum IdentityError {
     LabelTooLong,
     #[error("signing failed: {0}")]
     Sign(String),
+    #[error("the log's root is not the identity that was pinned")]
+    WrongIdentity,
+    #[error("the binding does not verify")]
+    BadBinding,
+    #[error("the binding names a history or chain that is not the one supplied")]
+    StaleBinding,
 }
 
 /// What an entry does.
@@ -388,6 +400,18 @@ impl IdentityLog {
     /// The head link, which identifies this exact history in one 32-byte value.
     pub fn head(&self) -> [u8; 32] {
         self.entries.last().map_or([0u8; 32], |entry| entry.link)
+    }
+
+    /// The root link: entry 0's link. It never changes as the log grows, so
+    /// it is the identity's stable 32-byte name, the value a relying party
+    /// pins (spec §16.1).
+    pub fn root(&self) -> [u8; 32] {
+        self.entries.first().map_or([0u8; 32], |entry| entry.link)
+    }
+
+    /// The recovery key this log was constructed with.
+    pub fn recovery_key(&self) -> &VerifyingIdentity {
+        &self.recovery
     }
 
     /// The devices trusted now.

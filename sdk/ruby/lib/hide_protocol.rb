@@ -292,6 +292,77 @@ module Hide
       nil
     end
 
+    # Verifies an identity log against the root the caller pinned out of band.
+    #
+    # recovery_binding establishes the recovery key, so a log extended by a
+    # Recover under a stranger's key fails — a bare verify_identity with a
+    # recovery key taken from the same untrusted source does not catch that.
+    # Returns how many devices the log trusts now; raises MalformedError for
+    # bytes that do not decode and AuthenticationError for a log that is not
+    # this identity's.
+    def verify_identity_pinned(log, recovery_binding, pinned_root)
+      bytes = binary(log, "log")
+      binding = binary(recovery_binding, "recovery binding")
+      root = binary(pinned_root, "pinned root")
+      slot = Binding.pointer_slot
+      check(Binding.call(
+              :hide_identity_verify_pinned,
+              buffer_arg(bytes), bytes.bytesize,
+              buffer_arg(binding), binding.bytesize,
+              buffer_arg(root), root.bytesize,
+              slot
+            ))
+      Binding.read_count(slot)
+    end
+
+    # Verifies that an epoch chain belongs to the pinned identity.
+    #
+    # epoch_binding must be signed by a device the log trusts now, over this
+    # exact chain. Returns how many epochs the chain holds.
+    def verify_epoch_chain_bound(log, recovery_binding, pinned_root, chain, epoch_binding)
+      bytes = binary(log, "log")
+      binding = binary(recovery_binding, "recovery binding")
+      root = binary(pinned_root, "pinned root")
+      chain_bytes = binary(chain, "chain")
+      epoch_bytes = binary(epoch_binding, "epoch binding")
+      slot = Binding.pointer_slot
+      check(Binding.call(
+              :hide_epoch_verify_bound,
+              buffer_arg(bytes), bytes.bytesize,
+              buffer_arg(binding), binding.bytesize,
+              buffer_arg(root), root.bytesize,
+              buffer_arg(chain_bytes), chain_bytes.bytesize,
+              buffer_arg(epoch_bytes), epoch_bytes.bytesize,
+              slot
+            ))
+      Binding.read_count(slot)
+    end
+
+    # Verifies a signed checkpoint note from the log named origin, under the
+    # log's 1984-byte public key. Returns [size, root]: the tree size and its
+    # 32-byte root. Raises AuthenticationError when the note was altered,
+    # names another origin, or is not signed under log_public.
+    def verify_checkpoint(note, origin, log_public)
+      bytes = binary(note, "note")
+      key = binary(log_public, "log public key")
+      size = Binding.uint64_slot
+      out = Binding.empty_buffer
+      begin
+        check(Binding.call(
+                :hide_checkpoint_verify,
+                buffer_arg(bytes), bytes.bytesize,
+                cstring(origin.to_s),
+                buffer_arg(key), key.bytesize,
+                size, out
+              ))
+      rescue StandardError
+        # On failure the core leaves out untouched; freeing it releases the scratch space.
+        Binding.take(out)
+        raise
+      end
+      [Binding.read_uint64(size), Binding.take(out)]
+    end
+
     def check(code)
       return if code == Binding::OK
 

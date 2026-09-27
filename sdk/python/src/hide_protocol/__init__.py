@@ -42,6 +42,9 @@ __all__ = [
     "epoch_public_key",
     "verify_inclusion",
     "verify_consistency",
+    "verify_identity_pinned",
+    "verify_epoch_chain_bound",
+    "verify_checkpoint",
     "Decrypted",
     "encrypt",
     "decrypt",
@@ -599,3 +602,87 @@ def verify_consistency(
             len(new_root),
         )
     )
+
+
+def verify_identity_pinned(
+    log: bytes, recovery_binding: bytes, pinned_root: bytes
+) -> int:
+    """Verifies an identity log against the root the caller pinned out of band.
+
+    ``recovery_binding`` establishes the recovery key, so a log extended by a
+    Recover under a stranger's key fails. Returns how many devices the log
+    trusts now. Raises :class:`Malformed` for bytes that do not decode,
+    :class:`AuthenticationError` for a log that is not this identity's, and
+    :class:`ValueError` for a pinned root that is not 32 bytes.
+    """
+    devices = ctypes.c_size_t(0)
+    _check(
+        _b.lib.hide_identity_verify_pinned(
+            log,
+            len(log),
+            recovery_binding,
+            len(recovery_binding),
+            pinned_root,
+            len(pinned_root),
+            ctypes.byref(devices),
+        )
+    )
+    return devices.value
+
+
+def verify_epoch_chain_bound(
+    log: bytes,
+    recovery_binding: bytes,
+    pinned_root: bytes,
+    chain: bytes,
+    epoch_binding: bytes,
+) -> int:
+    """Verifies that an epoch chain belongs to the pinned identity.
+
+    ``epoch_binding`` must be signed by a device the log trusts now, over
+    this exact chain. Returns how many epochs the chain holds; raises
+    :class:`AuthenticationError` when the chain is not bound to the identity.
+    """
+    epochs = ctypes.c_size_t(0)
+    _check(
+        _b.lib.hide_epoch_verify_bound(
+            log,
+            len(log),
+            recovery_binding,
+            len(recovery_binding),
+            pinned_root,
+            len(pinned_root),
+            chain,
+            len(chain),
+            epoch_binding,
+            len(epoch_binding),
+            ctypes.byref(epochs),
+        )
+    )
+    return epochs.value
+
+
+def verify_checkpoint(note: bytes, origin: str, log_public: bytes) -> tuple[int, bytes]:
+    """Verifies a signed checkpoint note from the log ``origin``.
+
+    Returns ``(size, root)``: the tree size and its 32-byte root. Raises
+    :class:`AuthenticationError` when the note was altered, names another
+    origin, or is not signed under ``log_public``.
+    """
+    encoded = origin.encode()
+    if b"\0" in encoded:
+        raise ValueError("origin must not contain a NUL byte")
+    size = ctypes.c_uint64(0)
+    root = _b.lib.hide_buffer_empty()
+    _check(
+        _b.lib.hide_checkpoint_verify(
+            note,
+            len(note),
+            encoded,
+            log_public,
+            len(log_public),
+            ctypes.byref(size),
+            ctypes.byref(root),
+        )
+    )
+    return size.value, _take(root)

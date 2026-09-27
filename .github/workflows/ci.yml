@@ -292,7 +292,7 @@ jobs:
       - name: Seed each corpus with the frozen vectors
         run: |
           set -euo pipefail
-          mkdir -p fuzz/corpus/{format_header,object_open,keyring_open,identity_log,epoch_chain,transparency_proofs,challenge_decode,mls_message}
+          mkdir -p fuzz/corpus/{format_header,object_open,keyring_open,identity_log,epoch_chain,transparency_proofs,challenge_decode,mls_message,epoch_store,checkpoint_note,identity_bindings}
           cp conformance/vectors/*.hide fuzz/corpus/format_header/
           cp conformance/vectors/*.hide fuzz/corpus/object_open/
           # Each rejection sits one field away from an accepted container, which
@@ -303,6 +303,8 @@ jobs:
           cp conformance/vectors/subsystems/identity-*.bin fuzz/corpus/identity_log/
           cp conformance/vectors/subsystems/epoch-*.bin fuzz/corpus/epoch_chain/
           cp conformance/vectors/subsystems/*root*.bin fuzz/corpus/transparency_proofs/
+          cp conformance/vectors/subsystems/checkpoint-*.note conformance/vectors/subsystems/checkpoint-inclusion.bin conformance/vectors/subsystems/checkpoint-consistency.bin fuzz/corpus/checkpoint_note/
+          cp conformance/vectors/subsystems/binding-recovery*.bin conformance/vectors/subsystems/binding-epoch*.bin fuzz/corpus/identity_bindings/
           # challenge_decode and mls_message have no frozen vectors: a challenge
           # carries a fresh nonce and an MLS message a fresh group state, so
           # neither is a stable artifact. They start from the empty corpus.
@@ -314,7 +316,7 @@ jobs:
         # against a static libc.
         run: |
           set -euo pipefail
-          for target in format_header object_open keyring_open identity_log epoch_chain transparency_proofs challenge_decode mls_message; do
+          for target in format_header object_open keyring_open identity_log epoch_chain transparency_proofs challenge_decode mls_message epoch_store checkpoint_note identity_bindings; do
             echo "::group::$target"
             cargo +nightly fuzz run --target x86_64-unknown-linux-gnu "$target" -- -max_total_time=45 -timeout=60 -rss_limit_mb=2048
             echo "::endgroup::"

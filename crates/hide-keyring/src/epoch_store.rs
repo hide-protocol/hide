@@ -158,6 +158,7 @@ impl EpochStore {
         salt: [u8; SALT_LEN],
         mut nonce: impl FnMut() -> Result<[u8; NONCE_LEN], KeyringError>,
     ) -> Result<Vec<u8>, KeyringError> {
+        let passphrase = crate::normalize_passphrase(passphrase);
         if passphrase.chars().count() < MIN_PASSPHRASE_LEN {
             return Err(KeyringError::PassphraseTooShort(MIN_PASSPHRASE_LEN));
         }
@@ -189,7 +190,7 @@ impl EpochStore {
             body_len.to_be_bytes(),
         );
 
-        let kek = Argon2Params::WRITER.derive(passphrase, &salt)?;
+        let kek = Argon2Params::WRITER.derive(&passphrase, &salt)?;
         let cipher = ChaCha20Poly1305::new((&*kek).into());
         let sealed = self
             .entries
@@ -221,19 +222,28 @@ impl EpochStore {
     /// passphrase is stretched, and authenticated before any seed is decrypted.
     pub fn open(bytes: &[u8], passphrase: &str) -> Result<Self, KeyringError> {
         let layout = parse(bytes)?;
-        let kek = layout.params.derive(passphrase, &layout.salt)?;
-        let cipher = ChaCha20Poly1305::new((&*kek).into());
-
         let authenticated = &bytes[..HEADER_LEN + layout.body_len];
         let tag = Tag::try_from(layout.trailer_tag).map_err(|_| KeyringError::Malformed)?;
-        cipher
-            .decrypt_inout_detached(
-                (&layout.trailer_nonce).into(),
-                authenticated,
-                (&mut [][..]).into(),
-                &tag,
-            )
-            .map_err(|_| KeyringError::WrongPassphrase)?;
+        // The trailer decides which spelling of the passphrase sealed the file
+        // (spec §9.3: NFC now, raw UTF-8 before); entries use the same key.
+        let mut chosen = None;
+        for candidate in crate::passphrase_candidates(passphrase) {
+            let kek = layout.params.derive(&candidate, &layout.salt)?;
+            let cipher = ChaCha20Poly1305::new((&*kek).into());
+            if cipher
+                .decrypt_inout_detached(
+                    (&layout.trailer_nonce).into(),
+                    authenticated,
+                    (&mut [][..]).into(),
+                    &tag,
+                )
+                .is_ok()
+            {
+                chosen = Some(cipher);
+                break;
+            }
+        }
+        let cipher = chosen.ok_or(KeyringError::WrongPassphrase)?;
 
         let mut entries = BTreeMap::new();
         for entry in &layout.entries {
@@ -545,6 +555,25 @@ mod tests {
 
     #[test]
     fn a_store_survives_a_restart_and_still_decrypts_epoch_two() -> Result<(), KeyringError> {
+        a_store_survives_a_restart_impl()
+    }
+
+    /// §15.5: a store sealed with an NFD passphrase opens with the NFC one.
+    #[test]
+    fn a_store_opens_under_either_normal_form() -> Result<(), KeyringError> {
+        let nfd = "parola\u{0306} e\u{0301}te\u{0301} sigura\u{0306}";
+        let nfc = "parol\u{0103} \u{00e9}t\u{00e9} sigur\u{0103}";
+        let sealed = store_of(&[0, 1]).seal(nfd)?;
+        for typed in [nfc, nfd] {
+            assert_eq!(
+                EpochStore::open(&sealed, typed)?.chain_head,
+                [0xAB; HEAD_LEN]
+            );
+        }
+        Ok(())
+    }
+
+    fn a_store_survives_a_restart_impl() -> Result<(), KeyringError> {
         let mut store = EpochStore::new([7; HEAD_LEN]);
         let secrets = [
             RecipientSecret::generate()?,

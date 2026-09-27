@@ -165,19 +165,41 @@ impl Binding {
 /// self-asserted name into something an attacker cannot simply claim.
 #[derive(Clone, Debug)]
 pub struct HideIdentityProvider {
-    membership: Membership,
+    // Shared with every clone MLS makes of the provider, so `update` reaches
+    // the copy inside a long-lived client (spec §15.8).
+    membership: std::sync::Arc<std::sync::RwLock<Membership>>,
 }
 
 impl HideIdentityProvider {
     pub fn new(membership: Membership) -> Self {
-        Self { membership }
+        Self {
+            membership: std::sync::Arc::new(std::sync::RwLock::new(membership)),
+        }
+    }
+
+    /// Replaces the membership every clone of this provider validates
+    /// against. Call it after replaying a newer identity log, so a revoked
+    /// device is refused at the next commit without rebuilding the client.
+    pub fn update(&self, membership: Membership) {
+        match self.membership.write() {
+            Ok(mut guard) => *guard = membership,
+            Err(poisoned) => *poisoned.into_inner() = membership,
+        }
+    }
+
+    /// The membership currently enforced.
+    pub fn membership(&self) -> Membership {
+        match self.membership.read() {
+            Ok(guard) => guard.clone(),
+            Err(poisoned) => poisoned.into_inner().clone(),
+        }
     }
 
     fn validate(&self, signing_identity: &SigningIdentity) -> Result<(), MlsError> {
         let binding = Binding::parse(&signing_identity.credential)?;
         binding.verify(signing_identity.signature_key.as_bytes())?;
-        let trusted = self
-            .membership
+        let membership = self.membership();
+        let trusted = membership
             .get(&binding.device)
             .ok_or(MlsError::UntrustedDevice)?;
         // The log's key for this device, not the one in the credential, is the
@@ -227,10 +249,15 @@ impl IdentityProvider for HideIdentityProvider {
         successor: &SigningIdentity,
         _extensions: &ExtensionList,
     ) -> Result<bool, Self::Error> {
-        // Only the same device may replace itself via external commit.
+        // Only the same device may replace itself via external commit, and the
+        // successor must itself pass member validation (spec §13 items 4-6)
+        // rather than relying on the MLS library to have run it.
         let a = Binding::parse(&predecessor.credential)?;
         let b = Binding::parse(&successor.credential)?;
-        Ok(a.device == b.device)
+        if a.device != b.device {
+            return Ok(false);
+        }
+        Ok(self.validate(successor).is_ok())
     }
 
     fn supported_types(&self) -> Vec<CredentialType> {
@@ -248,6 +275,17 @@ pub fn client_for(
     membership: &Membership,
     device: &HideSigner,
 ) -> Result<Client<impl MlsConfig + use<>>, MlsError> {
+    client_with_provider(HideIdentityProvider::new(membership.clone()), device)
+}
+
+/// As [`client_for`], with a provider the caller keeps a handle to, so it can
+/// push a newer membership into the running client with
+/// [`HideIdentityProvider::update`].
+pub fn client_with_provider(
+    provider_handle: HideIdentityProvider,
+    device: &HideSigner,
+) -> Result<Client<impl MlsConfig + use<>>, MlsError> {
+    let membership = provider_handle.membership();
     let verifying = device.verifying_key();
     let id = device_id(&verifying);
     if !membership.contains(&id) {
@@ -271,7 +309,7 @@ pub fn client_for(
     let signing = SigningIdentity::new(credential, public);
 
     Ok(Client::builder()
-        .identity_provider(HideIdentityProvider::new(membership.clone()))
+        .identity_provider(provider_handle)
         .crypto_provider(crypto)
         .signing_identity(signing, secret, SUITE)
         .build())

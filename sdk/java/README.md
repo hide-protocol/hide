@@ -121,10 +121,13 @@ key file written before signatures existed carries no signing seed and throws
 | `Hide.verifyIdentity(log, recoveryKey)` | `int` — how many devices the log trusts now |
 | `Hide.identityTrustsDevice(log, recoveryKey, devicePublicKey)` | `boolean` — membership, after verifying the log |
 | `Hide.identityHead(log, recoveryKey)` | 32 bytes naming this exact history |
+| `Hide.verifyIdentityPinned(log, recoveryBinding, pinnedRoot)` | `int` — devices trusted now, only if the log is the pinned identity |
 | `Hide.verifyEpochChain(chain)` | `int` — how many epochs it holds |
+| `Hide.verifyEpochChainBound(log, recoveryBinding, pinnedRoot, chain, epochBinding)` | `int` — epochs, only if a device the pinned log trusts signed this chain |
 | `Hide.epochPublicKey(chain, long epoch)` | the public key to encrypt to for `epoch` |
 | `Hide.verifyInclusion(leaf, long index, long size, path, root)` | `void` |
 | `Hide.verifyConsistency(long oldSize, long newSize, path, oldRoot, newRoot)` | `void` |
+| `Hide.verifyCheckpoint(note, String origin, logPublicKey)` | `Hide.Checkpoint(long size, byte[] root)` of a signed checkpoint |
 
 A cryptographic verify **throws** on failure (`HideException.Malformed` if the
 bytes did not decode, `HideException.Authentication` if they decoded but did

@@ -122,6 +122,15 @@ module Hide
       ],
       hide_transparency_verify_consistency: [
         [UINT64, UINT64, VOIDP, SIZE_T, VOIDP, SIZE_T, VOIDP, SIZE_T], INT32
+      ],
+      hide_identity_verify_pinned: [
+        [VOIDP, SIZE_T, VOIDP, SIZE_T, VOIDP, SIZE_T, VOIDP], INT32
+      ],
+      hide_epoch_verify_bound: [
+        [VOIDP, SIZE_T, VOIDP, SIZE_T, VOIDP, SIZE_T, VOIDP, SIZE_T, VOIDP, SIZE_T, VOIDP], INT32
+      ],
+      hide_checkpoint_verify: [
+        [VOIDP, SIZE_T, VOIDP, VOIDP, SIZE_T, VOIDP, VOIDP], INT32
       ]
     }.freeze
 
@@ -188,6 +197,18 @@ module Hide
       slot = Fiddle::Pointer.malloc(WORD, Fiddle::RUBY_FREE)
       slot[0, WORD] = "\x00" * WORD
       slot
+    end
+
+    # A slot for a uint64_t out-parameter. Always 8 bytes, unlike a size_t
+    # slot, so it is read with "Q" rather than WORD_PACK.
+    def self.uint64_slot
+      slot = Fiddle::Pointer.malloc(8, Fiddle::RUBY_FREE)
+      slot[0, 8] = "\x00" * 8
+      slot
+    end
+
+    def self.read_uint64(slot)
+      slot[0, 8].unpack1("Q")
     end
   end
 end

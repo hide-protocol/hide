@@ -85,4 +85,68 @@ public class TransparencyTests
             Hide.VerifyConsistency(
                 5, 8, Fixtures.ConsistencyPath, Fixtures.RootAt5, Fixtures.RewrittenRoot));
     }
+
+    [Fact]
+    public void APinnedIdentityVerifiesAgainstItsRoot() =>
+        Assert.Equal(2, Hide.VerifyIdentityPinned(
+            Fixtures.BindingIdentityLog, Fixtures.BindingRecovery, Fixtures.BindingRoot));
+
+    [Fact]
+    public void AHijackedIdentityIsRefused()
+    {
+        // A Recover appended under a stranger's key, with the genuine binding
+        // and with one forged for the stranger.
+        Assert.Throws<AuthenticationException>(() => Hide.VerifyIdentityPinned(
+            Fixtures.BindingHijackedLog, Fixtures.BindingRecovery, Fixtures.BindingRoot));
+        Assert.Throws<AuthenticationException>(() => Hide.VerifyIdentityPinned(
+            Fixtures.BindingHijackedLog, Fixtures.BindingRecoveryForged, Fixtures.BindingRoot));
+    }
+
+    [Fact]
+    public void AnotherRootIsRefused() =>
+        Assert.Throws<AuthenticationException>(() => Hide.VerifyIdentityPinned(
+            Fixtures.BindingIdentityLog, Fixtures.BindingRecovery, new byte[32]));
+
+    [Fact]
+    public void ATruncatedRecoveryBindingIsMalformed() =>
+        Assert.Throws<MalformedException>(() => Hide.VerifyIdentityPinned(
+            Fixtures.BindingIdentityLog, Fixtures.BindingRecovery[..100], Fixtures.BindingRoot));
+
+    [Fact]
+    public void AnEpochChainBoundToThePinnedIdentityVerifies() =>
+        Assert.Equal(3, Hide.VerifyEpochChainBound(
+            Fixtures.BindingIdentityLog,
+            Fixtures.BindingRecovery,
+            Fixtures.BindingRoot,
+            Fixtures.EpochChain,
+            Fixtures.BindingEpoch));
+
+    [Fact]
+    public void AnEpochChainSignedByAStrangerIsRefused() =>
+        Assert.Throws<AuthenticationException>(() => Hide.VerifyEpochChainBound(
+            Fixtures.BindingIdentityLog,
+            Fixtures.BindingRecovery,
+            Fixtures.BindingRoot,
+            Fixtures.EpochChain,
+            Fixtures.BindingEpochStranger));
+
+    [Fact]
+    public void ACheckpointYieldsItsSizeAndRoot()
+    {
+        (ulong size, byte[] root) =
+            Hide.VerifyCheckpoint(Fixtures.Checkpoint3, "log.example/hide", Fixtures.CheckpointLogKey);
+        Assert.Equal(3UL, size);
+        Assert.Equal(32, root.Length);
+    }
+
+    [Fact]
+    public void ACheckpointIsRefusedUnlessEverythingMatches()
+    {
+        Assert.Throws<AuthenticationException>(() => Hide.VerifyCheckpoint(
+            Fixtures.CheckpointTampered, "log.example/hide", Fixtures.CheckpointLogKey));
+        Assert.Throws<AuthenticationException>(() => Hide.VerifyCheckpoint(
+            Fixtures.Checkpoint3, "other.example", Fixtures.CheckpointLogKey));
+        Assert.Throws<AuthenticationException>(() => Hide.VerifyCheckpoint(
+            Fixtures.Checkpoint3, "log.example/hide", Fixtures.CheckpointWitnessKey));
+    }
 }

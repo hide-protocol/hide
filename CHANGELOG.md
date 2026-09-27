@@ -3,6 +3,45 @@
 This project is pre-1.0. The wire format may change while the version is 0.x,
 and a format change is always called out here explicitly.
 
+## Unreleased
+
+Closes every known limitation of the 1.0 freeze ([spec §15](spec/hide-1.md#15-known-limitations-of-the-10-freeze))
+**without changing any byte of the frozen wire**: every 0.9.0 container, key
+file, log and chain reads exactly as before, and the one-year clock continues.
+
+- **Recovery binding** (§16.1): the founding device signs
+  `root || recovery_key`. A relying party pins the 32-byte identity root and
+  verifies with `RecoveryBinding::verify_pinned`, which defeats the appended
+  Recover under an attacker's key (§15.1). C ABI `hide_identity_verify_pinned`,
+  WASM `verifyIdentityPinned`, every SDK.
+- **Epoch binding** (§16.4): a currently trusted device signs the identity
+  root, a log head, the chain head and the epoch count (§15.4). C ABI
+  `hide_epoch_verify_bound`, WASM `verifyEpochChainBound`, every SDK.
+- **Signed checkpoints** (§16.2): C2SP `tlog-checkpoint` notes signed with
+  HIDE-Sign, witness cosignatures with a distinct-witness threshold; identity
+  and epoch leaves and a byte encoding for inclusion and consistency proofs
+  (§16.3). Leaves name logs by link, so legacy re-encodings are one leaf
+  (§15.3, §15.9). C ABI `hide_checkpoint_verify`, WASM `verifyCheckpoint`,
+  every SDK.
+- **Breaking (API)**: generic signing refuses contexts beginning with `HIDE/`
+  (§8.5 is now MUST): `hide_sign_message` returns `HIDE_ERR_INVALID_ARGUMENT`,
+  WASM and every SDK raise their invalid-argument error. Rust keeps
+  `SigningIdentity::sign` for protocol crates and adds `sign_application` (§15.2).
+- **Stricter reader**: X25519 components that are not canonically encoded
+  (bit 255 set, or `>= p`) are refused as recipients (§15.7). New rejection
+  vectors `x25519-high-bit.test-public`, `x25519-not-reduced.test-public`.
+- **Passphrases**: writers hash the NFC form; readers try NFC, the raw input,
+  then NFD, so old files open whichever form is typed (§15.5). Key files and
+  the epoch keystore. New pinned dependency `unicode-normalization 0.1.25`.
+- **MLS**: `HideIdentityProvider::update` and `client_with_provider` let a
+  running client see revocations; `valid_successor` re-validates the successor
+  leaf (§15.8).
+- 15 new subsystem vectors (`binding-*`, `checkpoint-*`), reproducible from
+  fixed seeds, checked by `generate_subsystem_vectors` and independently by
+  `conformance/node/subsystems.mjs` (26 checks). Fuzz targets
+  `checkpoint_note`, `identity_bindings`; `epoch_store` now runs in CI too.
+- §15.6 (label spellings) is a recorded decision to keep them.
+
 ## 0.9.0 — 2026-09-27
 
 **Format release candidate for 1.0.** The wire described in

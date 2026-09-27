@@ -234,12 +234,17 @@ impl SigningIdentity {
     }
 
     /// Signs `message` under `context`. The context separates uses of one
-    /// identity; never let a remote party choose it.
+    /// identity; never let a remote party choose it. Contexts beginning with
+    /// `HIDE/` are reserved for the protocol and refused (spec §15.2).
     pub fn sign(&self, context: &[u8], message: &[u8]) -> Result<Vec<u8>, JsValue> {
         if message.len() > MAX_INPUT {
             return Err(error("that message is too large for the browser build"));
         }
-        Ok(self.inner.sign(context, message).to_vec())
+        Ok(self
+            .inner
+            .sign_application(context, message)
+            .map_err(error)?
+            .to_vec())
     }
 
     /// Answers a challenge, proving possession to whoever issued it.
@@ -504,6 +509,68 @@ pub fn verify_consistency(
     .map_err(error)
 }
 
+fn pinned_log(
+    log: &[u8],
+    recovery_binding: &[u8],
+    pinned_root: &[u8],
+) -> Result<hide_identity::IdentityLog, JsValue> {
+    let binding = hide_identity::RecoveryBinding::decode(recovery_binding).map_err(malformed)?;
+    let entries = identity_entries(log)?;
+    binding
+        .verify_pinned(entries, &hash(pinned_root, "pinned root")?)
+        .map_err(error)
+}
+
+/// Verifies an identity log whose recovery key comes from a recovery binding,
+/// against the 32-byte identity root the caller pinned (spec §16.1). Returns
+/// the number of trusted devices.
+#[wasm_bindgen(js_name = verifyIdentityPinned)]
+pub fn verify_identity_pinned(
+    log: &[u8],
+    recovery_binding: &[u8],
+    pinned_root: &[u8],
+) -> Result<usize, JsValue> {
+    Ok(pinned_log(log, recovery_binding, pinned_root)?
+        .membership()
+        .len())
+}
+
+/// Verifies that `chain` belongs to the pinned identity through `epoch_binding`
+/// (spec §16.4). Returns the number of epochs.
+#[wasm_bindgen(js_name = verifyEpochChainBound)]
+pub fn verify_epoch_chain_bound(
+    log: &[u8],
+    recovery_binding: &[u8],
+    pinned_root: &[u8],
+    chain: &[u8],
+    epoch_binding: &[u8],
+) -> Result<usize, JsValue> {
+    let log = pinned_log(log, recovery_binding, pinned_root)?;
+    let records = epoch_records(chain)?;
+    hide_identity::EpochBinding::decode(epoch_binding)
+        .map_err(malformed)?
+        .verify(&log, &records)
+        .map_err(error)?;
+    Ok(records.len())
+}
+
+/// Verifies a signed checkpoint note (spec §16.2) and returns its 32-byte root.
+/// The size is checked against `expected_size`, so a caller cannot forget to.
+#[wasm_bindgen(js_name = verifyCheckpoint)]
+pub fn verify_checkpoint(
+    note: &[u8],
+    origin: &str,
+    log_public: &[u8],
+    expected_size: u64,
+) -> Result<Vec<u8>, JsValue> {
+    let key = VerifyingIdentity::from_bytes(log_public).map_err(error)?;
+    let checkpoint = hide_transparency::Checkpoint::verify(note, origin, &key).map_err(error)?;
+    if checkpoint.size != expected_size {
+        return Err(error("the checkpoint is for a different tree size"));
+    }
+    Ok(checkpoint.root.to_vec())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -536,6 +603,69 @@ mod tests {
         vector!(CONSISTENCY_PATH, "consistency-path.bin");
         vector!(ROOT_AT_5, "root-at-5.bin");
         vector!(REWRITTEN_ROOT, "rewritten-root.bin");
+        vector!(BINDING_LOG, "binding-identity-log.bin");
+        vector!(BINDING_HIJACKED, "binding-hijacked-log.bin");
+        vector!(BINDING_RECOVERY, "binding-recovery.bin");
+        vector!(BINDING_ROOT, "binding-root.bin");
+        vector!(BINDING_EPOCH, "binding-epoch.bin");
+        vector!(BINDING_EPOCH_STRANGER, "binding-epoch-stranger.bin");
+        vector!(CHECKPOINT_3, "checkpoint-3.note");
+        vector!(CHECKPOINT_TAMPERED, "checkpoint-tampered.note");
+        vector!(CHECKPOINT_LOG_KEY, "checkpoint-log-key.bin");
+    }
+
+    #[wasm_bindgen_test]
+    fn a_pinned_identity_and_its_bound_chain_verify() {
+        use fixtures::*;
+        assert_eq!(
+            verify_identity_pinned(BINDING_LOG, BINDING_RECOVERY, BINDING_ROOT).ok(),
+            Some(2)
+        );
+        assert!(verify_identity_pinned(BINDING_HIJACKED, BINDING_RECOVERY, BINDING_ROOT).is_err());
+        assert_eq!(
+            verify_epoch_chain_bound(
+                BINDING_LOG,
+                BINDING_RECOVERY,
+                BINDING_ROOT,
+                EPOCH_CHAIN,
+                BINDING_EPOCH
+            )
+            .ok(),
+            Some(3)
+        );
+        assert!(
+            verify_epoch_chain_bound(
+                BINDING_LOG,
+                BINDING_RECOVERY,
+                BINDING_ROOT,
+                EPOCH_CHAIN,
+                BINDING_EPOCH_STRANGER
+            )
+            .is_err()
+        );
+    }
+
+    #[wasm_bindgen_test]
+    fn a_signed_checkpoint_verifies_at_its_size_only() {
+        use fixtures::*;
+        assert_eq!(
+            verify_checkpoint(CHECKPOINT_3, "log.example/hide", CHECKPOINT_LOG_KEY, 3)
+                .map(|root| root.len())
+                .ok(),
+            Some(32)
+        );
+        assert!(
+            verify_checkpoint(CHECKPOINT_3, "log.example/hide", CHECKPOINT_LOG_KEY, 4).is_err()
+        );
+        assert!(
+            verify_checkpoint(
+                CHECKPOINT_TAMPERED,
+                "log.example/hide",
+                CHECKPOINT_LOG_KEY,
+                4
+            )
+            .is_err()
+        );
     }
 
     #[wasm_bindgen_test]
@@ -791,6 +921,11 @@ mod tests {
         assert!(
             verify(&other.public_key(), b"hide/test", b"invoice 42", &signature).is_err(),
             "one identity was impersonated by another"
+        );
+
+        assert!(
+            signer.sign(b"HIDE/0.6 identity entry", b"m").is_err(),
+            "signed under a reserved context"
         );
     }
 

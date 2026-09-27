@@ -36,6 +36,7 @@ public final class HideTest {
         run("signatures round trip", HideTest::signatures);
         run("a changed message does not verify", HideTest::changedMessage);
         run("a different context does not verify", HideTest::differentContext);
+        run("reserved protocol contexts are refused", HideTest::reservedContext);
         run("an identity cannot be impersonated", HideTest::impersonation);
         run("an encryption-only key cannot sign", HideTest::encryptionOnlyKey);
         run("a challenge is answered once", HideTest::challengeOnce);
@@ -50,6 +51,14 @@ public final class HideTest {
         run("an inclusion proof verifies only for its own leaf", HideTest::inclusion);
         run("a path that is not whole hashes is refused", HideTest::partialHashPath);
         run("a consistency proof catches a rewritten history", HideTest::consistency);
+        run("a pinned identity verifies against its root", HideTest::pinnedIdentity);
+        run("a hijacked identity is refused", HideTest::hijackedIdentity);
+        run("another root is refused", HideTest::anotherRoot);
+        run("a truncated recovery binding is malformed", HideTest::truncatedBinding);
+        run("an epoch chain bound to the pinned identity verifies", HideTest::boundEpochChain);
+        run("an epoch chain signed by a stranger is refused", HideTest::strangerEpochChain);
+        run("a checkpoint yields its size and root", HideTest::checkpoint);
+        run("a checkpoint is refused unless everything matches", HideTest::checkpointRefused);
 
         if (failures > 0) {
             System.err.println(failures + " test(s) failed");
@@ -129,6 +138,76 @@ public final class HideTest {
                 Fixtures.REWRITTEN_ROOT),
             "a rewritten history");
         }
+
+            private static void pinnedIdentity() {
+            assertTrue(Hide.verifyIdentityPinned(Fixtures.BINDING_IDENTITY_LOG,
+                Fixtures.BINDING_RECOVERY, Fixtures.BINDING_ROOT) == 2,
+                "the pinned log must trust two devices");
+            }
+
+            private static void hijackedIdentity() {
+            // A Recover appended under a stranger's key, with the genuine binding
+            // and with one forged for the stranger.
+            assertThrows(HideException.Authentication.class,
+                () -> Hide.verifyIdentityPinned(Fixtures.BINDING_HIJACKED_LOG,
+                    Fixtures.BINDING_RECOVERY, Fixtures.BINDING_ROOT),
+                "a hijacked log with the genuine binding");
+            assertThrows(HideException.Authentication.class,
+                () -> Hide.verifyIdentityPinned(Fixtures.BINDING_HIJACKED_LOG,
+                    Fixtures.BINDING_RECOVERY_FORGED, Fixtures.BINDING_ROOT),
+                "a hijacked log with a forged binding");
+            }
+
+            private static void anotherRoot() {
+            assertThrows(HideException.Authentication.class,
+                () -> Hide.verifyIdentityPinned(Fixtures.BINDING_IDENTITY_LOG,
+                    Fixtures.BINDING_RECOVERY, new byte[32]),
+                "a different pinned root");
+            }
+
+            private static void truncatedBinding() {
+            byte[] truncated = Arrays.copyOf(Fixtures.BINDING_RECOVERY, 100);
+            assertThrows(HideException.Malformed.class,
+                () -> Hide.verifyIdentityPinned(Fixtures.BINDING_IDENTITY_LOG, truncated,
+                    Fixtures.BINDING_ROOT),
+                "a truncated binding");
+            }
+
+            private static void boundEpochChain() {
+            assertTrue(Hide.verifyEpochChainBound(Fixtures.BINDING_IDENTITY_LOG,
+                Fixtures.BINDING_RECOVERY, Fixtures.BINDING_ROOT, Fixtures.EPOCH_CHAIN,
+                Fixtures.BINDING_EPOCH) == 3, "the bound chain holds 3 epochs");
+            }
+
+            private static void strangerEpochChain() {
+            assertThrows(HideException.Authentication.class,
+                () -> Hide.verifyEpochChainBound(Fixtures.BINDING_IDENTITY_LOG,
+                    Fixtures.BINDING_RECOVERY, Fixtures.BINDING_ROOT, Fixtures.EPOCH_CHAIN,
+                    Fixtures.BINDING_EPOCH_STRANGER),
+                "a stranger's binding");
+            }
+
+            private static void checkpoint() {
+            Hide.Checkpoint verified = Hide.verifyCheckpoint(Fixtures.CHECKPOINT_3,
+                "log.example/hide", Fixtures.CHECKPOINT_LOG_KEY);
+            assertTrue(verified.size() == 3, "the checkpoint size is 3");
+            assertTrue(verified.root().length == 32, "the checkpoint root is 32 bytes");
+            }
+
+            private static void checkpointRefused() {
+            assertThrows(HideException.Authentication.class,
+                () -> Hide.verifyCheckpoint(Fixtures.CHECKPOINT_TAMPERED, "log.example/hide",
+                    Fixtures.CHECKPOINT_LOG_KEY),
+                "a tampered note");
+            assertThrows(HideException.Authentication.class,
+                () -> Hide.verifyCheckpoint(Fixtures.CHECKPOINT_3, "other.example",
+                    Fixtures.CHECKPOINT_LOG_KEY),
+                "another origin");
+            assertThrows(HideException.Authentication.class,
+                () -> Hide.verifyCheckpoint(Fixtures.CHECKPOINT_3, "log.example/hide",
+                    Fixtures.CHECKPOINT_WITNESS_KEY),
+                "a witness key");
+            }
 
     private static void roundTrip() {
         try (SecretKey secret = SecretKey.generate()) {
@@ -322,6 +401,17 @@ public final class HideTest {
             byte[] alicePublic = alice.publicKey();
             assertThrows(() -> Hide.verify(alicePublic, context, message, signature),
                     "impersonation");
+        }
+    }
+
+    /** Spec §15.2: the generic API must not mint protocol signatures. */
+    private static void reservedContext() {
+        try (SigningIdentity identity = newIdentity()) {
+            for (String context : new String[] {"HIDE/0.6 identity entry", "HIDE/1.0 container", "HIDE/"}) {
+                assertThrows(IllegalArgumentException.class,
+                        () -> identity.sign(context.getBytes(UTF_8), "m".getBytes(UTF_8)),
+                        "reserved context " + context);
+            }
         }
     }
 

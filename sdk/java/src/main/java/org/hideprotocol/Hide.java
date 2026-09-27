@@ -46,6 +46,10 @@ public final class Hide {
     public record Decrypted(byte[] data, String filename, String mediaType) {
     }
 
+    /** A verified checkpoint: the tree size and the 32-byte root it commits to. */
+    public record Checkpoint(long size, byte[] root) {
+    }
+
     /** The version of the underlying native library. */
     public static String version() {
         try {
@@ -283,6 +287,65 @@ public final class Hide {
     }
 
     /**
+     * Verifies a log as a relying party and reports how many devices it trusts
+     * now.
+     *
+     * <p>Its root must equal {@code pinnedRoot}, the 32-byte identity root
+     * trusted out of band, and {@code recoveryBinding} establishes the recovery
+     * key, so a Recover appended under a stranger's key does not verify.
+     * Throws as {@link #verifyIdentity} does: {@link HideException.Malformed}
+     * for bytes that do not decode, {@link HideException.Authentication} for a
+     * log that is not this identity's.
+     */
+    public static int verifyIdentityPinned(byte[] log, byte[] recoveryBinding,
+                                           byte[] pinnedRoot) {
+        try (Arena arena = Arena.ofConfined()) {
+            MemorySegment devices = arena.allocate(ValueLayout.JAVA_LONG);
+            MemorySegment logBytes = arena.allocateFrom(ValueLayout.JAVA_BYTE, log);
+            MemorySegment bindingBytes = arena.allocateFrom(ValueLayout.JAVA_BYTE, recoveryBinding);
+            MemorySegment rootBytes = arena.allocateFrom(ValueLayout.JAVA_BYTE, pinnedRoot);
+            check((int) Native.IDENTITY_VERIFY_PINNED.invokeExact(
+                    logBytes, (long) log.length,
+                    bindingBytes, (long) recoveryBinding.length,
+                    rootBytes, (long) pinnedRoot.length, devices));
+            return (int) devices.get(ValueLayout.JAVA_LONG, 0);
+        } catch (Throwable error) {
+            throw wrap(error);
+        }
+    }
+
+    /**
+     * Verifies an epoch chain AND that it belongs to the pinned identity, and
+     * reports how many epochs it holds.
+     *
+     * <p>{@code epochBinding} must be signed, over this chain, by a device the
+     * log trusts now. A chain that verifies on its own proves only that it is
+     * self-consistent; anyone can publish one. This is the check that says
+     * whose it is.
+     */
+    public static int verifyEpochChainBound(byte[] log, byte[] recoveryBinding,
+                                            byte[] pinnedRoot, byte[] chain,
+                                            byte[] epochBinding) {
+        try (Arena arena = Arena.ofConfined()) {
+            MemorySegment epochs = arena.allocate(ValueLayout.JAVA_LONG);
+            MemorySegment logBytes = arena.allocateFrom(ValueLayout.JAVA_BYTE, log);
+            MemorySegment bindingBytes = arena.allocateFrom(ValueLayout.JAVA_BYTE, recoveryBinding);
+            MemorySegment rootBytes = arena.allocateFrom(ValueLayout.JAVA_BYTE, pinnedRoot);
+            MemorySegment chainBytes = arena.allocateFrom(ValueLayout.JAVA_BYTE, chain);
+            MemorySegment epochBytes = arena.allocateFrom(ValueLayout.JAVA_BYTE, epochBinding);
+            check((int) Native.EPOCH_VERIFY_BOUND.invokeExact(
+                    logBytes, (long) log.length,
+                    bindingBytes, (long) recoveryBinding.length,
+                    rootBytes, (long) pinnedRoot.length,
+                    chainBytes, (long) chain.length,
+                    epochBytes, (long) epochBinding.length, epochs));
+            return (int) epochs.get(ValueLayout.JAVA_LONG, 0);
+        } catch (Throwable error) {
+            throw wrap(error);
+        }
+    }
+
+    /**
      * The public key a sender should encrypt to for {@code epoch}.
      *
      * <p>The chain is verified first, so a key is never returned from a
@@ -339,6 +402,34 @@ public final class Hide {
                     pathBytes, (long) path.length,
                     oldBytes, (long) oldRoot.length,
                     newBytes, (long) newRoot.length));
+        } catch (Throwable error) {
+            throw wrap(error);
+        }
+    }
+
+    /**
+     * Verifies a C2SP signed checkpoint note from the log named {@code origin},
+     * signed with HIDE-Sign under {@code logPublicKey}.
+     *
+     * <p>A note signed by any other key — a witness, say — or naming another
+     * origin throws {@link HideException.Authentication}; nothing is returned
+     * from a note that did not verify. An origin containing a NUL throws
+     * {@link IllegalArgumentException} rather than being silently truncated.
+     */
+    public static Checkpoint verifyCheckpoint(byte[] note, String origin, byte[] logPublicKey) {
+        if (origin.indexOf('\0') >= 0) {
+            throw new IllegalArgumentException("the origin must not contain a NUL character");
+        }
+        try (Arena arena = Arena.ofConfined()) {
+            MemorySegment size = arena.allocate(ValueLayout.JAVA_LONG);
+            MemorySegment root = Native.emptyBuffer(arena);
+            MemorySegment noteBytes = arena.allocateFrom(ValueLayout.JAVA_BYTE, note);
+            MemorySegment name = arena.allocateFrom(origin);
+            MemorySegment keyBytes = arena.allocateFrom(ValueLayout.JAVA_BYTE, logPublicKey);
+            check((int) Native.CHECKPOINT_VERIFY.invokeExact(
+                    noteBytes, (long) note.length, name,
+                    keyBytes, (long) logPublicKey.length, size, root));
+            return new Checkpoint(size.get(ValueLayout.JAVA_LONG, 0), Native.take(root));
         } catch (Throwable error) {
             throw wrap(error);
         }

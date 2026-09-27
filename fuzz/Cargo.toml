@@ -86,5 +86,19 @@ test = false
 doc = false
 bench = false
 
+[[bin]]
+name = "checkpoint_note"
+path = "fuzz_targets/checkpoint_note.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "identity_bindings"
+path = "fuzz_targets/identity_bindings.rs"
+test = false
+doc = false
+bench = false
+
 [profile.release]
 debug = 1

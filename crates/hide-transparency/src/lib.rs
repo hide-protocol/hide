@@ -28,6 +28,12 @@
 use sha2::{Digest, Sha256};
 use thiserror::Error;
 
+mod checkpoint;
+pub use checkpoint::{
+    CHECKPOINT_CONTEXT, Checkpoint, MAX_NOTE_BYTES, MAX_ORIGIN_BYTES, NoteSignature, SignedNote,
+    key_id,
+};
+
 /// RFC 6962 domain separators.
 const LEAF_PREFIX: u8 = 0x00;
 const NODE_PREFIX: u8 = 0x01;
@@ -52,6 +58,112 @@ pub enum LogError {
     ProofTooLong(usize),
     #[error("the encoding is malformed")]
     Malformed,
+    #[error("the checkpoint is not signed by the expected log key")]
+    Unsigned,
+    #[error("a signature from the expected log key does not verify")]
+    BadSignature,
+    #[error("the checkpoint names origin {found:?}, not the expected one")]
+    WrongOrigin { found: String },
+}
+
+/// Labels of the two leaf types this specification defines (§16.3). The
+/// leaves carry links, never encoded logs, so a legacy log and its 1.0
+/// re-encoding (same links, different bytes) are one leaf, not two (§15.9).
+const IDENTITY_LEAF_LABEL: &[u8] = b"HIDE/1.0 identity leaf";
+const EPOCH_LEAF_LABEL: &[u8] = b"HIDE/1.0 epoch leaf";
+
+/// The leaf that logs one state of an identity: which identity (its root
+/// link), which recovery key it binds (by device id), and which history (the
+/// head link and entry count).
+pub fn identity_leaf(root: &Hash, recovery_id: &Hash, head: &Hash, entries: u64) -> Vec<u8> {
+    let mut out = Vec::with_capacity(IDENTITY_LEAF_LABEL.len() + 104);
+    out.extend_from_slice(IDENTITY_LEAF_LABEL);
+    out.extend_from_slice(root);
+    out.extend_from_slice(recovery_id);
+    out.extend_from_slice(head);
+    out.extend_from_slice(&entries.to_be_bytes());
+    out
+}
+
+/// The leaf that logs one state of an identity's epoch chain.
+pub fn epoch_leaf(identity_root: &Hash, chain_head: &Hash, epochs: u64) -> Vec<u8> {
+    let mut out = Vec::with_capacity(EPOCH_LEAF_LABEL.len() + 72);
+    out.extend_from_slice(EPOCH_LEAF_LABEL);
+    out.extend_from_slice(identity_root);
+    out.extend_from_slice(chain_head);
+    out.extend_from_slice(&epochs.to_be_bytes());
+    out
+}
+
+const INCLUSION_TAG: u8 = 0x01;
+const CONSISTENCY_TAG: u8 = 0x02;
+/// tag(1) || u64 || u64 || count(1)
+const PROOF_HEADER: usize = 18;
+
+fn encode_proof(tag: u8, first: u64, second: u64, path: &[Hash]) -> Result<Vec<u8>, LogError> {
+    if path.len() > MAX_PROOF_LEN {
+        return Err(LogError::ProofTooLong(path.len()));
+    }
+    let mut out = Vec::with_capacity(PROOF_HEADER + 32 * path.len());
+    out.push(tag);
+    out.extend_from_slice(&first.to_be_bytes());
+    out.extend_from_slice(&second.to_be_bytes());
+    out.push(path.len() as u8);
+    for hash in path {
+        out.extend_from_slice(hash);
+    }
+    Ok(out)
+}
+
+/// Fixed layout, so every field has one encoding and no re-encode check is
+/// needed: the count is checked against the limit and the exact length before
+/// anything is copied.
+fn decode_proof(tag: u8, bytes: &[u8]) -> Result<(u64, u64, Vec<Hash>), LogError> {
+    if bytes.len() < PROOF_HEADER || bytes[0] != tag {
+        return Err(LogError::Malformed);
+    }
+    let first = u64::from_be_bytes(bytes[1..9].try_into().map_err(|_| LogError::Malformed)?);
+    let second = u64::from_be_bytes(bytes[9..17].try_into().map_err(|_| LogError::Malformed)?);
+    let count = usize::from(bytes[17]);
+    if count > MAX_PROOF_LEN {
+        return Err(LogError::ProofTooLong(count));
+    }
+    if bytes.len() != PROOF_HEADER + 32 * count {
+        return Err(LogError::Malformed);
+    }
+    let path = bytes[PROOF_HEADER..]
+        .chunks_exact(32)
+        .map(|chunk| chunk.try_into().map_err(|_| LogError::Malformed))
+        .collect::<Result<Vec<Hash>, _>>()?;
+    Ok((first, second, path))
+}
+
+impl InclusionProof {
+    /// `0x01 || u64be(index) || u64be(size) || u8(n) || n × hash` (§16.3).
+    pub fn encode(&self) -> Result<Vec<u8>, LogError> {
+        encode_proof(INCLUSION_TAG, self.index, self.size, &self.path)
+    }
+
+    pub fn decode(bytes: &[u8]) -> Result<Self, LogError> {
+        let (index, size, path) = decode_proof(INCLUSION_TAG, bytes)?;
+        Ok(Self { index, size, path })
+    }
+}
+
+impl ConsistencyProof {
+    /// `0x02 || u64be(old_size) || u64be(new_size) || u8(n) || n × hash` (§16.3).
+    pub fn encode(&self) -> Result<Vec<u8>, LogError> {
+        encode_proof(CONSISTENCY_TAG, self.old_size, self.new_size, &self.path)
+    }
+
+    pub fn decode(bytes: &[u8]) -> Result<Self, LogError> {
+        let (old_size, new_size, path) = decode_proof(CONSISTENCY_TAG, bytes)?;
+        Ok(Self {
+            old_size,
+            new_size,
+            path,
+        })
+    }
 }
 
 /// Hashes a leaf. The prefix is what stops a leaf being read as a node.

@@ -80,6 +80,8 @@ implementation that exercises both sets.
 - The epoch chain (§11).
 - Transparency hashing and proof verification (§12).
 - The MLS credential binding (§13).
+- The relying-party structures (§16): recovery binding, signed checkpoint notes, leaves, proof
+  encoding and epoch binding. Added in 0.9.1 beside §1–§13 without altering them.
 - Every domain-separation label (Appendix A.7) and every registry in Appendix A.
 
 **Implementation-defined (informative).** The following are produced by the reference CLI and
@@ -496,8 +498,9 @@ key may be accepted. Tests MUST assert "validates nothing", not "fails to parse"
 Every context this specification uses is listed in Appendix A.7. Because `payload` length-prefixes
 the context, distinct contexts never produce the same `payload`. Context strings beginning with the
 ASCII bytes `HIDE/` are reserved for this specification. An implementation that exposes a
-general-purpose sign-with-context API SHOULD refuse a caller-supplied context in that prefix
-(§15.2).
+general-purpose sign-with-context API MUST refuse, before signing, a caller-supplied context that
+begins with `HIDE/`; verification APIs MAY accept any context. This is an API rule, not a wire
+rule: no byte on the wire changes, and a verifier cannot tell how a signature was produced (§15.2).
 
 ## 9. Key files
 
@@ -559,6 +562,13 @@ Version 1 is always Encryption-only.
 fresh random salt and nonce, SHOULD emit purpose `0x01`, MUST refuse a passphrase shorter than 8
 Unicode scalar values, and MUST NOT emit version 1.
 
+**Passphrase normalisation.** Writers MUST convert the passphrase to Unicode Normalization Form C
+(UAX #15) before counting its length and before Argon2. Readers MUST try, in this order and
+skipping duplicates, the NFC form, the passphrase exactly as entered, and its NFD form, accepting
+the first that authenticates; files written before normalisation hashed the raw input. An ASCII
+passphrase has one candidate. The same rule applies to the epoch keystore (§14.4). The file layout
+is unchanged (§15.5).
+
 **Readers**, in this order and before any Argon2 work:
 
 1. magic mismatch → not a key file;
@@ -600,7 +610,9 @@ edffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff7f
 eeffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff7f
 ```
 
-The comparison is on the raw bytes (§15.7).
+A reader MUST also reject an X25519 component that is not canonical: bit 255 set, or a value
+`>= p = 2^255 − 19` read little-endian. No X25519 implementation emits such a key, and each denotes
+a point that some canonical encoding already names, including the seven above (§15.7).
 
 ### 9.6 Signing public key file
 
@@ -865,7 +877,22 @@ public key the chain records for its epoch number. Erasing an epoch means reseal
 
 ## 15. Known limitations of the 1.0 freeze
 
-Each item is a property of the frozen format as specified above.
+Each item is a property of the frozen format of §1–§13. None was closed by changing a frozen byte.
+Every closure below is either an API rule, a stricter reader rule that no honest writer can trip,
+or a new structure in §16 that sits beside the frozen ones and that a 0.9.0 reader never sees. The
+status column is what an implementation must do from 0.9.1.
+
+| § | limitation | status | how |
+|---|---|---|---|
+| 15.1 | recovery key not committed | closed for relying parties | recovery binding, §16.1 |
+| 15.2 | generic signing accepts reserved contexts | closed | §8.5 MUST refuse at sign time |
+| 15.3 | transparency has no leaves, proof encoding or signed checkpoints | closed | §16.2, §16.3 |
+| 15.4 | epoch chains not bound to an identity | closed for relying parties | epoch binding, §16.4 |
+| 15.5 | passphrases not normalised | closed | §9.3 NFC writers, three-candidate readers |
+| 15.6 | label spellings are opaque | decided, stays | renaming is a wire change with no benefit |
+| 15.7 | small-order rejection by encoding | closed | §9.5 canonical-encoding rule |
+| 15.8 | MLS membership is a snapshot | closed in the reference library | updatable provider; successor re-validated |
+| 15.9 | re-serialised legacy logs change bytes | closed by design | §16 hashes links, never encodings |
 
 ### 15.1 The recovery key is not committed in the log
 
@@ -875,6 +902,12 @@ that key as the "recovery key"; it replays cleanly (§10.4). Only a recovery key
 prevents this. Because the Create layout is frozen, the log alone can never establish which recovery
 key is genuine.
 
+**Resolution.** The log alone still cannot; the §10.4 replay is unchanged. A relying party pins the
+identity's 32-byte root link instead of a recovery key and verifies through a recovery binding
+(§16.1), which the founding device signs. The attack then needs the founder's signature over the
+attacker's key. Residual risk: a founding device compromised later can sign a second binding; §16.1
+makes two different bindings for one root a detectable conflict, not a silent choice.
+
 ### 15.2 Generic signing APIs accept reserved contexts
 
 The reference C ABI (`hide_sign_message`) and the SDK sign-with-context functions accept any
@@ -882,6 +915,11 @@ context, including `HIDE/0.6 identity entry`, `HIDE/0.7 mls binding` and `HIDE/1
 party that can make a key holder sign a chosen context and message through such an API obtains an
 identity-log entry, an MLS binding or a container signature under that key. The context reservation
 of §8.5 is a SHOULD and is not enforced by the reference implementation in 0.9.0.
+
+**Resolution (0.9.1).** §8.5 is now a MUST. `hide_sign_message`, WASM `sign` and every SDK refuse a
+`HIDE/` context with an invalid-argument error; Rust exposes `SigningIdentity::sign_application`
+for application code, and `sign` remains for the protocol crates. Signatures made through 0.9.0
+APIs under reserved contexts cannot be told apart from protocol signatures and stay valid.
 
 ### 15.3 Transparency is algorithms only
 
@@ -892,11 +930,20 @@ unsigned. Two implementations can therefore agree on every proof and still log d
 the same identity, and a checkpoint says nothing about who published it. Split views are not
 detected.
 
+**Resolution.** §16.3 defines the identity and epoch leaves and a byte encoding for both proofs;
+§16.2 defines a signed checkpoint in the C2SP `tlog-checkpoint` note format, cosignable by
+witnesses. Split-view detection requires the relying party to demand witness cosignatures (§16.2);
+choosing and operating witnesses is deployment policy, outside this specification.
+
 ### 15.4 Epoch chains are not bound to an identity
 
 Nothing signs a chain or its head, and nothing ties a chain to an identity log. Anyone can publish a
 well-formed chain for any recipient; a sender that obtains a chain from an untrusted source may
 encrypt to keys the recipient never held.
+
+**Resolution.** A device the identity currently trusts signs an epoch binding (§16.4) over the
+identity root, a head of its log, the chain head and the epoch count. A sender MUST verify it
+before encrypting to an epoch obtained from anyone other than the recipient directly.
 
 ### 15.5 Passphrases are not normalised
 
@@ -904,16 +951,25 @@ The Argon2 password is the raw UTF-8 of the passphrase with no Unicode normalisa
 passphrase entered in NFC on one platform and NFD on another derives different keys, and the key
 file does not open.
 
+**Resolution (0.9.1).** §9.3: writers hash NFC; readers try NFC, the raw input and NFD. Files
+written by 0.9.0 and earlier open whichever form the passphrase is typed in.
+
 ### 15.6 Label spellings are frozen as opaque strings
 
 Every label keeps the spelling of the release that introduced it (`HIDE/0.1 …`, `HIDE/0.5 …`,
 `HIDE/0.6 …`, `HIDE/0.7 …`, `HIDE/1.0 …`). They are byte strings, not version indicators. Renaming
 any of them is a wire change.
 
+**Decision.** This stays. The spellings carry no security property, and renaming them would
+restart the one-year freeze for cosmetics. Labels added after 0.9.0 use `HIDE/1.0`.
+
 ### 15.7 Small-order rejection is by encoding
 
 §9.5 compares the X25519 component against seven specific byte strings. Non-canonical encodings of
 the same points (top bit set, or values `>= p`) are not rejected by that rule.
+
+**Resolution (0.9.1).** §9.5 now also rejects every non-canonical encoding. Rejection vectors
+`x25519-high-bit.test-public` and `x25519-not-reduced.test-public`.
 
 ### 15.8 MLS membership is a snapshot
 
@@ -922,11 +978,134 @@ The reference MLS validator checks the membership it was constructed with. "Curr
 The reference successor check compares device ids only and relies on the MLS library invoking
 member validation on the successor leaf for items 4–6.
 
+**Resolution (0.9.1).** `HideIdentityProvider::update` replaces the membership seen by every clone
+inside a running client (`client_with_provider`), and `valid_successor` runs items 4–6 on the
+successor itself. The wire is untouched; §13 already required current membership.
+
 ### 15.9 Re-serialised legacy logs change bytes
 
 A legacy (6-item head) identity log re-serialised by a 1.0 writer yields different bytes with the
 same head link. Anything that hashes an encoded log rather than its head link sees two values for
 one log.
+
+**Resolution.** Every §16 structure names a log by its root and head links, which the framing does
+not affect. Implementations MUST NOT hash an encoded identity log to identify it.
+
+## 16. Relying-party structures
+
+Added in 0.9.1 and frozen with the rest of HIDE 1. Nothing here alters §1–§13: each structure is a
+separate artefact, transported beside a log or chain, that a 0.9.0 implementation simply does not
+consume. All integers are big-endian; all four structures have one encoding each.
+
+### 16.1 Identity root and recovery binding
+
+The **identity root** is the link of entry 0 (§10.2). It commits to the founding device's key and
+its signature, never changes as the log grows, and is the value a relying party pins, for example
+in a contact card, a QR code or a transparency leaf.
+
+```
+recovery_binding (5389) = root(32) || recovery_key(1984) || signature(3373)
+signature = HIDE-Sign(founder_key, context = "HIDE/1.0 recovery binding",
+               message = root || recovery_key)
+```
+
+`founder_key` is the payload of entry 0. The founder SHOULD sign the binding when it creates the
+log. A verifier holding `pinned_root`:
+
+1. MUST reject unless `len == 5389`.
+2. MUST reject unless `root == pinned_root` and `root` equals the link of entry 0 of the supplied
+  log, and entry 0 is Create.
+3. MUST verify `signature` under entry 0's payload key (§8.4).
+4. MUST replay the log per §10.4 with `recovery_key`.
+
+Two valid bindings with the same `root` and different `recovery_key` mean the founding device signed
+twice. A verifier that sees both MUST refuse the identity and SHOULD report the conflict; it MUST
+NOT pick one. Transparency (§16.3) is how a relying party learns of a second binding.
+
+### 16.2 Signed checkpoints
+
+A checkpoint is a C2SP signed note (`c2sp.org/signed-note`, `c2sp.org/tlog-checkpoint`) with
+exactly three text lines and no extension lines:
+
+```
+<origin>\n<size, ASCII decimal, no leading zeros>\n<base64(root)>\n
+\n
+— <key name> base64(key_id(4) || signature(3373))\n        # one line per signer, 1 ..= 32
+
+key_id    = SHA-256(key_name || 0x0A || 0xFF || "HIDE/1.0 hide-sign" || verifying_key(1984))[:4]
+signature = HIDE-Sign(key, context = "HIDE/1.0 checkpoint", message = note text)
+```
+
+The note text is the three lines including the final newline. `origin` and every key name are 1 ..=
+256 printable ASCII bytes excluding space and `+`; the log's own key name is its origin. Base64 is
+RFC 4648 §4 with padding. The signature type `0xFF` is the signed-note escape for types without an
+assigned byte, followed by a longer identifier as that specification recommends. A note is at most
+196608 bytes.
+
+A verifier MUST reject a note that is not valid UTF-8, contains a control character other than
+LF, does not end in LF, lacks the blank separator line, has no or more than 32 signature lines, or
+does not re-encode to the exact input; and a text that is not exactly three canonical lines. It
+MUST ignore lines whose name and key id do not both match a key it knows, MUST reject the note if a
+matching line fails to verify, and MUST reject unless the log's key signed it. To detect split
+views, a verifier SHOULD also require a threshold of distinct witnesses it trusts, each counted
+once and never including the log itself. A witness MUST NOT cosign two checkpoints for one origin
+that are not consistent (§12).
+
+The 40-byte form of §12 remains the frozen internal commitment; it carries no origin and no
+signature.
+
+### 16.3 Leaves and proof encoding
+
+```
+identity_leaf = "HIDE/1.0 identity leaf" || root(32) || device_id(recovery_key)(32)
+           || head(32) || u64be(entries)
+epoch_leaf    = "HIDE/1.0 epoch leaf"    || identity_root(32) || chain_head(32) || u64be(epochs)
+
+inclusion   = 0x01 || u64be(index)    || u64be(size)     || u8(n) || n × hash(32)
+consistency = 0x02 || u64be(old_size) || u64be(new_size) || u8(n) || n × hash(32)
+```
+
+Leaves are hashed with `leaf_hash` (§12). A log that publishes an identity appends an identity leaf
+for every head it has seen, so a second recovery binding or a forked history appears as a second
+leaf under the same root. A proof decoder MUST check the tag, MUST reject `n > 64` before reading
+the path, and MUST reject unless `len == 18 + 32·n`. Verification is §12.
+
+### 16.4 Epoch binding
+
+```
+epoch_binding (3509) = identity_root(32) || identity_head(32) || chain_head(32) || u64be(epochs)
+                || signer(32) || signature(3373)
+signature = HIDE-Sign(device_key, context = "HIDE/1.0 epoch binding", message = the first 136 bytes)
+```
+
+`signer` is the device id of the signing key. A verifier holding a log verified per §16.1 and the
+chain:
+
+1. MUST reject unless `len == 3509`.
+2. MUST reject unless `identity_root` is the log's root and `identity_head` is the link of some
+  entry of the log.
+3. MUST decode and verify the chain (§11), and reject unless it has `epochs ≥ 1` records and its
+  head equals `chain_head`.
+4. MUST reject unless `signer` is in the log's **current** membership, and MUST verify
+  `signature` under that device's recorded key.
+
+Revoking a device therefore withdraws every chain it vouched for; a remaining device signs a new
+binding. A binding covers exactly one chain state: after `advance` the chain head changes and a new
+binding is needed.
+
+### 16.5 Verification profile
+
+What a relying party pins, and what it checks, for each question:
+
+| question | pin | verify |
+|---|---|---|
+| Which devices belong to this identity? | identity root | log + recovery binding (§16.1) |
+| Which key do I encrypt to for epoch *n*? | identity root | §16.1, then epoch binding (§16.4), then §9.5 on the key |
+| Is this the history everyone sees? | log key + witness keys + threshold | checkpoint (§16.2), inclusion of the identity leaf, consistency with the last checkpoint seen |
+| Did the sender sign this file? | signer's verifying key, or identity root and a device id in its membership | §7 |
+
+Pinning a recovery key directly (§10.4) remains valid and is equivalent to pinning a root whose
+binding names that key.
 
 ## Appendix A. Registries
 
@@ -1013,6 +1192,12 @@ The MLS cipher suite number `0x0001` (§13) is a separate registry.
 | `HIDE/0.6 device id` | SHA-256 prefix | 10.1, 13 |
 | `HIDE/0.6 epoch chain` | SHA-256 prefix | 11 |
 | `HIDE/0.7 mls binding` | HIDE-Sign context | 13 |
+| `HIDE/1.0 recovery binding` | HIDE-Sign context | 16.1 |
+| `HIDE/1.0 checkpoint` | HIDE-Sign context | 16.2 |
+| `HIDE/1.0 hide-sign` | signed-note key-id type suffix (after `0xFF`) | 16.2 |
+| `HIDE/1.0 identity leaf` | transparency leaf prefix | 16.3 |
+| `HIDE/1.0 epoch leaf` | transparency leaf prefix | 16.3 |
+| `HIDE/1.0 epoch binding` | HIDE-Sign context | 16.4 |
 | `HIDE/0.5 challenge` | HIDE-Sign context (implementation-defined) | 14.2 |
 | `HIDE/0.5 detached` | HIDE-Sign context (implementation-defined) | 14.1 |
 | `HIDE/0.5 detached-file` | signed-message prefix (implementation-defined) | 14.1 |
@@ -1020,11 +1205,12 @@ The MLS cipher suite number `0x0001` (§13) is a separate registry.
 HIDE-Sign contexts are length-prefixed and cannot collide with one another or with a message. The
 SHA-256 prefixes are not prefixes of one another. The HKDF infos under each PRK are pairwise
 distinct. `HIDE/0.5 detached` is a byte prefix of `HIDE/0.5 detached-file`, but one is a context and
-the other the start of a message, so they never occupy the same position.
+the other the start of a message, so they never occupy the same position. The two leaf prefixes are
+not prefixes of each other, and a leaf is hashed under `0x00` (§12), never signed.
 
-Test-only labels (`HIDE/0.5 test`, `HIDE/0.5 other`, `HIDE/0.5 vector`, `HIDE/0.5 ffi test`,
-`HIDE/0.5 something else`, `HIDE/0.5 node test`, `HIDE/0.5 cross-surface`) MUST NOT appear in
-production code paths. New test labels SHOULD use the prefix `HIDE/test/`.
+Test-only labels (`HIDE/0.5 test`, `HIDE/0.5 other`, `HIDE/0.5 vector`) MUST NOT appear in
+production code paths. Since 0.9.1 the generic signing APIs refuse every `HIDE/` context (§8.5), so
+tests of those APIs use contexts outside the prefix (`example/…`).
 
 Other fixed values: container magic `48 49 44 45 0D 0A 1A 0A`; `HIDE-KEY` (versions 1, 2; purposes
 1, 2); `HIDE-EPK` (version 1, implementation-defined); Merkle prefixes `0x00` / `0x01`; identity
@@ -1056,6 +1242,8 @@ tags 1–4; MLS credential type `0xF01D`.
 | `MAX_CHAIN_ENTRIES` | 1000000 | 11 |
 | `MAX_PROOF_LEN` | 64 hashes | 12 |
 | `MAX_MLS_MESSAGE` | 1048576 | 13 |
+| checkpoint note | <= 196608 bytes, 1 ..= 32 signature lines, names <= 256 bytes | 16.2 |
+| encoded proof path | <= 64 hashes | 16.3 |
 | implementation limits (not frozen): `MAX_SIGNED_INPUT` 2^30 bytes (signed encrypt holds the plaintext), keystore 65536 entries / 4784231 bytes, CLI key file 4096, signing key file 8192, log file 16 MiB, armored message 1 MiB | | 14 |
 
 ## Appendix B. Change log
@@ -1081,3 +1269,13 @@ tags 1–4; MLS credential type `0xF01D`.
     outcome and SHA-256.
   - Specification: HIDE-Sign, key files, identity log encoding and transparency proof rules are
     specified in full; the §4 filename rule is corrected (dots are allowed).
+- 0.9.1 — closes the known limitations of §15 without changing any byte of §1–§13; the one-year
+  freeze clock is not restarted:
+  - Additive frozen structures (§16): identity root, recovery binding, signed checkpoint notes
+    (C2SP format, HIDE-Sign, witness cosignatures), identity and epoch leaves, proof encoding,
+    epoch binding, verification profile. Six new labels in A.7.
+  - API rule: generic signing refuses `HIDE/` contexts (§8.5 SHOULD → MUST).
+  - Reader rules: X25519 components must be canonically encoded (§9.5); passphrases are NFC for
+    writers with raw/NFD fallback for readers (§9.3, §14.4).
+  - Vectors: `x25519-high-bit.test-public`, `x25519-not-reduced.test-public`, and 15 subsystem
+    vectors (`binding-*`, `checkpoint-*`) including the §15.1 hijack.

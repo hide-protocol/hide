@@ -30,3 +30,5 @@ critical-metadata-key	metadata key 7 is in the critical range and not defined
 reserved-metadata-key	metadata key 4 is reserved core and not defined
 filename-dotdot	filename '..' is a path component, not a name
 non-canonical-metadata	metadata integer key not in shortest form
+x25519-high-bit.test-public	X25519 component has bit 255 set (the zero point, non-canonically); refuse as a recipient
+x25519-not-reduced.test-public	X25519 component is p + 1, a non-canonical encoding of u = 1; refuse as a recipient

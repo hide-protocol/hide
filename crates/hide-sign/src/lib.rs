@@ -47,6 +47,18 @@ pub const SIGNATURE_LENGTH: usize = ED25519_SIGNATURE_LEN + ML_DSA_SIGNATURE_LEN
 const ED25519_INFO: &[u8] = b"HIDE/0.5 identity ed25519";
 const ML_DSA_INFO: &[u8] = b"HIDE/0.5 identity ml-dsa-65";
 
+/// Contexts starting with these bytes belong to the specification (§8.5):
+/// identity-log entries, MLS bindings, container signatures and the rest.
+/// A general-purpose signing API that let a caller choose one would sign
+/// protocol objects on that caller's behalf.
+pub const RESERVED_CONTEXT_PREFIX: &[u8] = b"HIDE/";
+
+/// Whether `context` is reserved for the specification and must be refused
+/// by any API through which a third party chooses what gets signed.
+pub fn is_reserved_context(context: &[u8]) -> bool {
+    context.starts_with(RESERVED_CONTEXT_PREFIX)
+}
+
 /// An error that carries no key material and no signed plaintext.
 #[derive(Debug, Error, PartialEq, Eq)]
 pub enum SignError {
@@ -64,6 +76,8 @@ pub enum SignError {
     MalformedKey,
     #[error("challenge is malformed")]
     MalformedChallenge,
+    #[error("contexts beginning with \"HIDE/\" are reserved for the protocol")]
+    ReservedContext,
     #[error("operating-system randomness failed")]
     Random,
 }
@@ -146,6 +160,10 @@ impl SigningIdentity {
 
     /// Signs with both halves. `context` separates uses of one identity, so a
     /// signature made for one purpose cannot be replayed as another.
+    ///
+    /// This accepts every context, including the reserved `HIDE/` ones, because
+    /// the protocol crates sign through it. Anything that exposes signing to
+    /// application code must use [`Self::sign_application`] instead.
     pub fn sign(&self, context: &[u8], message: &[u8]) -> [u8; SIGNATURE_LENGTH] {
         let payload = bind(context, message);
         let ed = self.ed25519.sign(&payload);
@@ -154,6 +172,21 @@ impl SigningIdentity {
         signature[..ED25519_SIGNATURE_LEN].copy_from_slice(&ed.to_bytes());
         signature[ED25519_SIGNATURE_LEN..].copy_from_slice(&ml.encode());
         signature
+    }
+
+    /// Signs under an application-chosen context, refusing the reserved
+    /// `HIDE/` prefix. Without this refusal, whoever can ask a key holder to
+    /// sign "context X, message Y" obtains an identity-log entry, an MLS
+    /// binding or a container signature under that key (§15.2).
+    pub fn sign_application(
+        &self,
+        context: &[u8],
+        message: &[u8],
+    ) -> Result<[u8; SIGNATURE_LENGTH], SignError> {
+        if is_reserved_context(context) {
+            return Err(SignError::ReservedContext);
+        }
+        Ok(self.sign(context, message))
     }
 
     /// The Ed25519 half alone, for the SSH agent. OpenSSH has no post-quantum
@@ -588,6 +621,48 @@ mod tests {
             verifying.verify(b"two", b"m", &signature),
             Err(SignError::Verification)
         );
+    }
+
+    /// §15.2: a general-purpose API must not sign protocol objects.
+    #[test]
+    fn application_signing_refuses_every_reserved_context() {
+        let signing = identity();
+        for context in [
+            &b"HIDE/"[..],
+            b"HIDE/0.6 identity entry",
+            b"HIDE/0.7 mls binding",
+            b"HIDE/1.0 container",
+            b"HIDE/0.5 detached",
+            b"HIDE/0.5 challenge",
+            b"HIDE/1.0 recovery binding",
+            b"HIDE/1.0 epoch binding",
+            b"HIDE/1.0 checkpoint",
+        ] {
+            assert!(
+                matches!(
+                    signing.sign_application(context, b"m"),
+                    Err(SignError::ReservedContext)
+                ),
+                "signed under reserved context {context:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn application_signing_accepts_other_contexts_and_matches_sign() {
+        let signing = identity();
+        for context in [
+            &b""[..],
+            b"myapp/v1 release",
+            b"hide/lowercase",
+            b"HIDE",
+            b" HIDE/",
+        ] {
+            let signature = signing
+                .sign_application(context, b"m")
+                .expect("not reserved");
+            assert_eq!(signature, signing.sign(context, b"m"));
+        }
     }
 
     #[test]

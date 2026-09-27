@@ -36,6 +36,9 @@ proptest = "=1.11.0"
 argon2 = { version = "=0.6.0", features = ["alloc"] }
 rpassword = "=7.5.4"
 base64 = "=0.23.1"
+# NFC for passphrases before Argon2 (spec §9.3): the same passphrase typed on
+# macOS (NFD input methods) and Windows (NFC) must open the same key file.
+unicode-normalization = "=0.1.25"
 ed25519-dalek = { version = "=3.0.0", default-features = false, features = ["alloc", "fast", "zeroize"] }
 # zeroize: without it the expanded ML-DSA signing key (several KiB) is not wiped on drop.
 ml-dsa = { version = "=0.1.1", default-features = false, features = ["alloc", "zeroize"] }

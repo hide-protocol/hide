@@ -40,15 +40,19 @@ done.
   identity-*, epoch-*, ssh-key and an ssh-agent that confirms on the tty.
 - **Desktop** (`apps/hide-desktop`): Tauri app and portable build over the same
   crates; `interop.rs` proves it opens CLI output and vice versa.
-- **Assurance**: 360 tests, eight libFuzzer targets — one per parser of
+- **Assurance**: 397 workspace tests, eleven libFuzzer targets — one per parser of
   untrusted bytes — run 45 s on every push and four hours nightly with a
   corpus carried forward (`fuzz-nightly.yml`; a finding files an issue).
   Three real bugs in the first three runs: P11.3, P11.4, P12.1. `cargo audit` and `cargo deny`
   gate advisories, licences, banned crypto stacks and duplicate versions.
-  Thirty frozen rejection vectors shared with
-  the independent Node verifier (containers, signatures, §10–§12 subsystems),
+  Thirty-two frozen rejection vectors shared with
+  the independent Node verifier (containers, signatures, §10–§12 and §16 subsystems),
   a Rust↔Node differential fuzzer in CI, cross-surface conformance,
   `unsafe_code = "forbid"` outside `hide-ffi`, every dependency pinned exactly.
+- **Relying-party layer (unreleased, P14)**: recovery binding, signed C2SP
+  checkpoints with witness thresholds, transparency leaves and proof encoding,
+  epoch binding (spec §16) in Rust, C ABI, WASM and all seven SDKs; every
+  spec §15 limitation closed or decided without a wire change.
 
 ## What does not exist
 

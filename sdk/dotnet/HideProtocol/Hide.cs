@@ -259,6 +259,40 @@ public static unsafe class Hide
     }
 
     /// <summary>
+    /// Verifies a log as a relying party and returns how many devices it trusts
+    /// now. Its root must equal <paramref name="pinnedRoot"/>, the 32-byte
+    /// identity root trusted out of band, and <paramref name="recoveryBinding"/>
+    /// establishes the recovery key, so a Recover appended under a stranger's
+    /// key does not verify.
+    ///
+    /// Throws as <see cref="VerifyIdentity"/> does: <see cref="MalformedException"/>
+    /// for bytes that do not decode, <see cref="AuthenticationException"/> for a
+    /// log that is not this identity's.
+    /// </summary>
+    public static int VerifyIdentityPinned(
+        ReadOnlySpan<byte> log,
+        ReadOnlySpan<byte> recoveryBinding,
+        ReadOnlySpan<byte> pinnedRoot)
+    {
+        nuint devices = 0;
+        fixed (byte* logPointer = log)
+        fixed (byte* bindingPointer = recoveryBinding)
+        fixed (byte* rootPointer = pinnedRoot)
+        {
+            Interop.Check(Native.hide_identity_verify_pinned(
+                logPointer,
+                (nuint)log.Length,
+                bindingPointer,
+                (nuint)recoveryBinding.Length,
+                rootPointer,
+                (nuint)pinnedRoot.Length,
+                &devices));
+        }
+
+        return checked((int)devices);
+    }
+
+    /// <summary>
     /// Verifies a published epoch history and returns how many epochs it holds.
     /// </summary>
     public static int VerifyEpochChain(ReadOnlySpan<byte> chain)
@@ -267,6 +301,46 @@ public static unsafe class Hide
         fixed (byte* pointer = chain)
         {
             Interop.Check(Native.hide_epoch_verify(pointer, (nuint)chain.Length, &epochs));
+        }
+
+        return checked((int)epochs);
+    }
+
+    /// <summary>
+    /// Verifies an epoch chain AND that it belongs to the pinned identity:
+    /// <paramref name="epochBinding"/> must be signed, over this chain, by a
+    /// device the log trusts now. Returns how many epochs the chain holds.
+    ///
+    /// A chain that verifies on its own proves only that it is
+    /// self-consistent; anyone can publish one. This is the check that says
+    /// whose it is.
+    /// </summary>
+    public static int VerifyEpochChainBound(
+        ReadOnlySpan<byte> log,
+        ReadOnlySpan<byte> recoveryBinding,
+        ReadOnlySpan<byte> pinnedRoot,
+        ReadOnlySpan<byte> chain,
+        ReadOnlySpan<byte> epochBinding)
+    {
+        nuint epochs = 0;
+        fixed (byte* logPointer = log)
+        fixed (byte* bindingPointer = recoveryBinding)
+        fixed (byte* rootPointer = pinnedRoot)
+        fixed (byte* chainPointer = chain)
+        fixed (byte* epochPointer = epochBinding)
+        {
+            Interop.Check(Native.hide_epoch_verify_bound(
+                logPointer,
+                (nuint)log.Length,
+                bindingPointer,
+                (nuint)recoveryBinding.Length,
+                rootPointer,
+                (nuint)pinnedRoot.Length,
+                chainPointer,
+                (nuint)chain.Length,
+                epochPointer,
+                (nuint)epochBinding.Length,
+                &epochs));
         }
 
         return checked((int)epochs);
@@ -348,5 +422,40 @@ public static unsafe class Hide
                 newPointer,
                 (nuint)newRoot.Length));
         }
+    }
+
+    /// <summary>
+    /// Verifies a C2SP signed checkpoint note from the log named
+    /// <paramref name="origin"/>, signed with HIDE-Sign under
+    /// <paramref name="logPublicKey"/>, and returns the tree size and the
+    /// 32-byte root it commits to.
+    ///
+    /// A note signed by any other key — a witness, say — or naming another
+    /// origin throws <see cref="AuthenticationException"/>; nothing is returned
+    /// from a note that did not verify.
+    /// </summary>
+    public static (ulong Size, byte[] Root) VerifyCheckpoint(
+        ReadOnlySpan<byte> note,
+        string origin,
+        ReadOnlySpan<byte> logPublicKey)
+    {
+        ArgumentNullException.ThrowIfNull(origin);
+        using Utf8String name = Utf8String.Create(origin, nameof(origin));
+        ulong size = 0;
+        HideBuffer root = Native.hide_buffer_empty();
+        fixed (byte* notePointer = note)
+        fixed (byte* keyPointer = logPublicKey)
+        {
+            Interop.Check(Native.hide_checkpoint_verify(
+                notePointer,
+                (nuint)note.Length,
+                name.Pointer,
+                keyPointer,
+                (nuint)logPublicKey.Length,
+                &size,
+                &root));
+        }
+
+        return (size, Interop.Take(ref root));
     }
 }

@@ -280,6 +280,46 @@ _SIGNATURES = {
         ],
         ctypes.c_int32,
     ),
+    "hide_identity_verify_pinned": (
+        [
+            ctypes.c_char_p,
+            ctypes.c_size_t,
+            ctypes.c_char_p,
+            ctypes.c_size_t,
+            ctypes.c_char_p,
+            ctypes.c_size_t,
+            ctypes.POINTER(ctypes.c_size_t),
+        ],
+        ctypes.c_int32,
+    ),
+    "hide_epoch_verify_bound": (
+        [
+            ctypes.c_char_p,
+            ctypes.c_size_t,
+            ctypes.c_char_p,
+            ctypes.c_size_t,
+            ctypes.c_char_p,
+            ctypes.c_size_t,
+            ctypes.c_char_p,
+            ctypes.c_size_t,
+            ctypes.c_char_p,
+            ctypes.c_size_t,
+            ctypes.POINTER(ctypes.c_size_t),
+        ],
+        ctypes.c_int32,
+    ),
+    "hide_checkpoint_verify": (
+        [
+            ctypes.c_char_p,
+            ctypes.c_size_t,
+            ctypes.c_char_p,
+            ctypes.c_char_p,
+            ctypes.c_size_t,
+            ctypes.POINTER(ctypes.c_uint64),
+            ctypes.POINTER(Buffer),
+        ],
+        ctypes.c_int32,
+    ),
 }
 
 for _name, (_argtypes, _restype) in _SIGNATURES.items():

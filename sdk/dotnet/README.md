@@ -104,10 +104,13 @@ written before signatures existed carries no signing seed and throws
 | `Hide.VerifyIdentity(log, recoveryKey)` | `int` — how many devices the log trusts now |
 | `Hide.IdentityTrustsDevice(log, recoveryKey, devicePublicKey)` | `bool` — membership, after verifying the log |
 | `Hide.IdentityHead(log, recoveryKey)` | 32 bytes naming this exact history |
+| `Hide.VerifyIdentityPinned(log, recoveryBinding, pinnedRoot)` | `int` — devices trusted now, only if the log is the pinned identity |
 | `Hide.VerifyEpochChain(chain)` | `int` — how many epochs it holds |
+| `Hide.VerifyEpochChainBound(log, recoveryBinding, pinnedRoot, chain, epochBinding)` | `int` — epochs, only if a device the pinned log trusts signed this chain |
 | `Hide.EpochPublicKey(chain, ulong epoch)` | the public key to encrypt to for `epoch` |
 | `Hide.VerifyInclusion(leaf, ulong index, ulong size, path, root)` | `void` |
 | `Hide.VerifyConsistency(ulong oldSize, ulong newSize, path, oldRoot, newRoot)` | `void` |
+| `Hide.VerifyCheckpoint(note, string origin, logPublicKey)` | `(ulong Size, byte[] Root)` of a signed checkpoint |
 
 A cryptographic verify **throws** on failure (`MalformedException` if the bytes
 did not decode, `AuthenticationException` if they decoded but did not verify)

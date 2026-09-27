@@ -239,7 +239,7 @@ try {
   // surface that produced it can check it.
   cli(["keygen", "--secret", "s.key", "--public", "s.pub", "--insecure-plaintext"]);
   const signingKey = await readFile(join(work, "s.key"));
-  const context = new TextEncoder().encode("HIDE/0.5 cross-surface");
+  const context = new TextEncoder().encode("example/cross-surface");
   const signed = new TextEncoder().encode("the signed message");
 
   const wasmSigner = wasm.SigningIdentity.load(signingKey, undefined);

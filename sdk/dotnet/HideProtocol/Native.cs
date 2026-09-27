@@ -220,6 +220,40 @@ internal static unsafe partial class Native
     internal static partial int hide_epoch_verify(byte* chain, nuint chainLen, nuint* outEpochs);
 
     [LibraryImport(LibraryName)]
+    internal static partial int hide_identity_verify_pinned(
+        byte* log,
+        nuint logLen,
+        byte* recoveryBinding,
+        nuint recoveryBindingLen,
+        byte* pinnedRoot,
+        nuint pinnedRootLen,
+        nuint* outDevices);
+
+    [LibraryImport(LibraryName)]
+    internal static partial int hide_epoch_verify_bound(
+        byte* log,
+        nuint logLen,
+        byte* recoveryBinding,
+        nuint recoveryBindingLen,
+        byte* pinnedRoot,
+        nuint pinnedRootLen,
+        byte* chain,
+        nuint chainLen,
+        byte* epochBinding,
+        nuint epochBindingLen,
+        nuint* outEpochs);
+
+    [LibraryImport(LibraryName)]
+    internal static partial int hide_checkpoint_verify(
+        byte* note,
+        nuint noteLen,
+        byte* origin,
+        byte* logPublic,
+        nuint logPublicLen,
+        ulong* outSize,
+        HideBuffer* outRoot);
+
+    [LibraryImport(LibraryName)]
     internal static partial int hide_epoch_public_key(
         byte* chain, nuint chainLen, ulong epoch, HideBuffer* @out);
 

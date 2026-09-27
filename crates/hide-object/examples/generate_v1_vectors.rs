@@ -441,6 +441,40 @@ fn main() -> Outcome {
         "metadata integer key not in shortest form",
     )?;
 
+    // §9.5 / §15.7: non-canonical X25519 encodings of points, which the
+    // seven-string small-order list does not match by bytes.
+    let genuine = public.to_bytes();
+    for (name, x25519, reason) in [
+        (
+            "x25519-high-bit.test-public",
+            {
+                let mut zero_high = [0_u8; 32];
+                zero_high[31] = 0x80;
+                zero_high
+            },
+            "X25519 component has bit 255 set (the zero point, non-canonically); refuse as a recipient",
+        ),
+        (
+            "x25519-not-reduced.test-public",
+            {
+                let mut p_plus_one = [0xff_u8; 32];
+                p_plus_one[0] = 0xee;
+                p_plus_one[31] = 0x7f;
+                p_plus_one
+            },
+            "X25519 component is p + 1, a non-canonical encoding of u = 1; refuse as a recipient",
+        ),
+    ] {
+        let mut bytes = genuine.clone();
+        bytes[1184..].copy_from_slice(&x25519);
+        assert!(
+            RecipientPublic::from_bytes(&bytes).is_err(),
+            "{name} parses"
+        );
+        w.put(&format!("rejections/{name}"), &bytes)?;
+        index.push_str(&format!("{name}\t{reason}\n"));
+    }
+
     // Keep the pre-0.9 rows, which the old generator still owns, first.
     let old = fs::read_to_string(vectors.join("rejections/rejections.txt"))?;
     let mut rows: Vec<&str> = old
@@ -591,6 +625,22 @@ fn classify(
         "subsystems/other-leaf.bin" | "subsystems/rewritten-root.bin" => {
             ("reject", "does not verify against the recorded proof")
         }
+        "subsystems/binding-recovery-forged.bin" => (
+            "reject",
+            "recovery binding signed by the attacker, not the founder; refuse under the pinned root",
+        ),
+        "subsystems/binding-hijacked-log.bin" => (
+            "reject",
+            "log with an attacker Recover appended; replays bare, refused under the recovery binding",
+        ),
+        "subsystems/binding-epoch-stranger.bin" => (
+            "reject",
+            "epoch binding signed by a device the identity never enrolled",
+        ),
+        "subsystems/checkpoint-tampered.note" => (
+            "reject",
+            "checkpoint size changed after signing; the log signature fails",
+        ),
         _ => ("open", ""),
     };
     (kind, reason.0, reason.1.to_owned())

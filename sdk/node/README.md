@@ -103,12 +103,20 @@ signatures existed carries no signing seed and throws `NotAKeyError`.
 | `epochPublicKey(chain, epoch)` | the public key to encrypt to for `epoch` |
 | `verifyInclusion(leaf, index, size, path, root)` | `void` |
 | `verifyConsistency(oldSize, newSize, path, oldRoot, newRoot)` | `void` |
+| `verifyIdentityPinned(log, recoveryBinding, pinnedRoot)` | `number` — devices trusted now, only if the log is the identity under the pinned 32-byte root |
+| `verifyEpochChainBound(log, recoveryBinding, pinnedRoot, chain, epochBinding)` | `number` — epochs, only if a device the log trusts signed this chain |
+| `verifyCheckpoint(note, origin, logPublic)` | `{ size: bigint, root: Buffer }` from a signed checkpoint note |
 
 A cryptographic verify **throws** on failure (`MalformedError` if the bytes did
 not decode, `AuthenticationError` if they decoded but did not verify) and never
 returns `false`. The one boolean is `identityTrustsDevice`: the log is verified
 first, so `false` means "not a member", never "did not verify". Integer
 arguments accept `number` or `bigint`.
+
+The pinned checks are what a relying party uses: `pinnedRoot` is obtained out
+of band, and `recoveryBinding` establishes the recovery key, so a log extended
+by a Recover under a stranger's key throws `AuthenticationError`. A pinned root
+that is not 32 bytes throws `RangeError`.
 
 ## Native library
 

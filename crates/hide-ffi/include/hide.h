@@ -137,7 +137,10 @@ int32_t hide_signing_identity_public(const HideSigningIdentity *identity,
 void hide_signing_identity_free(HideSigningIdentity *identity);
 
 /* context separates uses of one identity: a signature made for one purpose
- * must not verify as another. Never let a remote party choose it. */
+ * must not verify as another. Never let a remote party choose it. Contexts
+ * beginning with "HIDE/" are reserved for the protocol and return
+ * HIDE_ERR_INVALID_ARGUMENT (spec §8.5, §15.2). Verification accepts any
+ * context. */
 int32_t hide_sign_message(const HideSigningIdentity *identity,
                           const uint8_t *context, size_t context_len,
                           const uint8_t *message, size_t message_len,
@@ -206,6 +209,31 @@ int32_t hide_transparency_verify_consistency(uint64_t old_size, uint64_t new_siz
                                              size_t old_root_len,
                                              const uint8_t *new_root,
                                              size_t new_root_len);
+
+/* Relying-party checks (spec §16). pinned_root is the 32-byte identity root
+ * the caller trusts out of band; recovery_binding (5389 bytes) establishes
+ * the recovery key, so an appended Recover under a stranger's key fails. */
+int32_t hide_identity_verify_pinned(const uint8_t *log, size_t log_len,
+                                    const uint8_t *recovery_binding,
+                                    size_t recovery_binding_len,
+                                    const uint8_t *pinned_root,
+                                    size_t pinned_root_len,
+                                    size_t *out_devices);
+/* Whether an epoch chain belongs to the pinned identity: epoch_binding (3509
+ * bytes) must be signed by a device the log trusts now, over this chain. */
+int32_t hide_epoch_verify_bound(const uint8_t *log, size_t log_len,
+                                const uint8_t *recovery_binding,
+                                size_t recovery_binding_len,
+                                const uint8_t *pinned_root, size_t pinned_root_len,
+                                const uint8_t *chain, size_t chain_len,
+                                const uint8_t *epoch_binding,
+                                size_t epoch_binding_len, size_t *out_epochs);
+/* A C2SP-format signed checkpoint note from the log `origin`, signed with
+ * HIDE-Sign under log_public (1984 bytes). Writes the size and 32-byte root. */
+int32_t hide_checkpoint_verify(const uint8_t *note, size_t note_len,
+                               const char *origin,
+                               const uint8_t *log_public, size_t log_public_len,
+                               uint64_t *out_size, HideBuffer *out_root);
 
 #ifdef __cplusplus
 } /* extern "C" */

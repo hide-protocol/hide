@@ -35,6 +35,9 @@ jobs:
           - transparency_proofs
           - challenge_decode
           - mls_message
+          - epoch_store
+          - checkpoint_note
+          - identity_bindings
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable
@@ -68,9 +71,11 @@ jobs:
             identity_log) cp conformance/vectors/subsystems/identity-*.bin "$d/" ;;
             epoch_chain) cp conformance/vectors/subsystems/epoch-*.bin "$d/" ;;
             transparency_proofs) cp conformance/vectors/subsystems/*root*.bin "$d/" ;;
+            checkpoint_note) cp conformance/vectors/subsystems/checkpoint-*.note conformance/vectors/subsystems/checkpoint-inclusion.bin conformance/vectors/subsystems/checkpoint-consistency.bin "$d/" ;;
+            identity_bindings) cp conformance/vectors/subsystems/binding-recovery*.bin conformance/vectors/subsystems/binding-epoch*.bin "$d/" ;;
             # No frozen vectors: challenges carry a fresh nonce and MLS messages a
             # fresh group state, so neither is a stable artifact. Empty start.
-            challenge_decode|mls_message) ;;
+            challenge_decode|mls_message|epoch_store) ;;
           esac
           echo "corpus entries: $(ls "$d" | wc -l)"
 

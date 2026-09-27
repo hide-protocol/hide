@@ -6,8 +6,8 @@
 
 use hide_identity::{IdentityLog, device_id};
 use hide_mls::{
-    MAX_MLS_MESSAGE, MlsError, accept_from_trusted, client_for, decode_message, encode_message,
-    sender_device, untrusted_members,
+    HideIdentityProvider, MAX_MLS_MESSAGE, MlsError, accept_from_trusted, client_for,
+    client_with_provider, decode_message, encode_message, sender_device, untrusted_members,
 };
 use hide_sign::SigningIdentity;
 
@@ -66,6 +66,44 @@ fn a_revoked_device_can_no_longer_get_a_client() {
 
 #[test]
 fn two_devices_exchange_a_message() {
+    two_devices_exchange_a_message_impl();
+}
+
+/// §15.8 closed: a long-lived client learns of a revocation through
+/// `update`, without being rebuilt, and refuses to add the revoked device.
+#[test]
+fn a_running_client_refuses_a_device_revoked_after_it_was_built() {
+    let (mut log, laptop, phone) = identity();
+    let provider = HideIdentityProvider::new(log.membership());
+    let alice = client_with_provider(provider.clone(), &laptop).unwrap();
+    let bob = client_for(&log.membership(), &phone).unwrap();
+    let kp = bob
+        .generate_key_package_message(Default::default(), Default::default(), None)
+        .unwrap();
+
+    log.revoke(&laptop, device_id(&phone.verifying_key()))
+        .unwrap();
+    provider.update(log.membership());
+    assert!(
+        !provider
+            .membership()
+            .contains(&device_id(&phone.verifying_key()))
+    );
+
+    let mut group = alice
+        .create_group(Default::default(), Default::default(), None)
+        .unwrap();
+    let added = group
+        .commit_builder()
+        .add_member(kp)
+        .and_then(|builder| builder.build());
+    assert!(
+        added.is_err(),
+        "a revoked device was admitted by a stale client"
+    );
+}
+
+fn two_devices_exchange_a_message_impl() {
     let (log, laptop, phone) = identity();
     let alice = client_for(&log.membership(), &laptop).unwrap();
     let bob = client_for(&log.membership(), &phone).unwrap();

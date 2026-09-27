@@ -183,7 +183,7 @@ fn every_frozen_rejection_vector_is_refused() -> Result<(), Box<dyn Error>> {
         .filter(|e| e.file_name() != "rejections.txt")
         .count();
     assert_eq!(on_disk, listed, "rejections.txt and the directory disagree");
-    assert!(listed >= 30, "expected the full set of rejection vectors");
+    assert!(listed >= 32, "expected the full set of rejection vectors");
     Ok(())
 }
 

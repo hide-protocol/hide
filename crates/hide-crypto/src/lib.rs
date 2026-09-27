@@ -163,12 +163,31 @@ impl RecipientPublic {
         if SMALL_ORDER_POINTS.contains(&x25519) {
             return Err(CryptoError::DegeneratePublicKey);
         }
+        // RFC 7748 decoders mask bit 255 and reduce mod p, so a non-canonical
+        // encoding names the same point as a canonical one, including the
+        // small-order ones the list above compares by bytes (spec §9.5).
+        // No honest X25519 implementation produces such an encoding.
+        if !is_canonical_x25519(&x25519) {
+            return Err(CryptoError::DegeneratePublicKey);
+        }
         Ok(public)
     }
 
     pub fn to_bytes(&self) -> Vec<u8> {
         self.0.to_bytes().to_vec()
     }
+}
+
+/// Whether a little-endian X25519 u-coordinate is in canonical form: bit 255
+/// clear and the value below p = 2^255 - 19. With bit 255 clear the only
+/// non-canonical values are p ..= 2^255 - 1, i.e. `ed..ff ff..ff 7f`.
+fn is_canonical_x25519(bytes: &[u8; 32]) -> bool {
+    if bytes[31] & 0x80 != 0 {
+        return false;
+    }
+    let at_least_p =
+        bytes[31] == 0x7f && bytes[1..31].iter().all(|&byte| byte == 0xff) && bytes[0] >= 0xed;
+    !at_least_p
 }
 
 /// Suite-1 encapsulation and authenticated encryption of a 32-byte CEK.
@@ -581,6 +600,65 @@ mod tests {
         }
         assert!(RecipientPublic::from_bytes(&genuine[..1215]).is_err());
         assert!(RecipientPublic::from_bytes(&[]).is_err());
+        Ok(())
+    }
+
+    /// §15.7 closed: the small-order list compares bytes, so the same points
+    /// with bit 255 set, or reduced values >= p, used to pass it.
+    #[test]
+    fn rejects_non_canonical_x25519_encodings() -> Result<(), CryptoError> {
+        let genuine = RecipientSecret::from_bytes(&[0x21; 32])?
+            .public_key()?
+            .to_bytes();
+        let mut high_bit_genuine = genuine.clone();
+        high_bit_genuine[1215] |= 0x80;
+        let mut p_minus_one = [0xff_u8; 32];
+        p_minus_one[0] = 0xec;
+        p_minus_one[31] = 0x7f;
+
+        let mut cases: Vec<[u8; 32]> = Vec::new();
+        for point in SMALL_ORDER_POINTS {
+            let mut high = point;
+            high[31] |= 0x80;
+            cases.push(high);
+        }
+        for low in [0xed_u8, 0xee, 0xef, 0xf0, 0xfe, 0xff] {
+            let mut value = p_minus_one;
+            value[0] = low;
+            cases.push(value);
+        }
+        for x25519 in cases {
+            let mut bytes = genuine.clone();
+            bytes[X25519_OFFSET..].copy_from_slice(&x25519);
+            assert!(
+                matches!(
+                    RecipientPublic::from_bytes(&bytes),
+                    Err(CryptoError::DegeneratePublicKey)
+                ),
+                "accepted non-canonical {x25519:02x?}"
+            );
+        }
+        assert!(matches!(
+            RecipientPublic::from_bytes(&high_bit_genuine),
+            Err(CryptoError::DegeneratePublicKey)
+        ));
+        // p - 1 is canonical (and small-order, refused by the list); the
+        // boundary must sit exactly at p.
+        assert!(is_canonical_x25519(&p_minus_one));
+        let mut p = p_minus_one;
+        p[0] = 0xed;
+        assert!(!is_canonical_x25519(&p));
+        Ok(())
+    }
+
+    /// Every honestly generated key is canonical, so the new rule cannot
+    /// refuse a real recipient.
+    #[test]
+    fn generated_keys_are_always_canonical() -> Result<(), CryptoError> {
+        for _ in 0..256 {
+            let public = RecipientSecret::generate()?.public_key()?.to_bytes();
+            RecipientPublic::from_bytes(&public)?;
+        }
         Ok(())
     }
 

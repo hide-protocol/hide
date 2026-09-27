@@ -6,6 +6,8 @@
 *.test-secret binary
 *.test-public binary
 conformance/vectors/*.txt binary
+# Signed checkpoint notes are LF text, but hashed byte for byte.
+*.note binary
 
 Cargo.lock linguist-generated
 conformance/node/pnpm-lock.yaml linguist-generated

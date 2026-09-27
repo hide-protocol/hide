@@ -186,6 +186,16 @@ export const fns = {
   transparencyVerifyConsistency: lib.func(
     "int32_t hide_transparency_verify_consistency(uint64_t old_size, uint64_t new_size, const uint8_t *path, size_t path_len, const uint8_t *old_root, size_t old_root_len, const uint8_t *new_root, size_t new_root_len)",
   ),
+
+  identityVerifyPinned: lib.func(
+    "int32_t hide_identity_verify_pinned(const uint8_t *log, size_t log_len, const uint8_t *recovery_binding, size_t recovery_binding_len, const uint8_t *pinned_root, size_t pinned_root_len, _Out_ size_t *devices)",
+  ),
+  epochVerifyBound: lib.func(
+    "int32_t hide_epoch_verify_bound(const uint8_t *log, size_t log_len, const uint8_t *recovery_binding, size_t recovery_binding_len, const uint8_t *pinned_root, size_t pinned_root_len, const uint8_t *chain, size_t chain_len, const uint8_t *epoch_binding, size_t epoch_binding_len, _Out_ size_t *epochs)",
+  ),
+  checkpointVerify: lib.func(
+    "int32_t hide_checkpoint_verify(const uint8_t *note, size_t note_len, const char *origin, const uint8_t *log_public, size_t log_public_len, _Out_ uint64_t *size, _Out_ HideBuffer *root)",
+  ),
 };
 
 export { koffi };

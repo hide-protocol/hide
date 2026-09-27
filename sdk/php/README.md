@@ -124,11 +124,19 @@ written before signatures existed carries no signing seed and throws
 | `Hide::epochPublicKey($chain, int $epoch)` | the public key to encrypt to for `$epoch` |
 | `Hide::verifyInclusion($leaf, int $index, int $size, $path, $root)` | `void` |
 | `Hide::verifyConsistency(int $oldSize, int $newSize, $path, $oldRoot, $newRoot)` | `void` |
+| `Hide::verifyIdentityPinned($log, $recoveryBinding, $pinnedRoot)` | `int` — devices trusted, after checking the log against the 32-byte root you pinned |
+| `Hide::verifyEpochChainBound($log, $recoveryBinding, $pinnedRoot, $chain, $epochBinding)` | `int` — epochs held, after proving the chain belongs to that identity |
+| `Hide::verifyCheckpoint($note, string $origin, $logPublic)` | `['size' => int, 'root' => string]` — tree size and 32-byte root of a signed checkpoint note |
 
 A cryptographic verify **throws** on failure (`MalformedException` if the bytes
 did not decode, `AuthenticationException` if they decoded but did not verify)
 and never returns `false`. The one boolean is `identityTrustsDevice`: the log
 is verified first, so `false` means "not a member", never "did not verify".
+
+`verifyIdentityPinned` is the relying-party check (spec §16): a recovery key
+taken from the same untrusted source as the log cannot catch a Recover appended
+under a stranger's key, but a `$recoveryBinding` checked against a root you
+trust out of band does.
 
 ## Native library
 

@@ -48,7 +48,11 @@
 //
 // VerifyIdentity, IdentityTrustsDevice, IdentityHead, VerifyEpochChain,
 // EpochPublicKey, VerifyInclusion and VerifyConsistency verify the structures
-// published by the identity, epoch and transparency subsystems. Every
+// published by the identity, epoch and transparency subsystems.
+// VerifyIdentityPinned, VerifyEpochChainBound and VerifyCheckpoint are the
+// relying-party checks: the log is the identity whose root was pinned out of
+// band, the epoch chain was signed by a device it trusts, and a checkpoint
+// was signed by the named log. Every
 // cryptographic check reports failure through its error return; the only
 // boolean, IdentityTrustsDevice, is a membership query answered after the log
 // has already verified.

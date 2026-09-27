@@ -116,3 +116,94 @@ func TestAConsistencyProofCatchesARewrittenHistory(t *testing.T) {
 		t.Fatalf("a rewritten history gave %v, want ErrAuthentication", err)
 	}
 }
+
+func TestAPinnedIdentityVerifiesAgainstItsRoot(t *testing.T) {
+	devices, err := VerifyIdentityPinned(bindingIdentityLog, bindingRecovery, bindingRoot)
+	if err != nil {
+		t.Fatalf("a genuine pinned log did not verify: %v", err)
+	}
+	if devices != 2 {
+		t.Fatalf("the pinned log trusts %d devices, want 2", devices)
+	}
+}
+
+func TestAHijackedIdentityIsRefused(t *testing.T) {
+	// A Recover appended under a stranger's key, with the genuine binding and
+	// with one forged for the stranger.
+	for name, binding := range map[string][]byte{
+		"genuine binding": bindingRecovery,
+		"forged binding":  bindingRecoveryForged,
+	} {
+		_, err := VerifyIdentityPinned(bindingHijackedLog, binding, bindingRoot)
+		if !errors.Is(err, ErrAuthentication) {
+			t.Fatalf("a hijacked log with the %s gave %v, want ErrAuthentication", name, err)
+		}
+	}
+}
+
+func TestAnotherRootIsRefused(t *testing.T) {
+	_, err := VerifyIdentityPinned(bindingIdentityLog, bindingRecovery, make([]byte, 32))
+	if !errors.Is(err, ErrAuthentication) {
+		t.Fatalf("a different pinned root gave %v, want ErrAuthentication", err)
+	}
+}
+
+func TestATruncatedRecoveryBindingIsMalformed(t *testing.T) {
+	_, err := VerifyIdentityPinned(bindingIdentityLog, bindingRecovery[:100], bindingRoot)
+	if !errors.Is(err, ErrMalformed) {
+		t.Fatalf("a truncated binding gave %v, want ErrMalformed", err)
+	}
+}
+
+func TestAnEpochChainBoundToThePinnedIdentityVerifies(t *testing.T) {
+	epochs, err := VerifyEpochChainBound(
+		bindingIdentityLog, bindingRecovery, bindingRoot, epochChain, bindingEpoch)
+	if err != nil {
+		t.Fatalf("a genuinely bound chain did not verify: %v", err)
+	}
+	if epochs != 3 {
+		t.Fatalf("the bound chain holds %d epochs, want 3", epochs)
+	}
+}
+
+func TestAnEpochChainSignedByAStrangerIsRefused(t *testing.T) {
+	_, err := VerifyEpochChainBound(
+		bindingIdentityLog, bindingRecovery, bindingRoot, epochChain, bindingEpochStranger)
+	if !errors.Is(err, ErrAuthentication) {
+		t.Fatalf("a stranger's binding gave %v, want ErrAuthentication", err)
+	}
+}
+
+func TestACheckpointYieldsItsSizeAndRoot(t *testing.T) {
+	size, root, err := VerifyCheckpoint(checkpoint3, "log.example/hide", checkpointLogKey)
+	if err != nil {
+		t.Fatalf("a genuine checkpoint did not verify: %v", err)
+	}
+	if size != 3 {
+		t.Fatalf("the checkpoint size is %d, want 3", size)
+	}
+	if len(root) != 32 {
+		t.Fatalf("the checkpoint root is %d bytes, want 32", len(root))
+	}
+}
+
+func TestACheckpointIsRefusedUnlessEverythingMatches(t *testing.T) {
+	cases := []struct {
+		name   string
+		note   []byte
+		origin string
+		key    []byte
+	}{
+		{"a tampered note", checkpointTampered, "log.example/hide", checkpointLogKey},
+		{"another origin", checkpoint3, "other.example", checkpointLogKey},
+		{"a witness key", checkpoint3, "log.example/hide", checkpointWitnessKey},
+	}
+	for _, c := range cases {
+		if _, _, err := VerifyCheckpoint(c.note, c.origin, c.key); !errors.Is(err, ErrAuthentication) {
+			t.Fatalf("%s gave %v, want ErrAuthentication", c.name, err)
+		}
+	}
+	if _, _, err := VerifyCheckpoint(checkpoint3, "log.example/hide\x00", checkpointLogKey); !errors.Is(err, ErrInvalidArgument) {
+		t.Fatalf("an origin with a NUL gave %v, want ErrInvalidArgument", err)
+	}
+}

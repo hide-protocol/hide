@@ -8,6 +8,8 @@ import "C"
 
 import (
 	"runtime"
+	"strings"
+	"unsafe"
 )
 
 // VerifyIdentity replays an identity log and reports how many devices it
@@ -73,12 +75,63 @@ func IdentityHead(log, recoveryKey []byte) ([]byte, error) {
 	return take(&out), nil
 }
 
+// VerifyIdentityPinned verifies a log as a relying party: its root must equal
+// pinnedRoot, the 32-byte identity root trusted out of band, and
+// recoveryBinding establishes the recovery key, so a Recover appended under a
+// stranger's key does not verify.
+//
+// Errors follow VerifyIdentity: ErrMalformed for bytes that do not decode,
+// ErrAuthentication for a log that is not this identity's.
+func VerifyIdentityPinned(log, recoveryBinding, pinnedRoot []byte) (int, error) {
+	var devices C.size_t
+	code := C.hide_identity_verify_pinned(
+		bytePointer(log), C.size_t(len(log)),
+		bytePointer(recoveryBinding), C.size_t(len(recoveryBinding)),
+		bytePointer(pinnedRoot), C.size_t(len(pinnedRoot)),
+		&devices,
+	)
+	runtime.KeepAlive(log)
+	runtime.KeepAlive(recoveryBinding)
+	runtime.KeepAlive(pinnedRoot)
+	if err := status(code); err != nil {
+		return 0, err
+	}
+	return int(devices), nil
+}
+
 // VerifyEpochChain verifies a published epoch history and reports how many
 // epochs it holds.
 func VerifyEpochChain(chain []byte) (int, error) {
 	var epochs C.size_t
 	code := C.hide_epoch_verify(bytePointer(chain), C.size_t(len(chain)), &epochs)
 	runtime.KeepAlive(chain)
+	if err := status(code); err != nil {
+		return 0, err
+	}
+	return int(epochs), nil
+}
+
+// VerifyEpochChainBound verifies an epoch chain AND that it belongs to the
+// pinned identity: epochBinding must be signed, over this chain, by a device
+// the log trusts now. It reports how many epochs the chain holds.
+//
+// A chain that verifies on its own proves only that it is self-consistent;
+// anyone can publish one. This is the check that says whose it is.
+func VerifyEpochChainBound(log, recoveryBinding, pinnedRoot, chain, epochBinding []byte) (int, error) {
+	var epochs C.size_t
+	code := C.hide_epoch_verify_bound(
+		bytePointer(log), C.size_t(len(log)),
+		bytePointer(recoveryBinding), C.size_t(len(recoveryBinding)),
+		bytePointer(pinnedRoot), C.size_t(len(pinnedRoot)),
+		bytePointer(chain), C.size_t(len(chain)),
+		bytePointer(epochBinding), C.size_t(len(epochBinding)),
+		&epochs,
+	)
+	runtime.KeepAlive(log)
+	runtime.KeepAlive(recoveryBinding)
+	runtime.KeepAlive(pinnedRoot)
+	runtime.KeepAlive(chain)
+	runtime.KeepAlive(epochBinding)
 	if err := status(code); err != nil {
 		return 0, err
 	}
@@ -134,4 +187,35 @@ func VerifyConsistency(oldSize, newSize uint64, path, oldRoot, newRoot []byte) e
 	runtime.KeepAlive(oldRoot)
 	runtime.KeepAlive(newRoot)
 	return status(code)
+}
+
+// VerifyCheckpoint verifies a C2SP signed checkpoint note from the log named
+// origin, signed with HIDE-Sign under logPublicKey, and returns the tree size
+// and the 32-byte root it commits to.
+//
+// A note signed by any other key — a witness, say — or naming another origin
+// returns ErrAuthentication; nothing is returned from a note that did not
+// verify.
+func VerifyCheckpoint(note []byte, origin string, logPublicKey []byte) (uint64, []byte, error) {
+	// C.CString would silently truncate at an embedded NUL and check a
+	// different origin from the one the caller named.
+	if strings.IndexByte(origin, 0) >= 0 {
+		return 0, nil, ErrInvalidArgument
+	}
+	cOrigin := C.CString(origin)
+	defer C.free(unsafe.Pointer(cOrigin))
+	var size C.uint64_t
+	var root C.HideBuffer = C.hide_buffer_empty()
+	code := C.hide_checkpoint_verify(
+		bytePointer(note), C.size_t(len(note)),
+		cOrigin,
+		bytePointer(logPublicKey), C.size_t(len(logPublicKey)),
+		&size, &root,
+	)
+	runtime.KeepAlive(note)
+	runtime.KeepAlive(logPublicKey)
+	if err := status(code); err != nil {
+		return 0, nil, err
+	}
+	return uint64(size), take(&root), nil
 }

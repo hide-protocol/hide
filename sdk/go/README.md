@@ -129,10 +129,13 @@ existed carries no signing seed and returns `ErrNotAKey`.
 | `VerifyIdentity(log, recoveryKey)` | `(int, error)` — how many devices the log trusts now |
 | `IdentityTrustsDevice(log, recoveryKey, devicePublicKey)` | `(bool, error)` — membership, after verifying the log |
 | `IdentityHead(log, recoveryKey)` | `([]byte, error)` — 32 bytes naming this exact history |
+| `VerifyIdentityPinned(log, recoveryBinding, pinnedRoot)` | `(int, error)` — devices trusted now, only if the log is the pinned identity |
 | `VerifyEpochChain(chain)` | `(int, error)` — how many epochs it holds |
+| `VerifyEpochChainBound(log, recoveryBinding, pinnedRoot, chain, epochBinding)` | `(int, error)` — epochs, only if a device the pinned log trusts signed this chain |
 | `EpochPublicKey(chain, epoch uint64)` | `([]byte, error)` — the key to encrypt to for `epoch` |
 | `VerifyInclusion(leaf, index, size, path, root)` | `error` |
 | `VerifyConsistency(oldSize, newSize, path, oldRoot, newRoot)` | `error` |
+| `VerifyCheckpoint(note, origin, logPublicKey)` | `(uint64, []byte, error)` — tree size and 32-byte root of a signed checkpoint |
 
 A cryptographic verify returns a non-nil `error` on failure (`ErrMalformed` if
 the bytes did not decode, `ErrAuthentication` if they decoded but did not

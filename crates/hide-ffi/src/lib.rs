@@ -662,6 +662,10 @@ pub unsafe extern "C" fn hide_signing_identity_free(identity: *mut HideSigningId
 /// purpose must not verify as another. Bindings should pass the same context
 /// they will verify with, and never let a remote party choose it.
 ///
+/// Contexts beginning with `HIDE/` are reserved for the protocol and refused
+/// with `HIDE_ERR_INVALID_ARGUMENT`: signing one here would hand the caller an
+/// identity-log entry, MLS binding or container signature (spec §15.2).
+///
 /// # Safety
 /// All pointers must be valid for the stated lengths.
 #[unsafe(no_mangle)]
@@ -684,7 +688,9 @@ pub unsafe extern "C" fn hide_sign_message(
             return HIDE_ERR_INVALID_ARGUMENT;
         };
         let identity = unsafe { &*identity };
-        let signature = identity.0.sign(context, message);
+        let Ok(signature) = identity.0.sign_application(context, message) else {
+            return HIDE_ERR_INVALID_ARGUMENT;
+        };
         unsafe { *out = HideBuffer::from_vec(signature.to_vec()) };
         HIDE_OK
     })
@@ -1160,11 +1166,331 @@ pub unsafe extern "C" fn hide_transparency_verify_consistency(
         }
     })
 }
+
+// ---------------------------------------------------------------------------
+// Relying-party checks (spec §16)
+// ---------------------------------------------------------------------------
+
+/// Largest signed checkpoint note accepted (spec §16.2).
+const MAX_NOTE_BYTES: usize = hide_transparency::MAX_NOTE_BYTES;
+
+/// Decodes a log and verifies it under the recovery key named by `binding`,
+/// after checking that binding against the pinned 32-byte identity root.
+unsafe fn pinned_log(
+    log: *const u8,
+    log_len: usize,
+    binding: *const u8,
+    binding_len: usize,
+    root: *const u8,
+    root_len: usize,
+) -> Result<hide_identity::IdentityLog, i32> {
+    let (Some(log_bytes), Some(binding_bytes), Some(root_bytes)) = (
+        unsafe { borrow(log, log_len, MAX_LOG_BYTES) },
+        unsafe { borrow(binding, binding_len, hide_identity::RECOVERY_BINDING_LENGTH) },
+        unsafe { borrow(root, root_len, 32) },
+    ) else {
+        return Err(HIDE_ERR_INVALID_ARGUMENT);
+    };
+    let Ok(pinned) = <[u8; 32]>::try_from(root_bytes) else {
+        return Err(HIDE_ERR_INVALID_ARGUMENT);
+    };
+    let binding =
+        hide_identity::RecoveryBinding::decode(binding_bytes).map_err(|_| HIDE_ERR_MALFORMED)?;
+    let entries = hide_identity::decode(log_bytes).map_err(|_| HIDE_ERR_MALFORMED)?;
+    binding
+        .verify_pinned(entries, &pinned)
+        .map_err(|_| HIDE_ERR_AUTHENTICATION)
+}
+
+/// Verifies an identity log whose recovery key is established by a recovery
+/// binding, against the identity root the caller pinned (spec §16.1). This is
+/// the check that defeats an appended Recover under an attacker's key; a bare
+/// `hide_identity_verify` with a recovery key taken from the same untrusted
+/// source does not.
+///
+/// # Safety
+/// All pointers must be valid for the stated lengths.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn hide_identity_verify_pinned(
+    log: *const u8,
+    log_len: usize,
+    recovery_binding: *const u8,
+    recovery_binding_len: usize,
+    pinned_root: *const u8,
+    pinned_root_len: usize,
+    out_devices: *mut usize,
+) -> i32 {
+    guard(|| {
+        if out_devices.is_null() {
+            return HIDE_ERR_INVALID_ARGUMENT;
+        }
+        match unsafe {
+            pinned_log(
+                log,
+                log_len,
+                recovery_binding,
+                recovery_binding_len,
+                pinned_root,
+                pinned_root_len,
+            )
+        } {
+            Ok(log) => {
+                unsafe { *out_devices = log.membership().len() };
+                HIDE_OK
+            }
+            Err(code) => code,
+        }
+    })
+}
+
+/// Verifies that an epoch chain belongs to a pinned identity: the log through
+/// its recovery binding, then the epoch binding against the log's current
+/// membership and the exact chain (spec §16.4). `out_epochs` receives the
+/// chain length.
+///
+/// # Safety
+/// All pointers must be valid for the stated lengths.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn hide_epoch_verify_bound(
+    log: *const u8,
+    log_len: usize,
+    recovery_binding: *const u8,
+    recovery_binding_len: usize,
+    pinned_root: *const u8,
+    pinned_root_len: usize,
+    chain: *const u8,
+    chain_len: usize,
+    epoch_binding: *const u8,
+    epoch_binding_len: usize,
+    out_epochs: *mut usize,
+) -> i32 {
+    guard(|| {
+        if out_epochs.is_null() {
+            return HIDE_ERR_INVALID_ARGUMENT;
+        }
+        let (Some(chain_bytes), Some(binding_bytes)) =
+            (unsafe { borrow(chain, chain_len, MAX_LOG_BYTES) }, unsafe {
+                borrow(
+                    epoch_binding,
+                    epoch_binding_len,
+                    hide_identity::EPOCH_BINDING_LENGTH,
+                )
+            })
+        else {
+            return HIDE_ERR_INVALID_ARGUMENT;
+        };
+        let log = match unsafe {
+            pinned_log(
+                log,
+                log_len,
+                recovery_binding,
+                recovery_binding_len,
+                pinned_root,
+                pinned_root_len,
+            )
+        } {
+            Ok(log) => log,
+            Err(code) => return code,
+        };
+        let (Ok(records), Ok(binding)) = (
+            hide_epoch::decode_records(chain_bytes),
+            hide_identity::EpochBinding::decode(binding_bytes),
+        ) else {
+            return HIDE_ERR_MALFORMED;
+        };
+        if binding.verify(&log, &records).is_err() {
+            return HIDE_ERR_AUTHENTICATION;
+        }
+        unsafe { *out_epochs = records.len() };
+        HIDE_OK
+    })
+}
+
+/// Verifies a signed checkpoint note (spec §16.2) from the log named `origin`
+/// under `log_public` (1984 bytes). On success writes the tree size and the
+/// 32-byte root. Witness cosignatures are ignored here; use the Rust API to
+/// demand a witness threshold.
+///
+/// # Safety
+/// All pointers must be valid for the stated lengths; `origin` must be a
+/// NUL-terminated string.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn hide_checkpoint_verify(
+    note: *const u8,
+    note_len: usize,
+    origin: *const c_char,
+    log_public: *const u8,
+    log_public_len: usize,
+    out_size: *mut u64,
+    out_root: *mut HideBuffer,
+) -> i32 {
+    guard(|| {
+        if out_size.is_null() || out_root.is_null() || origin.is_null() {
+            return HIDE_ERR_INVALID_ARGUMENT;
+        }
+        let (Some(note), Some(key)) = (unsafe { borrow(note, note_len, MAX_NOTE_BYTES) }, unsafe {
+            borrow(log_public, log_public_len, MAX_KEY_FILE)
+        }) else {
+            return HIDE_ERR_INVALID_ARGUMENT;
+        };
+        let Ok(origin) = unsafe { CStr::from_ptr(origin) }.to_str() else {
+            return HIDE_ERR_INVALID_ARGUMENT;
+        };
+        let Ok(key) = hide_sign::VerifyingIdentity::from_bytes(key) else {
+            return HIDE_ERR_NOT_A_KEY;
+        };
+        match hide_transparency::Checkpoint::verify(note, origin, &key) {
+            Ok(checkpoint) => {
+                unsafe {
+                    *out_size = checkpoint.size;
+                    *out_root = HideBuffer::from_vec(checkpoint.root.to_vec());
+                }
+                HIDE_OK
+            }
+            Err(hide_transparency::LogError::Malformed) => HIDE_ERR_MALFORMED,
+            Err(_) => HIDE_ERR_AUTHENTICATION,
+        }
+    })
+}
 #[cfg(test)]
 mod tests {
     use std::ffi::CString;
 
     use super::*;
+
+    fn subsystem(name: &str) -> Vec<u8> {
+        std::fs::read(
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("../../conformance/vectors/subsystems")
+                .join(name),
+        )
+        .expect("frozen vector")
+    }
+
+    /// §16.1 through the C ABI, on the frozen vectors including the hijack.
+    #[test]
+    fn a_pinned_identity_verifies_and_the_hijack_does_not() {
+        let (log, hijacked, binding, forged, root) = (
+            subsystem("binding-identity-log.bin"),
+            subsystem("binding-hijacked-log.bin"),
+            subsystem("binding-recovery.bin"),
+            subsystem("binding-recovery-forged.bin"),
+            subsystem("binding-root.bin"),
+        );
+        let call = |log: &[u8], binding: &[u8], root: &[u8]| {
+            let mut devices = 0usize;
+            let code = unsafe {
+                hide_identity_verify_pinned(
+                    log.as_ptr(),
+                    log.len(),
+                    binding.as_ptr(),
+                    binding.len(),
+                    root.as_ptr(),
+                    root.len(),
+                    &mut devices,
+                )
+            };
+            (code, devices)
+        };
+        assert_eq!(call(&log, &binding, &root), (HIDE_OK, 2));
+        assert_eq!(call(&hijacked, &binding, &root).0, HIDE_ERR_AUTHENTICATION);
+        assert_eq!(call(&hijacked, &forged, &root).0, HIDE_ERR_AUTHENTICATION);
+        assert_eq!(call(&log, &binding, &[0u8; 32]).0, HIDE_ERR_AUTHENTICATION);
+        assert_eq!(call(&log, &binding[..100], &root).0, HIDE_ERR_MALFORMED);
+        assert_eq!(
+            call(&log, &binding, &root[..31]).0,
+            HIDE_ERR_INVALID_ARGUMENT
+        );
+    }
+
+    #[test]
+    fn a_bound_epoch_chain_verifies_and_a_stranger_binding_does_not() {
+        let (log, binding, root, chain) = (
+            subsystem("binding-identity-log.bin"),
+            subsystem("binding-recovery.bin"),
+            subsystem("binding-root.bin"),
+            subsystem("epoch-chain.bin"),
+        );
+        let call = |epoch_binding: &[u8], chain: &[u8]| {
+            let mut epochs = 0usize;
+            let code = unsafe {
+                hide_epoch_verify_bound(
+                    log.as_ptr(),
+                    log.len(),
+                    binding.as_ptr(),
+                    binding.len(),
+                    root.as_ptr(),
+                    root.len(),
+                    chain.as_ptr(),
+                    chain.len(),
+                    epoch_binding.as_ptr(),
+                    epoch_binding.len(),
+                    &mut epochs,
+                )
+            };
+            (code, epochs)
+        };
+        assert_eq!(call(&subsystem("binding-epoch.bin"), &chain), (HIDE_OK, 3));
+        assert_eq!(
+            call(&subsystem("binding-epoch-stranger.bin"), &chain).0,
+            HIDE_ERR_AUTHENTICATION
+        );
+        assert_eq!(
+            call(
+                &subsystem("binding-epoch.bin"),
+                &subsystem("epoch-broken.bin")
+            )
+            .0,
+            HIDE_ERR_AUTHENTICATION
+        );
+    }
+
+    #[test]
+    fn a_signed_checkpoint_verifies_through_the_abi() {
+        let key = subsystem("checkpoint-log-key.bin");
+        let origin = CString::new("log.example/hide").unwrap();
+        let call = |note: &[u8], origin: &CString, key: &[u8]| {
+            let mut size = 0u64;
+            let mut root = hide_buffer_empty();
+            let code = unsafe {
+                hide_checkpoint_verify(
+                    note.as_ptr(),
+                    note.len(),
+                    origin.as_ptr(),
+                    key.as_ptr(),
+                    key.len(),
+                    &mut size,
+                    &mut root,
+                )
+            };
+            let len = root.len;
+            unsafe { hide_buffer_free(&mut root) };
+            (code, size, len)
+        };
+        assert_eq!(
+            call(&subsystem("checkpoint-3.note"), &origin, &key),
+            (HIDE_OK, 3, 32)
+        );
+        assert_eq!(
+            call(&subsystem("checkpoint-tampered.note"), &origin, &key).0,
+            HIDE_ERR_AUTHENTICATION
+        );
+        let other = CString::new("other.example").unwrap();
+        assert_eq!(
+            call(&subsystem("checkpoint-3.note"), &other, &key).0,
+            HIDE_ERR_AUTHENTICATION
+        );
+        assert_eq!(
+            call(
+                &subsystem("checkpoint-3.note"),
+                &origin,
+                &subsystem("checkpoint-witness-key.bin")
+            )
+            .0,
+            HIDE_ERR_AUTHENTICATION
+        );
+        assert_eq!(call(b"not a note", &origin, &key).0, HIDE_ERR_MALFORMED);
+    }
 
     /// Drives the API exactly as a C caller would, pointers and all.
     unsafe fn keypair() -> (*mut HideSecretKey, HideBuffer) {
@@ -1508,7 +1834,7 @@ mod tests {
             assert_eq!(hide_signing_identity_public(identity, &mut public), HIDE_OK);
             assert_eq!(public.len, HIDE_VERIFYING_KEY_LEN);
 
-            let context = b"HIDE/0.5 ffi test";
+            let context = b"example/ffi test";
             let message = b"the message that crossed the boundary";
             let mut signature = hide_buffer_empty();
             assert_eq!(
@@ -1540,7 +1866,7 @@ mod tests {
 
             // A different context must not verify, or the separation the C API
             // advertises would be decorative.
-            let other = b"HIDE/0.5 something else";
+            let other = b"example/something else";
             assert_eq!(
                 hide_verify_message(
                     public.data,
@@ -1569,6 +1895,28 @@ mod tests {
                 ),
                 HIDE_ERR_AUTHENTICATION
             );
+
+            // §15.2: the generic API must not mint protocol signatures.
+            for reserved in [
+                &b"HIDE/0.6 identity entry"[..],
+                b"HIDE/1.0 container",
+                b"HIDE/",
+            ] {
+                let mut refused = hide_buffer_empty();
+                assert_eq!(
+                    hide_sign_message(
+                        identity,
+                        reserved.as_ptr(),
+                        reserved.len(),
+                        message.as_ptr(),
+                        message.len(),
+                        &mut refused,
+                    ),
+                    HIDE_ERR_INVALID_ARGUMENT,
+                    "signed under reserved context {reserved:?}"
+                );
+                assert_eq!(refused.len, 0);
+            }
 
             hide_buffer_free(&mut signature);
             hide_buffer_free(&mut public);

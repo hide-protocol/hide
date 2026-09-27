@@ -103,11 +103,19 @@ written before signatures existed carries no signing seed and raises
 | `Hide.epoch_public_key(chain, epoch)` | the public key to encrypt to for `epoch` |
 | `Hide.verify_inclusion(leaf, index, size, path, root)` | `nil` |
 | `Hide.verify_consistency(old_size, new_size, path, old_root, new_root)` | `nil` |
+| `Hide.verify_identity_pinned(log, recovery_binding, pinned_root)` | `Integer` — devices trusted, after checking the log against the 32-byte root you pinned |
+| `Hide.verify_epoch_chain_bound(log, recovery_binding, pinned_root, chain, epoch_binding)` | `Integer` — epochs held, after proving the chain belongs to that identity |
+| `Hide.verify_checkpoint(note, origin, log_public)` | `[size, root]` — tree size and 32-byte root of a signed checkpoint note |
 
 A cryptographic verify **raises** on failure (`MalformedError` if the bytes did
 not decode, `AuthenticationError` if they decoded but did not verify) and never
 returns `false`. The one boolean is `identity_trusts_device`: the log is
 verified first, so `false` means "not a member", never "did not verify".
+
+`verify_identity_pinned` is the relying-party check (spec §16): a recovery key
+taken from the same untrusted source as the log cannot catch a Recover appended
+under a stranger's key, but a `recovery_binding` checked against a root you
+trust out of band does.
 
 ## Native library
 
