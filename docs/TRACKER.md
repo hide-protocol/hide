@@ -6,7 +6,7 @@ one-screen summary. Update both in the same commit as the work they describe.
 A row that claims DONE without a verifying command in its Evidence column is not
 done.
 
-## What exists at 0.9.0
+## What exists at 0.9.0 (published 2026-09-27 to every registry)
 
 - **Format release candidate**: the wire in `spec/hide-1.md` is frozen from
   0.9.0 (security fixes only before 1.0). Critical flags (SIGNED 0x01), minor
