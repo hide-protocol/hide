@@ -6,7 +6,7 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: write
+  contents: read
 
 concurrency:
   group: release-${{ github.ref }}
@@ -238,6 +238,13 @@ jobs:
     # after whatever branch it ran on.
     if: startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-24.04
+    # Only this job writes: the release itself (contents), and a keyless
+    # Sigstore provenance attestation (id-token for the short-lived OIDC
+    # certificate, attestations to store it). No secret exists or is needed.
+    permissions:
+      contents: write
+      id-token: write
+      attestations: write
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
@@ -268,6 +275,36 @@ jobs:
           name: packaging-manifests
           path: dist/packaging/**
           retention-days: 30
+
+      # Provenance for exactly the files the release publishes, SHA256SUMS
+      # included. Attestations live in GitHub's attestation store, not as
+      # release assets, so the asset count does not change.
+      - uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4
+        with:
+          subject-path: |
+            dist/*.tar.gz
+            dist/*.zip
+            dist/*.exe
+            dist/*.dmg
+            dist/*.deb
+            dist/*.AppImage
+            dist/SHA256SUMS
+
+      # An attestation that does not verify is worse than none: it would teach
+      # users to ignore the failure. Verify every subject before publishing.
+      - name: Verify the attestations
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          count=0
+          for file in dist/*.tar.gz dist/*.zip dist/*.exe dist/*.dmg dist/*.deb dist/*.AppImage dist/SHA256SUMS; do
+            gh attestation verify "$file" --repo "${{ github.repository }}"
+            count=$((count + 1))
+          done
+          echo "verified $count attestations"
+          [ "$count" -gt 0 ]
 
       - uses: softprops/action-gh-release@efb35369e0ad2afab669f228072c1b0d510eae64 # v3
         with:
@@ -306,3 +343,7 @@ jobs:
             The wire format may change while the version is 0.x.
 
             Verify a download against `SHA256SUMS` before running it.
+            Every asset also carries a GitHub build-provenance attestation:
+            `gh attestation verify <file> --repo ${{ github.repository }}`
+            proves it was built by this repository's release workflow at
+            this tag's commit. It does not prove the code is correct.

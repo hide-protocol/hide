@@ -10,8 +10,8 @@ use clap::{Parser, Subcommand};
 use hide_crypto::{RecipientPublic, RecipientSecret};
 use hide_epoch::EpochChain;
 use hide_identity::IdentityLog;
-use hide_keyring::{Identity, KeyFormat, KeyPurpose, MIN_PASSPHRASE_LEN};
-use hide_object::{Metadata, SignaturePlacement};
+use hide_keyring::{EpochStore, Identity, KeyFormat, KeyPurpose, MIN_PASSPHRASE_LEN};
+use hide_object::{Metadata, ObjectError, SignaturePlacement};
 use hide_sign::{SigningIdentity, VerifyingIdentity};
 use tempfile::NamedTempFile;
 use zeroize::Zeroizing;
@@ -106,8 +106,14 @@ enum Command {
     #[command(about = "Decrypt to an explicit new file; does not launch or execute the result")]
     Open {
         input: PathBuf,
-        #[arg(long)]
-        secret: PathBuf,
+        #[arg(
+            long,
+            required_unless_present = "epoch_store",
+            conflicts_with = "epoch_store"
+        )]
+        secret: Option<PathBuf>,
+        #[arg(long, help = "Try every epoch secret held in this sealed epoch store")]
+        epoch_store: Option<PathBuf>,
         #[arg(short, long)]
         output: PathBuf,
     },
@@ -227,11 +233,40 @@ enum Command {
     EpochInit {
         #[arg(long, help = "Where to write the public epoch history")]
         output: PathBuf,
+        #[arg(long, help = "Where to write the passphrase-sealed epoch secrets")]
+        store: PathBuf,
+    },
+    #[command(about = "Start a new epoch; earlier epochs stay readable until erased")]
+    EpochAdvance {
+        #[arg(long, help = "The published epoch history, updated in place")]
+        chain: PathBuf,
+        #[arg(long, help = "The sealed epoch store, updated in place")]
+        store: PathBuf,
+    },
+    #[command(
+        about = "Erase one epoch's secret from the store; files encrypted to it become unreadable"
+    )]
+    EpochErase {
+        #[arg(help = "The epoch number to erase")]
+        epoch: u64,
+        #[arg(long, help = "The published epoch history")]
+        chain: PathBuf,
+        #[arg(long, help = "The sealed epoch store, rewritten without that epoch")]
+        store: PathBuf,
     },
     #[command(about = "Describe an epoch history without needing any secret")]
     EpochShow {
         #[arg(long, help = "The published epoch history")]
         chain: PathBuf,
+    },
+    #[command(about = "Write one epoch's public key, for a sender to encrypt to")]
+    EpochPublic {
+        #[arg(help = "The epoch number; defaults to the current epoch")]
+        epoch: Option<u64>,
+        #[arg(long, help = "The published epoch history")]
+        chain: PathBuf,
+        #[arg(short, long, help = "Where to write the public key")]
+        output: PathBuf,
     },
 }
 
@@ -305,13 +340,29 @@ fn run(arguments: Arguments) -> Result<()> {
             recovery,
         } => identity_revoke(&log, &secret, &device, &recovery),
         Command::IdentityShow { log, recovery } => identity_show(&log, &recovery),
-        Command::EpochInit { output } => epoch_init(&output),
+        Command::EpochInit { output, store } => epoch_init(&output, &store),
+        Command::EpochAdvance { chain, store } => epoch_advance(&chain, &store),
+        Command::EpochErase {
+            epoch,
+            chain,
+            store,
+        } => epoch_erase(epoch, &chain, &store),
         Command::EpochShow { chain } => epoch_show(&chain),
+        Command::EpochPublic {
+            epoch,
+            chain,
+            output,
+        } => epoch_public(epoch, &chain, &output),
         Command::Open {
             input,
             secret,
+            epoch_store,
             output,
-        } => open_file(&input, &secret, &output),
+        } => match (secret, epoch_store) {
+            (Some(secret), None) => open_file(&input, &secret, &output),
+            (None, Some(store)) => open_with_epoch_store(&input, &store, &output),
+            _ => Err("pass exactly one of --secret and --epoch-store".into()),
+        },
         Command::Seal {
             message,
             recipient,
@@ -654,6 +705,11 @@ fn open_file(input: &Path, secret_path: &Path, output: &Path) -> Result<()> {
     let mut buffered = BufWriter::with_capacity(IO_BUFFER, new_output(output)?);
     let verified = hide_object::decrypt_to_staging(&mut source, &mut buffered, &secret)?;
     commit_output(buffered.into_inner()?, output)?;
+    report_opened(verified);
+    Ok(())
+}
+
+fn report_opened(verified: hide_object::VerifiedObject) {
     match verified.signer {
         None => {
             eprintln!("Decrypted file written; integrity verified. Sender is not authenticated.")
@@ -666,7 +722,6 @@ fn open_file(input: &Path, secret_path: &Path, output: &Path) -> Result<()> {
             eprintln!("Check that key against one you already trust; HIDE does not.");
         }
     }
-    Ok(())
 }
 
 /// A short, comparable form of a signing key. Not a security boundary on its
@@ -1149,14 +1204,178 @@ fn identity_show(log_path: &Path, recovery: &Path) -> Result<()> {
     Ok(())
 }
 
-fn epoch_init(output: &Path) -> Result<()> {
+/// Seals whatever secrets `chain` still holds, bound to its current head.
+fn seal_chain(chain: &EpochChain, passphrase: &str) -> Result<Vec<u8>> {
+    let mut store = EpochStore::new(chain.head());
+    for (number, secret) in chain.secrets() {
+        store.insert(number, secret)?;
+    }
+    Ok(store.seal(passphrase)?)
+}
+
+fn read_epoch_store(path: &Path) -> Result<Zeroizing<Vec<u8>>> {
+    read_bounded(path, hide_keyring::epoch_store::MAX_FILE_LEN)
+}
+
+/// Opens the store and the history together and refuses any disagreement, so
+/// a store from another chain, or from before a crash, is never used silently.
+/// A crash between the two writes of `epoch-advance` leaves the store one
+/// epoch ahead of the history; that surfaces here as a head mismatch.
+fn load_epochs(chain_path: &Path, store_path: &Path, passphrase: &str) -> Result<EpochChain> {
+    let records = hide_epoch::decode_records(&read_public_file(chain_path)?)?;
+    EpochChain::verify(&records)?;
+    let store = EpochStore::open(&read_epoch_store(store_path)?, passphrase)?;
+    let head = records.last().map_or([0u8; 32], |record| record.link);
+    if store.chain_head() != head {
+        return Err(format!(
+            "{} was sealed for epoch history {}, but {} is at {}; they do not belong together",
+            store_path.display(),
+            short_hex(&store.chain_head()),
+            chain_path.display(),
+            short_hex(&head)
+        )
+        .into());
+    }
+    Ok(EpochChain::restore(records, store.into_secrets())?)
+}
+
+// Each epoch command is a thin prompt around a function that takes the
+// passphrase, so the binary only ever reads one from a terminal while the
+// unit tests below can still drive the real logic end to end.
+
+fn epoch_init(output: &Path, store_path: &Path) -> Result<()> {
+    if output == store_path {
+        return Err("the history and the store must be different files".into());
+    }
+    // Checked before prompting, so a typo costs no passphrase entry. Refusing
+    // to overwrite is what keeps `init` from destroying live epochs.
+    new_output(output)?;
+    new_output(store_path)?;
+    let passphrase = prompt_new_passphrase()?;
+    epoch_init_with(output, store_path, &passphrase)
+}
+
+fn epoch_init_with(output: &Path, store_path: &Path, passphrase: &str) -> Result<()> {
+    let mut history_file = new_output(output)?;
+    let mut store_file = new_output(store_path)?;
     let chain = EpochChain::new()?;
-    write_public_file(output, &hide_epoch::encode_records(chain.records())?)?;
+    store_file.write_all(&seal_chain(&chain, passphrase)?)?;
+    history_file.write_all(&hide_epoch::encode_records(chain.records())?)?;
+    // Store first: a history naming a key whose secret was never saved would
+    // let senders encrypt to a key nobody holds.
+    commit_output(store_file, store_path)?;
+    commit_output(history_file, output)?;
     eprintln!(
-        "Epoch 0 created. The secret exists only in this process and was not written: \
-         this command publishes the history, and a persistent store is not implemented yet."
+        "Epoch 0 created. Its secret is sealed in {}.",
+        store_path.display()
+    );
+    eprintln!("Publish {} so senders can encrypt to it.", output.display());
+    Ok(())
+}
+
+fn epoch_advance(chain_path: &Path, store_path: &Path) -> Result<()> {
+    let passphrase = prompt_passphrase("Epoch store passphrase: ")?;
+    epoch_advance_with(chain_path, store_path, &passphrase)
+}
+
+fn epoch_advance_with(chain_path: &Path, store_path: &Path, passphrase: &str) -> Result<()> {
+    let mut chain = load_epochs(chain_path, store_path, passphrase)?;
+    let number = chain.advance()?;
+    // Store before history, for the same reason as in `epoch_init_with`.
+    write_public_file(store_path, &seal_chain(&chain, passphrase)?)?;
+    write_public_file(chain_path, &hide_epoch::encode_records(chain.records())?)?;
+    eprintln!("Epoch {number} is now current. Earlier epochs stay readable until erased.");
+    Ok(())
+}
+
+fn epoch_erase(number: u64, chain_path: &Path, store_path: &Path) -> Result<()> {
+    let passphrase = prompt_passphrase("Epoch store passphrase: ")?;
+    epoch_erase_with(number, chain_path, store_path, &passphrase)
+}
+
+fn epoch_erase_with(
+    number: u64,
+    chain_path: &Path,
+    store_path: &Path,
+    passphrase: &str,
+) -> Result<()> {
+    let mut chain = load_epochs(chain_path, store_path, passphrase)?;
+    chain.public_key(number)?;
+    if number == chain.current() {
+        return Err(format!(
+            "epoch {number} is current and senders still encrypt to it; run `epoch-advance` first"
+        )
+        .into());
+    }
+    if !chain.is_readable(number) {
+        return Err(format!("epoch {number} was already erased").into());
+    }
+    chain.erase(number)?;
+    // The staged rename replaces the whole file; that replacement, not the
+    // in-memory erase, is what takes the epoch out of storage.
+    write_public_file(store_path, &seal_chain(&chain, passphrase)?)?;
+    eprintln!("Epoch {number} erased from {}.", store_path.display());
+    eprintln!(
+        "Files encrypted to it can no longer be opened with this store. Backups, snapshots \
+         and older copies of the store are outside HIDE's reach; erase those too."
     );
     Ok(())
+}
+
+fn epoch_public(number: Option<u64>, chain_path: &Path, output: &Path) -> Result<()> {
+    let records = hide_epoch::decode_records(&read_public_file(chain_path)?)?;
+    EpochChain::verify(&records)?;
+    let number = number.unwrap_or_else(|| (records.len() as u64).saturating_sub(1));
+    let public = hide_epoch::recipient_for(&records, number)?;
+    let mut staging = new_output(output)?;
+    staging.write_all(&public.to_bytes())?;
+    commit_output(staging, output)?;
+    eprintln!(
+        "Public key for epoch {number} written to {}.",
+        output.display()
+    );
+    Ok(())
+}
+
+/// Tries every held epoch, newest first. Recipient matching happens before
+/// any plaintext is written, so a non-matching epoch leaves staging empty and
+/// only the input has to be rewound.
+fn open_with_epoch_store(input: &Path, store_path: &Path, output: &Path) -> Result<()> {
+    let sealed = read_epoch_store(store_path)?;
+    let passphrase = prompt_passphrase("Epoch store passphrase: ")?;
+    let store = EpochStore::open(&sealed, &passphrase)?;
+    open_with_store(input, &store, store_path, output)
+}
+
+fn open_with_store(
+    input: &Path,
+    store: &EpochStore,
+    store_path: &Path,
+    output: &Path,
+) -> Result<()> {
+    use std::io::{Seek, SeekFrom};
+
+    let mut source = BufReader::with_capacity(IO_BUFFER, File::open(input)?);
+    let mut buffered = BufWriter::with_capacity(IO_BUFFER, new_output(output)?);
+    let held: Vec<(u64, &RecipientSecret)> = store.iter().collect();
+    for (number, secret) in held.into_iter().rev() {
+        source.seek(SeekFrom::Start(0))?;
+        match hide_object::decrypt_to_staging(&mut source, &mut buffered, secret) {
+            Ok(verified) => {
+                commit_output(buffered.into_inner()?, output)?;
+                eprintln!("Opened with epoch {number}.");
+                report_opened(verified);
+                return Ok(());
+            }
+            Err(ObjectError::NoMatchingRecipient) => continue,
+            Err(error) => return Err(error.into()),
+        }
+    }
+    Err(format!(
+        "no epoch held in {} can open this file; it may be addressed to an erased epoch",
+        store_path.display()
+    )
+    .into())
 }
 
 fn epoch_show(chain: &Path) -> Result<()> {
@@ -1171,4 +1390,219 @@ fn epoch_show(chain: &Path) -> Result<()> {
 
 fn short_hex(bytes: &[u8]) -> String {
     bytes.iter().take(8).map(|b| format!("{b:02x}")).collect()
+}
+
+/// The binary reads passphrases only from a terminal, so these drive the
+/// logic behind each epoch command directly, on real files, in the order a
+/// user would run them. `tests/identity.rs` covers the binary's own refusals.
+#[cfg(test)]
+mod epoch_tests {
+    use super::*;
+
+    const PASSPHRASE: &str = "correct horse battery";
+
+    struct Workspace {
+        directory: tempfile::TempDir,
+    }
+
+    impl Workspace {
+        fn new() -> Self {
+            let workspace = Self {
+                directory: tempfile::tempdir().expect("temp dir"),
+            };
+            epoch_init_with(
+                &workspace.path("epochs.bin"),
+                &workspace.path("epochs.store"),
+                PASSPHRASE,
+            )
+            .expect("init");
+            workspace
+        }
+
+        fn path(&self, name: &str) -> PathBuf {
+            self.directory.path().join(name)
+        }
+
+        fn advance(&self) {
+            epoch_advance_with(
+                &self.path("epochs.bin"),
+                &self.path("epochs.store"),
+                PASSPHRASE,
+            )
+            .expect("advance");
+        }
+
+        fn erase(&self, number: u64) -> Result<()> {
+            epoch_erase_with(
+                number,
+                &self.path("epochs.bin"),
+                &self.path("epochs.store"),
+                PASSPHRASE,
+            )
+        }
+
+        fn store(&self) -> EpochStore {
+            EpochStore::open(
+                &std::fs::read(self.path("epochs.store")).expect("read store"),
+                PASSPHRASE,
+            )
+            .expect("open store")
+        }
+
+        /// Encrypts `text` to one epoch, exactly as a sender would.
+        fn encrypt_to(&self, number: u64, name: &str, text: &[u8]) -> PathBuf {
+            let public = self.path(&format!("{name}.pub"));
+            epoch_public(Some(number), &self.path("epochs.bin"), &public).expect("public");
+            let plain = self.path(name);
+            std::fs::write(&plain, text).expect("write plaintext");
+            let container = self.path(&format!("{name}.hide"));
+            encrypt_file(&plain, &[public], &container, None, false).expect("encrypt");
+            container
+        }
+
+        fn open(&self, container: &Path, output: &str) -> Result<Vec<u8>> {
+            let output = self.path(output);
+            open_with_store(
+                container,
+                &self.store(),
+                &self.path("epochs.store"),
+                &output,
+            )?;
+            Ok(std::fs::read(output)?)
+        }
+    }
+
+    #[test]
+    fn init_seals_epoch_zero_and_a_later_process_opens_files_to_it() {
+        let workspace = Workspace::new();
+        let store = workspace.store();
+        assert_eq!(store.numbers().collect::<Vec<_>>(), [0]);
+        let records =
+            hide_epoch::decode_records(&std::fs::read(workspace.path("epochs.bin")).unwrap())
+                .unwrap();
+        assert_eq!(store.chain_head(), records[0].link);
+
+        let container = workspace.encrypt_to(0, "memo", b"to epoch zero");
+        assert_eq!(
+            workspace.open(&container, "memo.out").unwrap(),
+            b"to epoch zero"
+        );
+    }
+
+    #[test]
+    fn init_refuses_to_overwrite_an_existing_store() {
+        let workspace = Workspace::new();
+        let before = std::fs::read(workspace.path("epochs.store")).unwrap();
+        assert!(
+            epoch_init_with(
+                &workspace.path("other.bin"),
+                &workspace.path("epochs.store"),
+                PASSPHRASE
+            )
+            .is_err()
+        );
+        assert_eq!(
+            std::fs::read(workspace.path("epochs.store")).unwrap(),
+            before
+        );
+    }
+
+    #[test]
+    fn after_advance_both_epochs_open_and_the_newest_is_tried_first() {
+        let workspace = Workspace::new();
+        let old = workspace.encrypt_to(0, "old", b"old");
+        workspace.advance();
+        workspace.advance();
+        let new = workspace.encrypt_to(2, "new", b"new");
+
+        assert_eq!(workspace.store().numbers().collect::<Vec<_>>(), [0, 1, 2]);
+        assert_eq!(workspace.open(&old, "old.out").unwrap(), b"old");
+        assert_eq!(workspace.open(&new, "new.out").unwrap(), b"new");
+    }
+
+    #[test]
+    fn an_erased_epoch_is_gone_from_the_store_file_and_its_files_stay_shut() {
+        let workspace = Workspace::new();
+        let doomed = workspace.encrypt_to(0, "doomed", b"doomed");
+        workspace.advance();
+        let kept = workspace.encrypt_to(1, "kept", b"kept");
+        let seed = Zeroizing::new(
+            workspace
+                .store()
+                .get(0)
+                .unwrap()
+                .expose_seed_for_sealing()
+                .to_vec(),
+        );
+
+        workspace.erase(0).unwrap();
+
+        let bytes = std::fs::read(workspace.path("epochs.store")).unwrap();
+        assert!(!bytes.windows(seed.len()).any(|window| window == &seed[..]));
+        assert_eq!(workspace.store().numbers().collect::<Vec<_>>(), [1]);
+        let refused = workspace.open(&doomed, "doomed.out").unwrap_err();
+        assert!(refused.to_string().contains("erased epoch"), "{refused}");
+        assert!(
+            !workspace.path("doomed.out").exists(),
+            "left partial output"
+        );
+        assert_eq!(workspace.open(&kept, "kept.out").unwrap(), b"kept");
+    }
+
+    #[test]
+    fn the_current_epoch_and_unknown_epochs_cannot_be_erased() {
+        let workspace = Workspace::new();
+        assert!(
+            workspace
+                .erase(0)
+                .unwrap_err()
+                .to_string()
+                .contains("current")
+        );
+        workspace.advance();
+        assert!(workspace.erase(9).is_err());
+        workspace.erase(0).unwrap();
+        assert!(
+            workspace
+                .erase(0)
+                .unwrap_err()
+                .to_string()
+                .contains("already")
+        );
+    }
+
+    #[test]
+    fn a_store_from_another_history_is_refused() {
+        let ours = Workspace::new();
+        let theirs = Workspace::new();
+        std::fs::copy(theirs.path("epochs.store"), ours.path("epochs.store")).unwrap();
+        let error = epoch_advance_with(
+            &ours.path("epochs.bin"),
+            &ours.path("epochs.store"),
+            PASSPHRASE,
+        )
+        .unwrap_err();
+        assert!(
+            error.to_string().contains("do not belong together"),
+            "{error}"
+        );
+    }
+
+    #[test]
+    fn a_wrong_passphrase_changes_nothing() {
+        let workspace = Workspace::new();
+        let before = std::fs::read(workspace.path("epochs.store")).unwrap();
+        assert!(
+            epoch_advance_with(
+                &workspace.path("epochs.bin"),
+                &workspace.path("epochs.store"),
+                "wrong horse battery"
+            )
+            .is_err()
+        );
+        assert_eq!(
+            std::fs::read(workspace.path("epochs.store")).unwrap(),
+            before
+        );
+    }
 }

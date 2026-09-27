@@ -35,10 +35,39 @@ const ENTRY_CONTEXT: &[u8] = b"HIDE/0.6 identity entry";
 /// A log longer than this is refused before anything is allocated for it.
 const MAX_ENTRIES: usize = 100_000;
 
-/// Smallest plausible CBOR encoding of one entry: a 6-element array header
-/// plus six minimal items. Only used to bound a pre-reservation, so an
-/// underestimate is safe.
-const MIN_ENTRY_BYTES: usize = 7;
+/// Smallest plausible CBOR encoding of one entry: an array header plus seven
+/// minimal items. Only used to bound a pre-reservation, so an underestimate
+/// is safe.
+const MIN_ENTRY_BYTES: usize = 8;
+
+/// Items in one encoded entry: sequence, tag, payload, label, signer, link,
+/// signature.
+const ENTRY_FIELDS: u64 = 7;
+
+/// Versions 0.6 to 0.8 wrote each entry as an array header claiming six items
+/// followed by seven. Rust read it back symmetrically, so nothing noticed, but
+/// any standard CBOR decoder misparses it. Such logs are still accepted for
+/// reading because their signatures and links never covered the framing; they
+/// are never written.
+const LEGACY_ENTRY_HEADER: u64 = 6;
+
+/// Which entry framing a log uses. Tracked per log so the canonical
+/// re-encoding check can reproduce the input exactly, and so a log that mixes
+/// both framings (which no writer ever produced) is refused.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Framing {
+    Current,
+    Legacy,
+}
+
+impl Framing {
+    fn header(self) -> u64 {
+        match self {
+            Self::Current => ENTRY_FIELDS,
+            Self::Legacy => LEGACY_ENTRY_HEADER,
+        }
+    }
+}
 /// Device labels are shown to humans; an unbounded one is a denial-of-service.
 const MAX_LABEL_BYTES: usize = 256;
 
@@ -538,6 +567,10 @@ fn replay(entries: &[Entry], recovery: &VerifyingIdentity) -> Result<Membership,
 
 /// Encodes a log for transport. Only public material is ever encodable.
 pub fn encode(entries: &[Entry]) -> Result<Vec<u8>, IdentityError> {
+    encode_framed(entries, Framing::Current)
+}
+
+fn encode_framed(entries: &[Entry], framing: Framing) -> Result<Vec<u8>, IdentityError> {
     let mut out = Vec::new();
     let mut encoder = minicbor::Encoder::new(&mut out);
     encoder
@@ -545,7 +578,7 @@ pub fn encode(entries: &[Entry]) -> Result<Vec<u8>, IdentityError> {
         .map_err(|_| IdentityError::Malformed)?;
     for entry in entries {
         encoder
-            .array(6)
+            .array(framing.header())
             .and_then(|e| e.u64(entry.sequence))
             .and_then(|e| e.u8(entry.event.tag()))
             .map_err(|_| IdentityError::Malformed)?;
@@ -574,6 +607,8 @@ pub fn encode(entries: &[Entry]) -> Result<Vec<u8>, IdentityError> {
     Ok(out)
 }
 
+/// Decodes a log. Accepts the current framing and, for reading only, the
+/// legacy 0.6–0.8 framing; see [`LEGACY_ENTRY_HEADER`].
 pub fn decode(bytes: &[u8]) -> Result<Vec<Entry>, IdentityError> {
     let mut decoder = minicbor::Decoder::new(bytes);
     let count = decoder
@@ -587,14 +622,22 @@ pub fn decode(bytes: &[u8]) -> Result<Vec<Entry>, IdentityError> {
     // The count comes from untrusted bytes, so reserving from it lets a few
     // bytes of input claim megabytes. Cap it by what the input could hold.
     let mut entries = Vec::with_capacity((count as usize).min(bytes.len() / MIN_ENTRY_BYTES));
+    let mut framing: Option<Framing> = None;
     for _ in 0..count {
-        let fields = decoder
+        let header = decoder
             .array()
             .map_err(|_| IdentityError::Malformed)?
             .ok_or(IdentityError::Malformed)?;
-        if fields != 6 {
+        // Both framings carry the same seven items; only the header differs.
+        let this = match header {
+            ENTRY_FIELDS => Framing::Current,
+            LEGACY_ENTRY_HEADER => Framing::Legacy,
+            _ => return Err(IdentityError::Malformed),
+        };
+        if framing.is_some_and(|seen| seen != this) {
             return Err(IdentityError::Malformed);
         }
+        framing = Some(this);
         let sequence = decoder.u64().map_err(|_| IdentityError::Malformed)?;
         let tag = decoder.u8().map_err(|_| IdentityError::Malformed)?;
         let payload = decoder
@@ -663,8 +706,9 @@ pub fn decode(bytes: &[u8]) -> Result<Vec<Entry>, IdentityError> {
     // One history, one encoding. A transparency log hashes these exact bytes,
     // so two encodings of the same entries would be two different leaves. This
     // also rejects a non-empty label smuggled into a Revoke, which the typed
-    // event has no field for and would otherwise silently drop.
-    if encode(&entries)? != bytes {
+    // event has no field for and would otherwise silently drop. A legacy log
+    // is re-encoded in its own framing, so it gets the same guarantee.
+    if encode_framed(&entries, framing.unwrap_or(Framing::Current))? != bytes {
         return Err(IdentityError::Malformed);
     }
     Ok(entries)
@@ -705,5 +749,120 @@ mod tests {
             .and_then(|e| e.str(&label))
             .unwrap();
         assert!(matches!(decode(&bytes), Err(IdentityError::LabelTooLong)));
+    }
+
+    fn signer(seed: u8) -> SigningIdentity {
+        SigningIdentity::from_bytes(&[seed; 32]).expect("32 bytes is a seed")
+    }
+
+    /// create, enrol, revoke: three entries covering both payload shapes.
+    fn sample_log() -> IdentityLog {
+        let founder = signer(1);
+        let phone = signer(2);
+        let recovery = signer(3);
+        let mut log =
+            IdentityLog::create(&founder, "desktop", &recovery.verifying_key()).expect("create");
+        log.enrol(&founder, &phone.verifying_key(), "phone")
+            .expect("enrol");
+        log.revoke(&founder, device_id(&phone.verifying_key()))
+            .expect("revoke");
+        log
+    }
+
+    /// Offsets of each entry's array header, found by walking the encoding.
+    fn entry_header_offsets(bytes: &[u8]) -> Vec<usize> {
+        let mut decoder = minicbor::Decoder::new(bytes);
+        let count = decoder.array().unwrap().unwrap();
+        let mut offsets = Vec::new();
+        for _ in 0..count {
+            offsets.push(decoder.position());
+            decoder.array().unwrap();
+            for _ in 0..ENTRY_FIELDS {
+                decoder.skip().unwrap();
+            }
+        }
+        offsets
+    }
+
+    /// A generic CBOR reader must see seven items per entry. Pinned as bytes:
+    /// a round trip cannot catch a symmetric framing change, which is exactly
+    /// how the six-item header survived three releases.
+    #[test]
+    fn every_entry_is_written_as_an_array_of_seven() {
+        let bytes = encode(sample_log().entries()).unwrap();
+        // array(3), array(7), sequence 0, tag 1, bytes(1984)
+        assert_eq!(&bytes[..7], &[0x83, 0x87, 0x00, 0x01, 0x59, 0x07, 0xc0]);
+        for offset in entry_header_offsets(&bytes) {
+            assert_eq!(bytes[offset], 0x87, "entry at {offset} is not array(7)");
+        }
+    }
+
+    #[test]
+    fn the_current_framing_round_trips_and_verifies() {
+        let log = sample_log();
+        let bytes = encode(log.entries()).unwrap();
+        let decoded = decode(&bytes).unwrap();
+        assert_eq!(decoded, log.entries());
+        let membership = IdentityLog::verify(&decoded, &signer(3).verifying_key()).expect("verify");
+        assert_eq!(membership.len(), 1);
+    }
+
+    /// Legacy logs stay readable, and the canonical check still holds for
+    /// them: they re-encode to exactly the bytes received.
+    #[test]
+    fn a_legacy_log_decodes_to_the_same_entries() {
+        let log = sample_log();
+        let legacy = encode_framed(log.entries(), Framing::Legacy).unwrap();
+        assert_eq!(&legacy[..2], &[0x83, 0x86]);
+        let decoded = decode(&legacy).unwrap();
+        assert_eq!(decoded, log.entries());
+        IdentityLog::verify(&decoded, &signer(3).verifying_key()).expect("verify");
+        // Framing is not signed, so upgrading a legacy log keeps its head.
+        let upgraded = encode(&decoded).unwrap();
+        assert_eq!(
+            IdentityLog::from_entries(decode(&upgraded).unwrap(), signer(3).verifying_key())
+                .unwrap()
+                .head(),
+            log.head()
+        );
+    }
+
+    /// No writer ever produced a log with both framings, so one that has them
+    /// is a constructed input, and accepting it would give one history two
+    /// encodings.
+    #[test]
+    fn a_log_that_mixes_framings_is_refused() {
+        let entries = sample_log().entries().to_vec();
+        for framing in [Framing::Current, Framing::Legacy] {
+            let mut bytes = encode_framed(&entries, framing).unwrap();
+            let offsets = entry_header_offsets(&bytes);
+            for &offset in &offsets {
+                let original = bytes[offset];
+                bytes[offset] = if original == 0x87 { 0x86 } else { 0x87 };
+                assert_eq!(
+                    decode(&bytes),
+                    Err(IdentityError::Malformed),
+                    "mixed framing accepted at {offset}"
+                );
+                bytes[offset] = original;
+            }
+        }
+    }
+
+    /// A header of six followed by only six items is not the legacy form; the
+    /// legacy form always had seven.
+    #[test]
+    fn six_items_under_a_six_header_are_refused() {
+        let entries = sample_log().entries()[..1].to_vec();
+        let legacy = encode_framed(&entries, Framing::Legacy).unwrap();
+        // Drop the signature: the last item, 3373 bytes plus a 3-byte header.
+        let truncated = &legacy[..legacy.len() - (SIGNATURE_LENGTH + 3)];
+        assert_eq!(decode(truncated), Err(IdentityError::Malformed));
+        // And any other header count is refused outright.
+        for header in [0x85u8, 0x88] {
+            let mut other = legacy.clone();
+            other[1] = header;
+            assert_eq!(decode(&other), Err(IdentityError::Malformed));
+        }
     }
 }

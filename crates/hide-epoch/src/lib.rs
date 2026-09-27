@@ -73,6 +73,10 @@ pub enum EpochError {
         expected: usize,
         actual: usize,
     },
+    #[error("the secret held for epoch {0} does not match the chain's public key")]
+    SecretMismatch(EpochNumber),
+    #[error("epoch {0}'s secret was supplied twice")]
+    DuplicateSecret(EpochNumber),
     #[error("cryptographic operation failed: {0}")]
     Crypto(String),
 }
@@ -219,6 +223,63 @@ impl EpochChain {
     /// The public history, safe to publish.
     pub fn records(&self) -> &[EpochRecord] {
         &self.records
+    }
+
+    /// The latest link, which commits to the whole history. A persisted store
+    /// records it so the store and the published chain can be checked against
+    /// each other.
+    pub fn head(&self) -> [u8; 32] {
+        self.records.last().map_or([0u8; 32], |record| record.link)
+    }
+
+    /// Every secret still held, ascending by epoch, for sealing into a store.
+    /// Borrowed rather than copied: the store takes its own copy, and a copy
+    /// here would be one more thing to erase.
+    pub fn secrets(&self) -> impl Iterator<Item = (EpochNumber, &RecipientSecret)> + '_ {
+        self.secrets
+            .iter()
+            .filter_map(|held| held.secret.as_ref().map(|secret| (held.number, secret)))
+    }
+
+    /// Rebuilds a chain after a restart from its public history and whichever
+    /// secrets survived. The history must verify, and every secret must match
+    /// the public key the history publishes for its epoch: a store that holds
+    /// a key for the wrong epoch, or for another chain, is refused rather than
+    /// silently decrypting nothing. Epochs with no secret are erased.
+    pub fn restore(
+        records: Vec<EpochRecord>,
+        secrets: impl IntoIterator<Item = (EpochNumber, RecipientSecret)>,
+    ) -> Result<Self, EpochError> {
+        Self::verify(&records)?;
+        if records.is_empty() {
+            return Err(EpochError::Malformed);
+        }
+        let mut held: Vec<EpochSecret> = records
+            .iter()
+            .map(|record| EpochSecret {
+                number: record.number,
+                secret: None,
+            })
+            .collect();
+        for (number, secret) in secrets {
+            // Verified above: record `i` has number `i`, so the index is the epoch.
+            let index = usize::try_from(number)
+                .ok()
+                .filter(|index| *index < records.len())
+                .ok_or(EpochError::UnknownEpoch(number))?;
+            if secret.public_key()?.to_bytes() != records[index].public_key {
+                return Err(EpochError::SecretMismatch(number));
+            }
+            let slot = &mut held[index];
+            if slot.secret.is_some() {
+                return Err(EpochError::DuplicateSecret(number));
+            }
+            slot.secret = Some(secret);
+        }
+        Ok(Self {
+            records,
+            secrets: held,
+        })
     }
 
     /// Checks that a chain is internally consistent: contiguous numbering from

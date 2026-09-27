@@ -16,7 +16,22 @@ static RECOVERY: LazyLock<VerifyingIdentity> = LazyLock::new(|| {
 
 fuzz_target!(|data: &[u8]| {
     if let Ok(entries) = decode(data) {
-        assert_eq!(encode(&entries).unwrap(), data, "non-canonical log accepted");
+        // `encode` always writes the current framing; a legacy (0.6-0.8) input
+        // differs from it only in each entry's array header, 0x86 for 0x87.
+        // Anything else is a second encoding of the same history.
+        let reencoded = encode(&entries).unwrap();
+        assert_eq!(reencoded.len(), data.len(), "non-canonical log accepted");
+        let mut differing = 0usize;
+        for (&ours, &theirs) in reencoded.iter().zip(data) {
+            if ours != theirs {
+                assert!(ours == 0x87 && theirs == 0x86, "non-canonical log accepted");
+                differing += 1;
+            }
+        }
+        assert!(
+            differing == 0 || differing == entries.len(),
+            "a log mixing framings was accepted"
+        );
         let _ = IdentityLog::verify(&entries, &RECOVERY);
     }
 });

@@ -523,6 +523,8 @@ mod tests {
         vector!(IDENTITY_DEVICE_LAPTOP, "identity-device-laptop.bin");
         vector!(IDENTITY_HEAD, "identity-head.bin");
         vector!(IDENTITY_TAMPERED, "identity-tampered.bin");
+        vector!(IDENTITY_LOG_LEGACY, "identity-log-legacy.bin");
+        vector!(IDENTITY_TAMPERED_LEGACY, "identity-tampered-legacy.bin");
         vector!(EPOCH_CHAIN, "epoch-chain.bin");
         vector!(EPOCH_PUBLIC_KEY_1, "epoch-public-key-1.bin");
         vector!(EPOCH_BROKEN, "epoch-broken.bin");
@@ -563,6 +565,32 @@ mod tests {
         assert_eq!(
             identity_head(fixtures::IDENTITY_LOG, fixtures::IDENTITY_RECOVERY).expect("head"),
             fixtures::IDENTITY_HEAD
+        );
+    }
+
+    /// Logs written by 0.6-0.8 frame each entry with a six-item header over
+    /// seven items. They must keep opening, and name the same history.
+    #[wasm_bindgen_test]
+    fn a_legacy_identity_log_still_opens() {
+        assert_eq!(&fixtures::IDENTITY_LOG[..2], &[0x84, 0x87]);
+        assert_eq!(&fixtures::IDENTITY_LOG_LEGACY[..2], &[0x84, 0x86]);
+        assert_eq!(
+            verify_identity(fixtures::IDENTITY_LOG_LEGACY, fixtures::IDENTITY_RECOVERY)
+                .expect("verify legacy"),
+            2
+        );
+        assert_eq!(
+            identity_head(fixtures::IDENTITY_LOG_LEGACY, fixtures::IDENTITY_RECOVERY)
+                .expect("head"),
+            fixtures::IDENTITY_HEAD
+        );
+        assert!(
+            verify_identity(
+                fixtures::IDENTITY_TAMPERED_LEGACY,
+                fixtures::IDENTITY_RECOVERY
+            )
+            .is_err(),
+            "a tampered legacy log verified"
         );
     }
 

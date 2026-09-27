@@ -19,6 +19,10 @@ use sha2::Sha256;
 use thiserror::Error;
 use zeroize::Zeroizing;
 
+pub mod epoch_store;
+
+pub use epoch_store::EpochStore;
+
 const MAGIC: &[u8] = b"HIDE-KEY";
 /// Version 1 sealed a bare recipient seed. Version 2 adds a purpose byte, so a
 /// signing key and an encryption key are no longer byte-indistinguishable.
@@ -59,10 +63,83 @@ const MAX_PARALLELISM: u32 = 4;
 pub const MIN_MEMORY_KIB: u32 = 8 * 1024;
 pub const MIN_ITERATIONS: u32 = 1;
 
+/// The Argon2 parameters as a key file's v2 header stores them:
+/// `parallelism u8 || memory_kib u32be || iterations u32be`. Shared with the
+/// epoch store so both files are bounded by exactly the same code.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct Argon2Params {
+    pub(crate) parallelism: u8,
+    pub(crate) memory: u32,
+    pub(crate) iterations: u32,
+}
+
+pub(crate) const PARAMS_LEN: usize = 9;
+
+impl Argon2Params {
+    /// What every writer emits.
+    pub(crate) const WRITER: Self = Self {
+        parallelism: PARALLELISM as u8,
+        memory: MEMORY_KIB,
+        iterations: ITERATIONS,
+    };
+
+    pub(crate) fn encode(self) -> [u8; PARAMS_LEN] {
+        let mut out = [0u8; PARAMS_LEN];
+        out[0] = self.parallelism;
+        out[1..5].copy_from_slice(&self.memory.to_be_bytes());
+        out[5..9].copy_from_slice(&self.iterations.to_be_bytes());
+        out
+    }
+
+    /// Reads and bounds-checks the parameters. Runs before anything is
+    /// allocated for Argon2, so a hostile header costs nothing.
+    pub(crate) fn parse(bytes: &[u8]) -> Result<Self, KeyringError> {
+        let bytes: &[u8; PARAMS_LEN] = bytes.try_into().map_err(|_| KeyringError::Malformed)?;
+        let parallelism = bytes[0];
+        let memory = u32::from_be_bytes([bytes[1], bytes[2], bytes[3], bytes[4]]);
+        let iterations = u32::from_be_bytes([bytes[5], bytes[6], bytes[7], bytes[8]]);
+        let lanes = u32::from(parallelism);
+        // `memory / 8 < parallelism` is Argon2's minimum of 8 blocks per lane; it
+        // is checked here so the failure is attributable to our bound instead of
+        // surfacing later from `Params::new`.
+        if lanes == 0
+            || lanes > MAX_PARALLELISM
+            || !(MIN_MEMORY_KIB..=MAX_MEMORY_KIB).contains(&memory)
+            || !(MIN_ITERATIONS..=MAX_ITERATIONS).contains(&iterations)
+            || memory / 8 < lanes
+        {
+            return Err(KeyringError::UnreasonableParameters);
+        }
+        Ok(Self {
+            parallelism,
+            memory,
+            iterations,
+        })
+    }
+
+    pub(crate) fn derive(
+        self,
+        passphrase: &str,
+        salt: &[u8],
+    ) -> Result<Zeroizing<[u8; 32]>, KeyringError> {
+        derive(
+            passphrase,
+            salt,
+            self.memory,
+            self.iterations,
+            u32::from(self.parallelism),
+        )
+    }
+}
+
 #[derive(Debug, Error, PartialEq, Eq)]
 pub enum KeyringError {
     #[error("not a HIDE key file")]
     NotAKeyFile,
+    #[error("not a HIDE epoch store")]
+    NotAnEpochStore,
+    #[error("epoch store holds more than {0} entries")]
+    TooManyEntries(usize),
     #[error("unsupported key file version {0}")]
     UnsupportedVersion(u8),
     #[error("key file is malformed")]
@@ -175,15 +252,13 @@ fn protect_seed(
     let mut header = Vec::with_capacity(SEALED_LEN);
     header.extend_from_slice(MAGIC);
     header.push(FORMAT_VERSION);
-    header.push(PARALLELISM as u8);
-    header.extend_from_slice(&MEMORY_KIB.to_be_bytes());
-    header.extend_from_slice(&ITERATIONS.to_be_bytes());
+    header.extend_from_slice(&Argon2Params::WRITER.encode());
     header.extend_from_slice(&salt);
     header.extend_from_slice(&nonce);
     header.push(purpose.tag());
     debug_assert_eq!(header.len(), HEADER_LEN);
 
-    let wrapping = derive(passphrase, &salt, MEMORY_KIB, ITERATIONS, PARALLELISM)?;
+    let wrapping = Argon2Params::WRITER.derive(passphrase, &salt)?;
     let cipher = ChaCha20Poly1305::new((&*wrapping).into());
     let sealed = cipher
         .encrypt(
@@ -305,28 +380,7 @@ pub fn unprotect_seed(
         return Err(KeyringError::Malformed);
     }
 
-    let parallelism = u32::from(bytes[9]);
-    let memory = u32::from_be_bytes(
-        bytes[10..14]
-            .try_into()
-            .map_err(|_| KeyringError::Malformed)?,
-    );
-    let iterations = u32::from_be_bytes(
-        bytes[14..18]
-            .try_into()
-            .map_err(|_| KeyringError::Malformed)?,
-    );
-    // `memory / 8 < parallelism` is Argon2's minimum of 8 blocks per lane; it
-    // is checked here so the failure is attributable to our bound instead of
-    // surfacing later from `Params::new`.
-    if parallelism == 0
-        || parallelism > MAX_PARALLELISM
-        || !(MIN_MEMORY_KIB..=MAX_MEMORY_KIB).contains(&memory)
-        || !(MIN_ITERATIONS..=MAX_ITERATIONS).contains(&iterations)
-        || memory / 8 < parallelism
-    {
-        return Err(KeyringError::UnreasonableParameters);
-    }
+    let params = Argon2Params::parse(&bytes[9..9 + PARAMS_LEN])?;
 
     let purpose = if version == LEGACY_VERSION {
         KeyPurpose::Encryption
@@ -338,7 +392,7 @@ pub fn unprotect_seed(
     let nonce = &bytes[18 + SALT_LEN..18 + SALT_LEN + NONCE_LEN];
     let header = &bytes[..header_len];
 
-    let wrapping = derive(passphrase, salt, memory, iterations, parallelism)?;
+    let wrapping = params.derive(passphrase, salt)?;
     let cipher = ChaCha20Poly1305::new((&*wrapping).into());
     let nonce: [u8; NONCE_LEN] = nonce.try_into().map_err(|_| KeyringError::Malformed)?;
     let seed = cipher

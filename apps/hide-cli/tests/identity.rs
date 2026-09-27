@@ -228,25 +228,25 @@ fn a_log_shown_with_the_wrong_recovery_key_after_recovery_is_refused() -> Result
     Ok(())
 }
 
-#[test]
-fn an_epoch_chain_is_created_and_verified() -> Result<(), Box<dyn Error>> {
-    let directory = tempfile::tempdir()?;
+/// `epoch-init` seals secrets and so needs a terminal for the passphrase; a
+/// published history is public, so tests that only read one build it with the
+/// library. The sealed-store flow itself is covered by `epoch_tests` in main.rs.
+fn published_chain(directory: &Path, epochs: usize) -> Result<(), Box<dyn Error>> {
+    let mut chain = hide_epoch::EpochChain::new()?;
+    for _ in 1..epochs {
+        chain.advance()?;
+    }
+    fs::write(
+        directory.join("epochs.bin"),
+        hide_epoch::encode_records(chain.records())?,
+    )?;
+    Ok(())
+}
 
-    let created = hide(
-        directory.path(),
-        &[
-            "--experimental",
-            "--quiet",
-            "epoch-init",
-            "--output",
-            "epochs.bin",
-        ],
-    );
-    assert!(
-        created.status.success(),
-        "{}",
-        String::from_utf8_lossy(&created.stderr)
-    );
+#[test]
+fn an_epoch_chain_is_verified_and_its_keys_exported() -> Result<(), Box<dyn Error>> {
+    let directory = tempfile::tempdir()?;
+    published_chain(directory.path(), 2)?;
 
     let shown = hide(
         directory.path(),
@@ -259,14 +259,73 @@ fn an_epoch_chain_is_created_and_verified() -> Result<(), Box<dyn Error>> {
         ],
     );
     assert!(shown.status.success());
-    assert!(String::from_utf8_lossy(&shown.stdout).contains("epochs 1"));
+    assert!(String::from_utf8_lossy(&shown.stdout).contains("epochs 2"));
+
+    let exported = hide(
+        directory.path(),
+        &[
+            "--experimental",
+            "--quiet",
+            "epoch-public",
+            "--chain",
+            "epochs.bin",
+            "--output",
+            "current.pub",
+        ],
+    );
+    assert!(
+        exported.status.success(),
+        "{}",
+        String::from_utf8_lossy(&exported.stderr)
+    );
+    let records = hide_epoch::decode_records(&fs::read(directory.path().join("epochs.bin"))?)?;
+    assert_eq!(
+        fs::read(directory.path().join("current.pub"))?,
+        records[1].public_key,
+        "the default is the current epoch"
+    );
+
+    // A sender can encrypt to the exported key with the ordinary command.
+    fs::write(directory.path().join("memo"), b"hello")?;
+    let encrypted = hide(
+        directory.path(),
+        &[
+            "--experimental",
+            "--quiet",
+            "encrypt",
+            "memo",
+            "--recipient",
+            "current.pub",
+            "--output",
+            "memo.hide",
+        ],
+    );
+    assert!(encrypted.status.success());
+
+    let unknown = hide(
+        directory.path(),
+        &[
+            "--experimental",
+            "--quiet",
+            "epoch-public",
+            "7",
+            "--chain",
+            "epochs.bin",
+            "--output",
+            "seven.pub",
+        ],
+    );
+    assert!(!unknown.status.success());
+    assert!(!directory.path().join("seven.pub").exists());
     Ok(())
 }
 
+/// Every epoch command that touches secrets must refuse a piped passphrase,
+/// and must do so without leaving a history that names an unsaved key.
 #[test]
-fn a_tampered_epoch_chain_is_refused() -> Result<(), Box<dyn Error>> {
+fn epoch_commands_refuse_a_passphrase_from_a_pipe() -> Result<(), Box<dyn Error>> {
     let directory = tempfile::tempdir()?;
-    hide(
+    let init = hide(
         directory.path(),
         &[
             "--experimental",
@@ -274,8 +333,84 @@ fn a_tampered_epoch_chain_is_refused() -> Result<(), Box<dyn Error>> {
             "epoch-init",
             "--output",
             "epochs.bin",
+            "--store",
+            "epochs.store",
         ],
     );
+    assert!(!init.status.success());
+    assert!(String::from_utf8_lossy(&init.stderr).contains("not a terminal"));
+    assert!(!directory.path().join("epochs.bin").exists());
+    assert!(!directory.path().join("epochs.store").exists());
+
+    published_chain(directory.path(), 2)?;
+    fs::write(directory.path().join("epochs.store"), b"HIDE-EPK")?;
+    fs::write(directory.path().join("memo.hide"), b"x")?;
+    for args in [
+        vec![
+            "epoch-advance",
+            "--chain",
+            "epochs.bin",
+            "--store",
+            "epochs.store",
+        ],
+        vec![
+            "epoch-erase",
+            "0",
+            "--chain",
+            "epochs.bin",
+            "--store",
+            "epochs.store",
+        ],
+        vec![
+            "open",
+            "memo.hide",
+            "--epoch-store",
+            "epochs.store",
+            "--output",
+            "memo.out",
+        ],
+    ] {
+        let mut full = vec!["--experimental", "--quiet"];
+        full.extend(&args);
+        let result = hide(directory.path(), &full);
+        assert!(!result.status.success(), "{args:?} succeeded");
+        assert!(
+            String::from_utf8_lossy(&result.stderr).contains("not a terminal"),
+            "{args:?}: {}",
+            String::from_utf8_lossy(&result.stderr)
+        );
+    }
+    assert!(!directory.path().join("memo.out").exists());
+    Ok(())
+}
+
+#[test]
+fn open_takes_exactly_one_key_source() -> Result<(), Box<dyn Error>> {
+    let directory = tempfile::tempdir()?;
+    for args in [
+        vec!["open", "memo.hide", "--output", "memo.out"],
+        vec![
+            "open",
+            "memo.hide",
+            "--secret",
+            "a.sec",
+            "--epoch-store",
+            "epochs.store",
+            "--output",
+            "memo.out",
+        ],
+    ] {
+        let mut full = vec!["--experimental", "--quiet"];
+        full.extend(&args);
+        assert!(!hide(directory.path(), &full).status.success(), "{args:?}");
+    }
+    Ok(())
+}
+
+#[test]
+fn a_tampered_epoch_chain_is_refused() -> Result<(), Box<dyn Error>> {
+    let directory = tempfile::tempdir()?;
+    published_chain(directory.path(), 1)?;
 
     let path = directory.path().join("epochs.bin");
     let mut bytes = fs::read(&path)?;
@@ -304,7 +439,10 @@ fn the_new_commands_require_experimental() -> Result<(), Box<dyn Error>> {
     for args in [
         vec!["identity-show", "--log", "x", "--recovery", "y"],
         vec!["epoch-show", "--chain", "x"],
-        vec!["epoch-init", "--output", "x"],
+        vec!["epoch-init", "--output", "x", "--store", "y"],
+        vec!["epoch-advance", "--chain", "x", "--store", "y"],
+        vec!["epoch-erase", "0", "--chain", "x", "--store", "y"],
+        vec!["epoch-public", "--chain", "x", "--output", "y"],
     ] {
         let result = hide(directory.path(), &args);
         assert!(

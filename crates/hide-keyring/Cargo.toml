@@ -24,6 +24,7 @@ base64.workspace = true
 getrandom.workspace = true
 thiserror.workspace = true
 zeroize.workspace = true
+minicbor.workspace = true
 
 [lints]
 workspace = true

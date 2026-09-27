@@ -23,6 +23,10 @@ minicbor.workspace = true
 
 [dev-dependencies]
 proptest.workspace = true
+# Only the subsystem vector checker needs these: it validates the epoch and
+# transparency vectors alongside the identity ones.
+hide-epoch = { path = "../hide-epoch" }
+hide-transparency = { path = "../hide-transparency" }
 
 [lints]
 workspace = true

@@ -79,5 +79,12 @@ test = false
 doc = false
 bench = false
 
+[[bin]]
+name = "epoch_store"
+path = "fuzz_targets/epoch_store.rs"
+test = false
+doc = false
+bench = false
+
 [profile.release]
 debug = 1

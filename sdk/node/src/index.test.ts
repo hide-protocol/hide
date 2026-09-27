@@ -39,8 +39,10 @@ import {
   identityDevicePhone,
   identityHead as identityHeadFixture,
   identityLog,
+  identityLogLegacy,
   identityRecovery,
   identityTampered,
+  identityTamperedLegacy,
   inclusionPath,
   leaf,
   otherLeaf,
@@ -358,6 +360,28 @@ test("the head names this exact history", () => {
   const head = identityHead(identityLog, identityRecovery);
   assert.deepEqual(head, identityHeadFixture);
   assert.equal(head.length, 32);
+});
+
+test("each log entry is framed as an array of seven", () => {
+  // array(4), array(7), sequence 0, tag 1: what a generic CBOR reader expects.
+  assert.deepEqual([...identityLog.subarray(0, 4)], [0x84, 0x87, 0x00, 0x01]);
+});
+
+test("a log written by 0.6-0.8 still opens and names the same history", () => {
+  assert.deepEqual([...identityLogLegacy.subarray(0, 2)], [0x84, 0x86]);
+  assert.equal(verifyIdentity(identityLogLegacy, identityRecovery), 2);
+  assert.equal(
+    identityTrustsDevice(identityLogLegacy, identityRecovery, identityDeviceLaptop),
+    false,
+  );
+  assert.deepEqual(
+    identityHead(identityLogLegacy, identityRecovery),
+    identityHeadFixture,
+  );
+  assert.throws(
+    () => verifyIdentity(identityTamperedLegacy, identityRecovery),
+    AuthenticationError,
+  );
 });
 
 test("an epoch chain verifies and yields keys", () => {

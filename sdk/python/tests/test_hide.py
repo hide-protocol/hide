@@ -237,6 +237,23 @@ def test_the_head_names_this_exact_history() -> None:
     assert len(head) == 32
 
 
+def test_each_log_entry_is_framed_as_an_array_of_seven() -> None:
+    # array(4), array(7), sequence 0, tag 1: what a generic CBOR reader expects.
+    assert fx.IDENTITY_LOG[:4] == bytes([0x84, 0x87, 0x00, 0x01])
+
+
+def test_a_log_written_by_0_6_to_0_8_still_opens() -> None:
+    assert fx.IDENTITY_LOG_LEGACY[:2] == bytes([0x84, 0x86])
+    assert hide.verify_identity(fx.IDENTITY_LOG_LEGACY, fx.IDENTITY_RECOVERY) == 2
+    assert not hide.identity_trusts_device(
+        fx.IDENTITY_LOG_LEGACY, fx.IDENTITY_RECOVERY, fx.IDENTITY_DEVICE_LAPTOP
+    )
+    head = hide.identity_head(fx.IDENTITY_LOG_LEGACY, fx.IDENTITY_RECOVERY)
+    assert head == fx.IDENTITY_HEAD
+    with pytest.raises(hide.AuthenticationError):
+        hide.verify_identity(fx.IDENTITY_TAMPERED_LEGACY, fx.IDENTITY_RECOVERY)
+
+
 def test_an_epoch_chain_verifies_and_yields_keys() -> None:
     assert hide.verify_epoch_chain(fx.EPOCH_CHAIN) == 3
     assert hide.epoch_public_key(fx.EPOCH_CHAIN, 1) == fx.EPOCH_PUBLIC_KEY_1
