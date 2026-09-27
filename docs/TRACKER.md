@@ -6,7 +6,7 @@ one-screen summary. Update both in the same commit as the work they describe.
 A row that claims DONE without a verifying command in its Evidence column is not
 done.
 
-## What exists at 0.7.0
+## What exists at 0.8.0
 
 - **Container format** (`hide-format`, `hide-crypto`, `hide-object`): HPKE with
   X-Wing (X25519 + ML-KEM-768), ChaCha20-Poly1305 in 64 KiB authenticated
@@ -15,7 +15,8 @@ done.
   (public or confidential placement), detached signatures, challenge–response
   with replay refusal. Exactly one signature stanza is admitted since 0.7.0.
 - **Key files** (`hide-keyring`): one Argon2id-sealed master seed deriving the
-  encryption and signing keys; a parameter floor is enforced on open.
+  encryption and signing keys; a parameter floor and, since 0.8.0, ceilings
+  (memory 8–256 MiB, parallelism ≤ 4, passes 1–64) are enforced on open.
 - **Identity** (`hide-identity`): hash-linked device log with create / enrol /
   revoke / recover; authority evaluated at position; canonical encoding.
 - **Forward security** (`hide-epoch`): epoch chains with independent random
@@ -36,8 +37,8 @@ done.
 - **Assurance**: 306 tests, eight libFuzzer targets — one per parser of
   untrusted bytes — run 45 s on every push and four hours nightly with a
   corpus carried forward (`fuzz-nightly.yml`; a finding files an issue).
-  Three real bugs in the first three runs: P11.3, P11.4, P12.1. `cargo deny`
-  gates licences, banned crypto stacks and duplicate versions.
+  Three real bugs in the first three runs: P11.3, P11.4, P12.1. `cargo audit` and `cargo deny`
+  gate advisories, licences, banned crypto stacks and duplicate versions.
   Ten frozen rejection vectors shared with
   the independent Node verifier, cross-surface conformance,
   `unsafe_code = "forbid"` outside `hide-ffi`, every dependency pinned exactly.

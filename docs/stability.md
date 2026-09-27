@@ -2,12 +2,12 @@
 
 *HIDE is experimental and has not been audited by a third party. See [audit-status.md](audit-status.md).*
 
-This document says what may change while the version is 0.x, how a change is announced, and what has to be true before 1.0. Current version: 0.6.2 (0.7.0 in progress). It applies to the wire format, the Rust crates, the C ABI, the SDKs and the CLI.
+This document says what may change while the version is 0.x, how a change is announced, and what has to be true before 1.0. Current version: 0.8.0. It applies to the wire format, the Rust crates, the C ABI, the SDKs and the CLI.
 
 ## Wire format
 
 - **Before 1.0 the format may change.** Any change to bytes on disk — container, key file, detached signature, identity log, epoch chain, transparency checkpoint, MLS credential — is a **format change** and is called out in [../CHANGELOG.md](../CHANGELOG.md) under its own heading, with the version that introduced it. A format change bumps the *minor* version.
-- **Frozen vectors must keep opening.** The containers under `conformance/vectors/` produced by 0.1.0 are tested byte-for-byte on every commit, in Rust and in the independent Node implementation. A release that cannot open them is not made. Every 0.1.0–0.6.2 container opens in 0.6.2.
+- **Frozen vectors must keep opening.** The containers under `conformance/vectors/` produced by 0.1.0 are tested byte-for-byte on every commit, in Rust and in the independent Node implementation. A release that cannot open them is not made. Every 0.1.0–0.8.0 container opens in 0.8.0.
 - **New capabilities are additive when possible.** Signatures (0.5.0) reused header key 5, which 0.1.0 wrote as an empty array, so unsigned containers stayed byte-identical; signed ones advertise preamble minor 2 so an old reader refuses rather than silently ignores.
 - **Vectors are frozen artifacts.** Regenerating them is a protocol change and is done only deliberately (`cargo run -p hide-object --features test-vectors --example generate_vectors`), never as a side effect.
 - **Upstream drafts.** X-Wing's byte format has been stable across `draft-ietf-hpke-pq` revisions and its KEM id `0x647A` is IANA-allocated. If the final RFC changed the construction, HIDE would add a new suite id rather than alter suite 1; existing containers would keep opening.
@@ -20,7 +20,7 @@ This document says what may change while the version is 0.x, how a change is ann
 | `hide-object` | stable-intent | `encrypt`, `encrypt_signed`, `decrypt`, the `Decrypted` type. Signatures may gain optional parameters; existing calls keep compiling within a minor except when a format change forces otherwise |
 | `hide-crypto` | stable-intent | `RecipientPublic`, `RecipientSecret`, `Identity::from_seed`. Secret types will never gain `Debug`, `Clone` or `Serialize` |
 | `hide-sign` | stable-intent | `SigningIdentity`, `sign`, `verify`, challenge–response, `SpentNonces` |
-| `hide-keyring` | stable-intent | `open`, `protect`, `unprotect_seed`, `KeyPurpose`. Argon2id parameters may be raised; the floor may be raised (which refuses weaker files) |
+| `hide-keyring` | stable-intent | `open`, `protect`, `unprotect_seed`, `KeyPurpose`. Argon2id parameters may be raised; the floor may be raised (which refuses weaker files). Since 0.8.0 `open` also enforces ceilings (memory 8–256 MiB, parallelism ≤ 4, passes 1–64), which may be adjusted |
 | `hide-ffi` (C ABI) | stable-intent | Functions and error codes in `include/hide.h`. Additions only; a removed function breaks every SDK at import, so it will not happen in a patch |
 | `hide-format` | evolving | Parser internals; used by `hide-object`, not intended for direct use |
 | `hide-identity` | evolving | Event types and `Membership` may change shape while the log format is 0.x |
@@ -39,7 +39,7 @@ This document says what may change while the version is 0.x, how a change is ann
 | **Minor** (0.6 → 0.7) | Format changes, API changes in any crate, new features, MSRV bump, dependency major bumps, removed deprecated items | — |
 | **Patch** (0.6.1 → 0.6.2) | Bug fixes, security fixes, packaging fixes, documentation, new SDK platform targets | Format changes, API breaks, MSRV bump, removal of anything |
 
-All crates in the workspace share one version (`Cargo.toml` `[workspace.package]`) and are released together; `scripts/set-version.ps1 -Check` runs in CI so the version cannot drift across the 22 files in seven ecosystems that carry it.
+All crates in the workspace share one version (`Cargo.toml` `[workspace.package]`) and are released together; `scripts/set-version.ps1 -Check` runs in CI so the version cannot drift across the 23 files in seven ecosystems that carry it.
 
 ## Minimum supported Rust version
 
@@ -77,5 +77,7 @@ All of the following, in this order of dependency:
 4. The HPKE-PQ specification carrying X-Wing published as an RFC, or a documented decision to freeze on the draft with a HIDE-owned suite id.
 5. Epoch secrets persisted, so forward security by erasure is operational rather than demonstrable.
 6. The stability table above with no "evolving" row among the crates a container depends on.
+
+The one-year clock in criterion 2 starts at 0.9.0, the planned format release candidate. Current status of each criterion: [audit-status.md](audit-status.md#road-to-10).
 
 1.0 does not require post-quantum MLS, a key directory, hardware key storage, or formal verification. Those remain out of scope and are listed as such in [threat-model.md](threat-model.md).

@@ -84,7 +84,7 @@ Legend: **P** provided (tested) · **–** not provided · **~** partial, reason
 
 ## Residual risks
 
-- **Unaudited composition.** The primitives are upstream and pinned; the composition (key schedule, AAD layout, transcript, log encoding) is ours and has been reviewed only internally. Internal review found seven real defects in 0.7.0 ([audit-status.md](audit-status.md)); more exist.
+- **Unaudited composition.** The primitives are upstream and pinned; the composition (key schedule, AAD layout, transcript, log encoding) is ours and has been reviewed only internally. Internal review found seven real defects in 0.7.0 ([audit-status.md](audit-status.md)); fuzzing found a key-file Argon2 memory exhaustion affecting 0.2.0–0.7.x, fixed in 0.8.0 ([HIDE-2026-001](advisories.md)); more exist.
 - **Moving standards.** X-Wing is stable across draft-ietf-hpke-pq revisions and KEM id `0x647A` is IANA-allocated, but the HPKE-PQ document is still a draft. A change would require regenerating vectors and is a format change ([stability.md](stability.md)).
 - **Unsigned containers are trusted by habit.** Users may assume an unsigned container that decrypts came from who they think. It proves only that it was not altered by a non-recipient.
 - **Epoch secrets are not persisted.** `hide epoch-init` publishes a history but the secret lives only in that process, so erasure is demonstrable and not yet operationally useful.

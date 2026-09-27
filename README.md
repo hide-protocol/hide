@@ -16,7 +16,7 @@ Ed25519 and ML-DSA-65 from **FIPS 204 (ML-DSA)**. A break of either half alone i
 
 ## What is verified today
 
-Every claim below was produced by a command in this repository, on Rust 1.97.1.
+Every claim below was produced by a command in this repository, on Rust 1.98.1.
 
 - Encrypt/decrypt round-trips across chunk boundaries (0 B, 1 B, 64 KiB ± 1, multi-chunk).
 - One payload, many recipients: the file is encrypted once; only the content key is wrapped per recipient.
@@ -24,13 +24,16 @@ Every claim below was produced by a command in this repository, on Rust 1.97.1.
   (`cargo test -p hide-object --test vectors`), and property tests extend that to random
   single-byte mutations of random containers.
 - Truncation, chunk reordering, duplication, deletion and trailing bytes are all rejected.
-- Nine **frozen rejection vectors** (`conformance/vectors/rejections/`) — bad magic, header-length
-  overflow, flipped header and FINAL bits, altered payload salt, truncation, trailing bytes, a
-  small-order recipient key — are refused by both the Rust crates and the independent Node
+- Ten **frozen rejection vectors** (`conformance/vectors/rejections/`) — bad magic, unsupported
+  major version, header-length overflow, flipped header and FINAL bits, truncation before FINAL,
+  trailing bytes, altered payload salt, a small-order recipient key, a key file demanding 2.4 GiB
+  of Argon2 memory — are refused by both the Rust crates and the independent Node
   implementation, so the two agree on what is *invalid*, not only on what is valid.
-- **Fuzzed**: six libFuzzer targets under `fuzz/` (container header, object open, keyring open,
-  identity log, epoch chain, transparency proofs) run in CI on every push.
-- `unsafe_code = "forbid"` in every crate except `hide-ffi`, where the C ABI needs it; 297 tests.
+- **Fuzzed**: eight libFuzzer targets under `fuzz/` (`format_header`, `object_open`,
+  `keyring_open`, `identity_log`, `epoch_chain`, `transparency_proofs`, `challenge_decode`,
+  `mls_message`) run briefly in CI on every push and four hours each nightly with a corpus carried
+  forward; a crash or hang opens an issue.
+- `unsafe_code = "forbid"` in every crate except `hide-ffi`, where the C ABI needs it; 306 tests.
 - **Independent interoperability**: a separate Node implementation (`@hpke/hybridkem-x-wing`, `cbor`,
   Node `crypto`) decrypts the Rust vectors, and Rust decrypts Node's container byte-identically.
 - **Cross-OS**: the full suite passes on Windows 11 and on Linux (WSL2 Ubuntu 24.04), and a Linux
@@ -389,7 +392,8 @@ signature transcript and what a recipient can forge without one (§6–7); the i
 authority-at-position rule (§8); the epoch chain and what "erased" actually guarantees (§9); the
 RFC 6962 proofs (§10); the MLS credential binding (§11); the C ABI's memory and panic handling in
 `hide-ffi`; and the ssh-agent's confirmation path. Internal review found real defects in 0.7.0
-([`SECURITY.md`](SECURITY.md) lists them), which is evidence that more exist. Report through
+([`SECURITY.md`](SECURITY.md) lists them) and fuzzing found a key-file memory exhaustion fixed in
+0.8.0 ([HIDE-2026-001](docs/advisories.md)), which is evidence that more exist. Report through
 GitHub's private advisory as described in `SECURITY.md`; every finding is credited in the
 CHANGELOG and in `docs/advisories.md`. There is no bounty, only credit and a fast fix.
 

@@ -82,7 +82,13 @@ C (the ABI itself), Python, TypeScript/Node, browser WASM, Go, Java/Kotlin, Ruby
 
 ## How do I verify a download?
 
-Check the file against `SHA256SUMS` from the same GitHub release. HIDE does not yet sign its own releases with HIDE or with Sigstore; that is planned. Package-manager manifests exist in `packaging/` but are deliberately not published ([../README.md](../README.md), "Download").
+Check the file against `SHA256SUMS` from the same GitHub release, then check its build provenance with the GitHub CLI:
+
+```sh
+gh attestation verify hide-vX.Y.Z-x86_64-unknown-linux-gnu.tar.gz --repo hide-protocol/hide
+```
+
+Every release asset, `SHA256SUMS` included, has a keyless Sigstore-signed [SLSA provenance](https://slsa.dev/spec/v1.0/provenance) attestation produced by `.github/workflows/release.yml`. No signing key is stored anywhere: the certificate is issued per run from the workflow's GitHub OIDC identity. A successful verify proves the file was built by this repository's release workflow on a GitHub-hosted runner, at the commit and tag recorded in the attestation. It does not prove the code at that commit is correct or safe, and it does not protect you if the repository or its maintainer account is compromised. Releases published before attestation was added to the workflow have `SHA256SUMS` only, and `gh attestation verify` fails on them. HIDE does not sign its releases with a HIDE key. Package-manager manifests exist in `packaging/` but are deliberately not published ([../README.md](../README.md), "Download").
 
 ## Why is the version 0.x?
 
@@ -90,7 +96,7 @@ Because the wire format and APIs may still change, the HPKE-PQ document is a dra
 
 ## Will files I encrypt today open in a future version?
 
-Every container produced by 0.1.0 through 0.6.2 still opens; the frozen vectors are tested on every commit. If a 0.x release ever cannot open an earlier container, the changelog will say so and the previous binary will still be available. After 1.0 the format never breaks ([stability.md](stability.md)).
+Every container produced by 0.1.0 through 0.8.0 still opens; the frozen vectors are tested on every commit. If a 0.x release ever cannot open an earlier container, the changelog will say so and the previous binary will still be available. After 1.0 the format never breaks ([stability.md](stability.md)).
 
 ## Is my filename hidden?
 
@@ -114,7 +120,7 @@ No. It calls the same Rust crates as the CLI, key material never reaches the web
 
 ## Is there a formal specification and are there test vectors?
 
-Yes: [../spec/hide-0.1.md](../spec/hide-0.1.md) is normative, and `conformance/vectors/` holds frozen containers plus nine rejection vectors. An independent Node implementation (`conformance/node/verify.mjs`) decrypts the vectors and refuses the rejections, so two implementations agree on what is invalid, not only on what is valid.
+Yes: [../spec/hide-0.1.md](../spec/hide-0.1.md) is normative, and `conformance/vectors/` holds frozen containers plus ten rejection vectors. An independent Node implementation (`conformance/node/verify.mjs`) decrypts the vectors and refuses the rejections, so two implementations agree on what is invalid, not only on what is valid.
 
 ## How can I help, audit or fund?
 

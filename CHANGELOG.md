@@ -3,6 +3,19 @@
 This project is pre-1.0. The wire format may change while the version is 0.x,
 and a format change is always called out here explicitly.
 
+## Unreleased
+
+### Security
+
+- Advisory [HIDE-2026-001](docs/advisories.md) published for the key-file
+  Argon2 allocation fixed in 0.8.0 (affected 0.2.0–0.7.x).
+
+### Documentation
+
+- Counts, versions and the audit status brought up to date for 0.8.0; a
+  "Road to 1.0" table in `docs/audit-status.md` states each 1.0 criterion and
+  whether it is open, in progress or blocked outside the project.
+
 ## 0.8.0
 
 **Hardening release.** The container format is unchanged: every frozen vector

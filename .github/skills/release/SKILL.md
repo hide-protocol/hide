@@ -56,19 +56,29 @@ re-run the failed tag run — it uses the old workflow file.
 ## 3. Publish SDKs — dry run first
 
 ```powershell
-gh workflow run publish-sdks.yml -f version=X.Y.Z -f dry_run=true
+gh workflow run publish-sdks.yml --ref vX.Y.Z -f version=X.Y.Z -f dry_run=true -f crates=true -f pypi=true -f npm=true -f rubygems=true -f nuget=true
 gh run watch $(gh run list --workflow publish-sdks.yml --limit 1 --json databaseId --jq '.[0].databaseId')
 ```
 
 Read every job's log for `dry-run` confirmation lines. Then:
 
 ```powershell
-gh workflow run publish-sdks.yml -f version=X.Y.Z -f dry_run=false
+gh workflow run publish-sdks.yml --ref vX.Y.Z -f version=X.Y.Z -f dry_run=false -f crates=true -f pypi=true -f npm=true -f rubygems=true -f nuget=true
 gh run watch $(gh run list --workflow publish-sdks.yml --limit 1 --json databaseId --jq '.[0].databaseId')
 ```
 
-Registry-specific inputs `crates pypi npm rubygems nuget` default true; pass
-`-f nuget=false` etc. to skip one that already succeeded on a retry.
+Registry inputs `crates pypi npm rubygems nuget` default **false**; only
+`dry_run` defaults true. A dispatch without them runs `verify` alone, skips
+every other job, and still reports success — a green run that tested nothing
+(happened on 0.8.0, run 36283903314). Always pass all five explicitly:
+
+```powershell
+gh workflow run publish-sdks.yml --ref vX.Y.Z -f version=X.Y.Z -f dry_run=true -f crates=true -f pypi=true -f npm=true -f rubygems=true -f nuget=true
+```
+
+Count the jobs afterwards: 16 (verify, crates, 3 pypi, 7 native, npm,
+rubygems, nuget, pypi-upload skipped on a dry run). On a retry, set the one
+that already succeeded to false.
 
 ## 4. Verify LIVE state (script shape — write to `.copilot-tmp/verify-release.ps1`)
 
@@ -107,6 +117,18 @@ cargo install hide-cli --version X.Y.Z --root . ; .\bin\hide --version
 
 Download one release asset, verify against `SHA256SUMS`, open `conformance/vectors/hello.hide`
 with the published binary. Return to the repo afterwards.
+
+Verify its build provenance too (keyless Sigstore attestation from the `publish`
+job; stored by GitHub, not as an asset, so the count stays 15):
+
+```powershell
+gh release download vX.Y.Z --repo hide-protocol/hide --pattern 'hide-vX.Y.Z-x86_64-pc-windows-msvc.zip' --pattern SHA256SUMS
+gh attestation verify hide-vX.Y.Z-x86_64-pc-windows-msvc.zip --repo hide-protocol/hide
+gh attestation verify SHA256SUMS --repo hide-protocol/hide
+```
+
+Both must print `Verification succeeded!`. A failure means the release job's
+own verify step was bypassed or the file is not the one the workflow built.
 
 ## 6. Post-release: npm lockfile
 

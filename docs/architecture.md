@@ -6,7 +6,7 @@ HIDE is a Rust workspace of ten library crates and one binary, a Tauri desktop a
 
 ## Crate dependency graph
 
-Derived from each crate's `Cargo.toml` on 0.6.2. Arrows point at dependencies.
+Derived from each crate's `Cargo.toml` on 0.8.0. Arrows point at dependencies.
 
 ```mermaid
 graph TD
@@ -93,9 +93,9 @@ Each package bundles the compiled core for seven targets listed in [../sdk/nativ
 
 ## Build, test and release
 
-**Local.** `cargo test --workspace --all-features` (297 tests). The desktop crate is tested separately by manifest path. Husky hooks installed by `npm install` at the root: pre-commit runs `cargo fmt` and `clippy -D warnings` when Rust files are staged; pre-push runs the full suite, a release build, the desktop clippy/test, the cross-surface check, and refuses to push if `conformance/vectors` is dirty.
+**Local.** `cargo test --workspace --all-features` (306 tests). The desktop crate is tested separately by manifest path. Husky hooks installed by `npm install` at the root: pre-commit runs `cargo fmt` and `clippy -D warnings` when Rust files are staged; pre-push runs the full suite, a release build, the desktop clippy/test, the cross-surface check, and refuses to push if `conformance/vectors` is dirty.
 
-**CI (`.github/workflows/ci.yml`).** Jobs: `lint` (fmt, clippy, `scripts/set-version.ps1 -Check`), `test` on ubuntu-24.04 / windows-2025 / macos-15, `desktop` (Linux; greps for the interop skip message and fails), `sdks` (builds the core, runs all nine surfaces plus the C ABI test and the cross-surface check, greps for skip messages), `interoperability` (Rust vector test and the independent Node verifier), `minimum-supported-rust` (`cargo +1.85 check`), `supply-chain` (`cargo audit --deny warnings`), `fuzz` (six libFuzzer targets seeded from the frozen vectors, 45 s each, crashes kept as artifacts).
+**CI (`.github/workflows/ci.yml`).** Jobs: `lint` (fmt, clippy, `scripts/set-version.ps1 -Check`), `test` on ubuntu-24.04 / windows-2025 / macos-15, `desktop` (Linux; greps for the interop skip message and fails), `sdks` (builds the core, runs all nine surfaces plus the C ABI test and the cross-surface check, greps for skip messages), `interoperability` (Rust vector test and the independent Node verifier), `minimum-supported-rust` (`cargo +1.85 check`), `supply-chain` (`cargo audit --deny warnings` and `cargo deny check`: licences, banned `openssl`/`ring`, unknown registries, attributed duplicate versions), `fuzz` (eight libFuzzer targets seeded from the frozen vectors, 45 s each, crashes kept as artifacts). `fuzz-nightly.yml` runs each of the eight for four hours in parallel with the corpus carried forward; a crash or hang opens an issue labelled `fuzz` + `security`.
 
 **Release (`release.yml`).** Builds the CLI for Linux x86-64/ARM64/musl, Windows x86-64/ARM64, macOS ARM64/x86-64; the desktop installers and the portable build; `SHA256SUMS` over every asset; generates `packaging/` manifests from the real checksums (unpublished by policy).
 
@@ -107,9 +107,9 @@ The invariants are written once, in [../AGENTS.md](../AGENTS.md). Each has at le
 
 | Invariant | Enforcement |
 | --- | --- |
-| No new primitives, no hand-rolled KEM combiner | Review; the dependency list is pinned `=` and `cargo audit` runs in CI |
+| No new primitives, no hand-rolled KEM combiner | Review; the dependency list is pinned `=`, `cargo audit` runs in CI, and `cargo deny` bans a second crypto stack |
 | Secrets never derive `Debug`/`Clone`/`Serialize`; zeroize on drop | Compile-time: a test that `unwrap_err()`s a `Result<RecipientSecret,_>` does not compile, which is the point |
-| Validate limits before allocating | Fuzz targets `format_header`, `object_open`, `keyring_open`, `identity_log`, `epoch_chain`, `transparency_proofs`; proptest "parser never panics" |
+| Validate limits before allocating | Fuzz targets `format_header`, `object_open`, `keyring_open`, `identity_log`, `epoch_chain`, `transparency_proofs`, `challenge_decode`, `mls_message`; proptest "parser never panics" |
 | Authenticate the exact received `protected` bytes | Frozen vectors are byte-exact; rejection vectors include flipped header bits |
 | Never publish plaintext before FINAL authenticates | Truncation and trailing-byte rejection vectors; property tests; CLI staging-then-commit |
 | Never use a decrypted filename as a path | Filename validation in `hide-format`; `/` refused as malformed at the ABI |
@@ -120,7 +120,7 @@ The invariants are written once, in [../AGENTS.md](../AGENTS.md). Each has at le
 | CLI and desktop open each other's output; the test cannot silently skip | `src-tauri/tests/interop.rs`; CI greps `desktop-tests.log` for the skip message and fails |
 | C header constants equal the Rust ones | `hide-ffi/tests/c_abi.rs::the_header_constants_match_the_rust_ones`, plus a C program compiled against `hide.h`; the skip message is also grepped |
 | Panics become error codes, not aborts | `c_abi.rs::a_panic_inside_the_library_becomes_an_error_code_not_an_abort` |
-| Version is consistent across 22 files in 7 ecosystems | `scripts/set-version.ps1 -Check` in the `lint` job |
+| Version is consistent across 23 files in 7 ecosystems | `scripts/set-version.ps1 -Check` in the `lint` job |
 | Vectors are frozen | pre-push hook refuses a dirty `conformance/vectors`; regeneration needs the `test-vectors` feature and an explicit example run |
 | Every surface agrees | `conformance/cross-surface/verify.mjs` with `HIDE_CROSS_REQUIRE` |
 | Passphrases come only from a terminal | ssh-agent confirmation reads the controlling tty (0.7.0 fix); reviewed |

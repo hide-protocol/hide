@@ -18,8 +18,8 @@ composes, from established crates, all pinned to exact versions:
   over the header.
 - **Signatures**: hybrid Ed25519 + ML-DSA-65 (FIPS 204); both halves must
   verify.
-- **Key files**: Argon2id with an enforced parameter floor, then
-  ChaCha20-Poly1305.
+- **Key files**: Argon2id with an enforced parameter floor and ceiling
+  (memory 8–256 MiB, at most 4 lanes, 1–64 passes), then ChaCha20-Poly1305.
 - **Transparency**: RFC 6962 Merkle tree, inclusion and consistency proofs.
 - **Group messaging**: MLS (RFC 9420) through `mls-rs`, classical X25519 suite
   only — post-quantum MLS suites are still an IETF draft.
@@ -71,6 +71,25 @@ Known and documented, not new findings:
 - **Replay is only detectable by the verifier.** A replayed challenge answer is
   a genuine signature; a verifier that keeps no spent-nonce record gains nothing
   over a plain signature.
+
+## What changed in 0.8.0
+
+- **Advisory [HIDE-2026-001](docs/advisories.md#hide-2026-001--a-95-byte-key-file-could-make-open-allocate-up-to-4-gib):
+  a 95-byte key file could make `open` allocate up to 4 GiB** (affected
+  0.2.0–0.7.x). Found by the nightly fuzzer after 0.7.0 shipped, which is why
+  it has an advisory and the 0.7.0 findings below do not. Memory is now capped
+  at 256 MiB and parallelism at 4, before any allocation.
+- Identity and epoch decoders no longer reserve memory from the declared entry
+  count; MLS messages and `hide unseal` input are capped at 1 MiB; a `u64`
+  length or index is refused on 32-bit targets instead of being truncated.
+- Eight fuzz targets now cover every parser of untrusted bytes, each fuzzed
+  four hours every night with the corpus carried forward.
+
+Found after 0.8.0 shipped, not yet fixed: the identity-log transport encoding
+declares six fields per entry and writes seven. Rust reads its own output, so
+no HIDE surface is affected, but any other CBOR decoder misreads the log. It
+is an interoperability defect, not a security one; the correction is part of
+the 0.9.0 format revision.
 
 ## What changed in 0.7.0
 

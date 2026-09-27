@@ -12,14 +12,14 @@ Not on Maven Central yet. Build from source:
 
 ```sh
 cargo build --release -p hide-ffi          # produces the native core
-cd sdk/java && mvn install                 # installs org.hide-protocol:hide:0.6.2
+cd sdk/java && mvn install                 # installs org.hide-protocol:hide:0.8.0
 ```
 
 ```xml
 <dependency>
   <groupId>org.hide-protocol</groupId>
   <artifactId>hide</artifactId>
-  <version>0.6.2</version>
+  <version>0.8.0</version>
 </dependency>
 ```
 

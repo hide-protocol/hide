@@ -18,7 +18,7 @@ Ed25519 and ML-DSA-65 from **FIPS 204 (ML-DSA)**. A break of either half alone i
 
 ## What is verified today
 
-Every claim below was produced by a command in this repository, on Rust 1.97.1.
+Every claim below was produced by a command in this repository, on Rust 1.98.1.
 
 - Encrypt/decrypt round-trips across chunk boundaries (0 B, 1 B, 64 KiB ± 1, multi-chunk).
 - One payload, many recipients: the file is encrypted once; only the content key is wrapped per recipient.
@@ -26,13 +26,16 @@ Every claim below was produced by a command in this repository, on Rust 1.97.1.
   (`cargo test -p hide-object --test vectors`), and property tests extend that to random
   single-byte mutations of random containers.
 - Truncation, chunk reordering, duplication, deletion and trailing bytes are all rejected.
-- Nine **frozen rejection vectors** (`conformance/vectors/rejections/`) — bad magic, header-length
-  overflow, flipped header and FINAL bits, altered payload salt, truncation, trailing bytes, a
-  small-order recipient key — are refused by both the Rust crates and the independent Node
+- Ten **frozen rejection vectors** (`conformance/vectors/rejections/`) — bad magic, unsupported
+  major version, header-length overflow, flipped header and FINAL bits, truncation before FINAL,
+  trailing bytes, altered payload salt, a small-order recipient key, a key file demanding 2.4 GiB
+  of Argon2 memory — are refused by both the Rust crates and the independent Node
   implementation, so the two agree on what is *invalid*, not only on what is valid.
-- **Fuzzed**: six libFuzzer targets under `fuzz/` (container header, object open, keyring open,
-  identity log, epoch chain, transparency proofs) run in CI on every push.
-- `unsafe_code = "forbid"` in every crate except `hide-ffi`, where the C ABI needs it; 297 tests.
+- **Fuzzed**: eight libFuzzer targets under `fuzz/` (`format_header`, `object_open`,
+  `keyring_open`, `identity_log`, `epoch_chain`, `transparency_proofs`, `challenge_decode`,
+  `mls_message`) run briefly in CI on every push and four hours each nightly with a corpus carried
+  forward; a crash or hang opens an issue.
+- `unsafe_code = "forbid"` in every crate except `hide-ffi`, where the C ABI needs it; 306 tests.
 - **Independent interoperability**: a separate Node implementation (`@hpke/hybridkem-x-wing`, `cbor`,
   Node `crypto`) decrypts the Rust vectors, and Rust decrypts Node's container byte-identically.
 - **Cross-OS**: the full suite passes on Windows 11 and on Linux (WSL2 Ubuntu 24.04), and a Linux
@@ -391,7 +394,8 @@ signature transcript and what a recipient can forge without one (§6–7); the i
 authority-at-position rule (§8); the epoch chain and what "erased" actually guarantees (§9); the
 RFC 6962 proofs (§10); the MLS credential binding (§11); the C ABI's memory and panic handling in
 `hide-ffi`; and the ssh-agent's confirmation path. Internal review found real defects in 0.7.0
-([`SECURITY.md`](SECURITY.md) lists them), which is evidence that more exist. Report through
+([`SECURITY.md`](SECURITY.md) lists them) and fuzzing found a key-file memory exhaustion fixed in
+0.8.0 ([HIDE-2026-001](docs/advisories.md)), which is evidence that more exist. Report through
 GitHub's private advisory as described in `SECURITY.md`; every finding is credited in the
 CHANGELOG and in `docs/advisories.md`. There is no bounty, only credit and a fast fix.
 
@@ -486,7 +490,13 @@ C (the ABI itself), Python, TypeScript/Node, browser WASM, Go, Java/Kotlin, Ruby
 
 ## How do I verify a download?
 
-Check the file against `SHA256SUMS` from the same GitHub release. HIDE does not yet sign its own releases with HIDE or with Sigstore; that is planned. Package-manager manifests exist in `packaging/` but are deliberately not published ([../README.md](../README.md), "Download").
+Check the file against `SHA256SUMS` from the same GitHub release, then check its build provenance with the GitHub CLI:
+
+```sh
+gh attestation verify hide-vX.Y.Z-x86_64-unknown-linux-gnu.tar.gz --repo hide-protocol/hide
+```
+
+Every release asset, `SHA256SUMS` included, has a keyless Sigstore-signed [SLSA provenance](https://slsa.dev/spec/v1.0/provenance) attestation produced by `.github/workflows/release.yml`. No signing key is stored anywhere: the certificate is issued per run from the workflow's GitHub OIDC identity. A successful verify proves the file was built by this repository's release workflow on a GitHub-hosted runner, at the commit and tag recorded in the attestation. It does not prove the code at that commit is correct or safe, and it does not protect you if the repository or its maintainer account is compromised. Releases published before attestation was added to the workflow have `SHA256SUMS` only, and `gh attestation verify` fails on them. HIDE does not sign its releases with a HIDE key. Package-manager manifests exist in `packaging/` but are deliberately not published ([../README.md](../README.md), "Download").
 
 ## Why is the version 0.x?
 
@@ -494,7 +504,7 @@ Because the wire format and APIs may still change, the HPKE-PQ document is a dra
 
 ## Will files I encrypt today open in a future version?
 
-Every container produced by 0.1.0 through 0.6.2 still opens; the frozen vectors are tested on every commit. If a 0.x release ever cannot open an earlier container, the changelog will say so and the previous binary will still be available. After 1.0 the format never breaks ([stability.md](stability.md)).
+Every container produced by 0.1.0 through 0.8.0 still opens; the frozen vectors are tested on every commit. If a 0.x release ever cannot open an earlier container, the changelog will say so and the previous binary will still be available. After 1.0 the format never breaks ([stability.md](stability.md)).
 
 ## Is my filename hidden?
 
@@ -518,7 +528,7 @@ No. It calls the same Rust crates as the CLI, key material never reaches the web
 
 ## Is there a formal specification and are there test vectors?
 
-Yes: [../spec/hide-0.1.md](../spec/hide-0.1.md) is normative, and `conformance/vectors/` holds frozen containers plus nine rejection vectors. An independent Node implementation (`conformance/node/verify.mjs`) decrypts the vectors and refuses the rejections, so two implementations agree on what is invalid, not only on what is valid.
+Yes: [../spec/hide-0.1.md](../spec/hide-0.1.md) is normative, and `conformance/vectors/` holds frozen containers plus ten rejection vectors. An independent Node implementation (`conformance/node/verify.mjs`) decrypts the vectors and refuses the rejections, so two implementations agree on what is invalid, not only on what is valid.
 
 ## How can I help, audit or fund?
 
@@ -708,7 +718,7 @@ Legend: **P** provided (tested) · **–** not provided · **~** partial, reason
 
 ## Residual risks
 
-- **Unaudited composition.** The primitives are upstream and pinned; the composition (key schedule, AAD layout, transcript, log encoding) is ours and has been reviewed only internally. Internal review found seven real defects in 0.7.0 ([audit-status.md](audit-status.md)); more exist.
+- **Unaudited composition.** The primitives are upstream and pinned; the composition (key schedule, AAD layout, transcript, log encoding) is ours and has been reviewed only internally. Internal review found seven real defects in 0.7.0 ([audit-status.md](audit-status.md)); fuzzing found a key-file Argon2 memory exhaustion affecting 0.2.0–0.7.x, fixed in 0.8.0 ([HIDE-2026-001](advisories.md)); more exist.
 - **Moving standards.** X-Wing is stable across draft-ietf-hpke-pq revisions and KEM id `0x647A` is IANA-allocated, but the HPKE-PQ document is still a draft. A change would require regenerating vectors and is a format change ([stability.md](stability.md)).
 - **Unsigned containers are trusted by habit.** Users may assume an unsigned container that decrypts came from who they think. It proves only that it was not altered by a non-recipient.
 - **Epoch secrets are not persisted.** `hide epoch-init` publishes a history but the secret lives only in that process, so erasure is demonstrable and not yet operationally useful.
@@ -749,6 +759,8 @@ The only reviews are internal — performed by the maintainers on their own code
 
 | Date | Reviewer | Scope | Findings | Status |
 | --- | --- | --- | --- | --- |
+| 2026-09 | maintainers (internal) + fuzzing | Untrusted-input bounds across every decoder (tracker P12.1–P12.9) | 1 released-version defect, hardening elsewhere | fixed in 0.8.0; the defect is [HIDE-2026-001](advisories.md) |
+| 2026-09 | maintainers (internal) | Identity-log transport CBOR | 1 | open, scheduled for 0.9.0 (interoperability, not security) |
 | 2026-09-08 | maintainers (internal) | MLS credential binding, signature stanza handling, confidential-signature metadata path, identity-log encoding, C ABI panic handling, SDK library loading, ssh-agent confirmation and Windows pipe ACL, Argon2id parameter floor | 7 | all fixed in 0.7.0; each fix has a test that fails on the previous code |
 | 2026-09-06 | maintainers (internal) | X25519 small-order points in recipient keys; chunk AAD/nonce byte layout | 2 | fixed in 0.3.0; AAD/nonce bytes now pinned exactly in tests |
 | 2026-09-06 | maintainers (internal) | Signature transcript: header-only signing forgeable by any recipient | 1 | design changed before 0.5.0 shipped; transcript binds `SHA-256(plaintext)` |
@@ -765,18 +777,28 @@ From [../SECURITY.md](../SECURITY.md) and [../CHANGELOG.md](../CHANGELOG.md):
 6. **`HIDE_LIBRARY` was an unconditional library-injection vector** in every SDK. Honoured only with `HIDE_ALLOW_LIBRARY_OVERRIDE=1`.
 7. **The ssh-agent read confirmation from stdin, and the Windows pipe had no ACL.** Confirmation now reads the controlling tty; the pipe is restricted to the current user. (Listed alongside: Argon2id parameters gained a floor — a key file declaring weaker parameters is refused.)
 
+### 0.8.0 hardening
+
+- **[HIDE-2026-001](advisories.md)**: a 95-byte key file could make `open` allocate up to 4 GiB of Argon2 memory. Affected ≥ 0.2.0, < 0.8.0; fixed in 0.8.0. Key-file parameters now have ceilings: memory 8–256 MiB, parallelism ≤ 4, passes 1–64.
+- The identity and epoch decoders cap `Vec` capacity by the input size, not by a declared count.
+- A length that would truncate when converted to `usize` on a 32-bit target is refused.
+- MLS messages are capped at 1 MiB; `hide unseal` caps armored input at 1 MiB.
+
+### Open: identity-log transport CBOR
+
+The identity-log transport encoding declares `array(6)` per entry but writes seven items ([../crates/hide-identity/src/lib.rs](../crates/hide-identity/src/lib.rs), encode and decode). The Rust encoder and decoder agree with each other, so HIDE reads its own logs; a generic CBOR decoder misparses them. This is an interoperability defect, not a security one. Scheduled for 0.9.0 (`array(7)`, a format change).
+
 ## Automated evidence that exists
 
 These are not audits. They constrain what a bug can look like; they do not show its absence.
 
-- 297 tests, run on Linux, Windows and macOS in CI.
+- 306 tests, run on Linux, Windows and macOS in CI.
 - Property tests (`proptest`): the parser never panics on arbitrary input; any single-byte mutation of a container fails to decrypt; truncation and appended bytes always fail.
-- Eight libFuzzer targets under [../fuzz/fuzz_targets](../fuzz/fuzz_targets) (container header, object open, keyring open, identity log, epoch chain, transparency proofs, challenge decode, MLS message), run in CI on every push and for four hours per target every night with a persistent corpus ([fuzz-nightly.yml](../.github/workflows/fuzz-nightly.yml)). A finding files an issue automatically. Three bugs found so far: two fixed in 0.7.0, the third (a key file requesting 2.4 GiB of Argon2 memory, [#6](https://github.com/hide-protocol/hide/issues/6)) fixed on `main`.
-- `cargo deny` ([../deny.toml](../deny.toml)) in CI: licence allow-list, a ban on any second cryptographic stack, unknown registries refused, and every duplicated dependency version attributed to its cause so a new one is visible.
-- Frozen vectors under [../conformance/vectors](../conformance/vectors), including nine rejection vectors; flipping every byte position of the frozen containers is asserted to fail.
+- Eight libFuzzer targets under [../fuzz/fuzz_targets](../fuzz/fuzz_targets) (`format_header`, `object_open`, `keyring_open`, `identity_log`, `epoch_chain`, `transparency_proofs`, `challenge_decode`, `mls_message`), run briefly in CI on every push and for four hours per target every night, in parallel, with the corpus carried forward ([fuzz-nightly.yml](../.github/workflows/fuzz-nightly.yml)). A crash or hang opens an issue labelled `fuzz` + `security`. A manual four-hour run of all eight in 2026-09 was clean (tracker P12.9). Three bugs found so far: two fixed in 0.7.0, the third (a key file requesting 2.4 GiB of Argon2 memory, [#6](https://github.com/hide-protocol/hide/issues/6)) released in 0.8.0 as [HIDE-2026-001](advisories.md).
+- Supply chain, CI job `supply-chain`: `cargo audit --deny warnings`, and `cargo deny check` ([../deny.toml](../deny.toml)) — licence allow-list, a ban on a second cryptographic stack (`openssl`, `ring`), unknown registries refused, and every duplicated dependency version attributed to its cause so a new one is visible. Every dependency is pinned to an exact version.
+- Frozen vectors under [../conformance/vectors](../conformance/vectors), including ten rejection vectors; flipping every byte position of the frozen containers is asserted to fail.
 - An independent Node implementation ([../conformance/node/verify.mjs](../conformance/node/verify.mjs)) decrypts the Rust vectors and refuses the rejection vectors.
 - Mutation testing was applied by hand to the signing and keyring code during development; results are recorded in commit messages, not in a report.
-- `cargo audit` runs in CI (`supply-chain` job); every dependency is pinned to an exact version.
 
 ## What an audit should cover
 
@@ -790,10 +812,10 @@ In priority order. File references are the entry points; the normative text is [
 | 4 | Signature transcript and what a recipient can forge | Recipients hold the CEK; the transcript is the only thing that stops them re-encrypting under a valid signature | spec §7; [../crates/hide-sign/src/lib.rs](../crates/hide-sign/src/lib.rs), `transcript()` in hide-object |
 | 5 | Identity log: authority-at-position | Revocation is meaningless if a revoked device can author a later entry | spec §8; [../crates/hide-identity/src/lib.rs](../crates/hide-identity/src/lib.rs) |
 | 6 | C ABI: memory ownership, panic catching, error codes | Nine SDKs sit on it; a bug is a bug in all of them | [../crates/hide-ffi/src/lib.rs](../crates/hide-ffi/src/lib.rs), [../crates/hide-ffi/include/hide.h](../crates/hide-ffi/include/hide.h) |
-| 7 | Key files: Argon2id parameters, purpose byte, seed derivation | The at-rest protection of every secret | [../crates/hide-keyring/src/lib.rs](../crates/hide-keyring/src/lib.rs) |
+| 7 | Key files: Argon2id parameters (floor and the 0.8.0 ceilings: memory 8–256 MiB, parallelism ≤ 4, passes 1–64), purpose byte, seed derivation | The at-rest protection of every secret, and an untrusted header that sets the cost of opening it | [../crates/hide-keyring/src/lib.rs](../crates/hide-keyring/src/lib.rs) |
 | 8 | Epoch chain: what "erased" guarantees | Independent random keys, no derivation | spec §9; [../crates/hide-epoch/src/lib.rs](../crates/hide-epoch/src/lib.rs) |
 | 9 | RFC 6962 proofs | Consistency-proof forgery would make history rewriting undetectable | spec §10; [../crates/hide-transparency/src/lib.rs](../crates/hide-transparency/src/lib.rs) |
-| 10 | MLS credential binding | New in 0.7.0, parsed by no other implementation | spec §11; [../crates/hide-mls/src/lib.rs](../crates/hide-mls/src/lib.rs) |
+| 10 | MLS credential binding and message size limit (1 MiB since 0.8.0) | New in 0.7.0, parsed by no other implementation | spec §11; [../crates/hide-mls/src/lib.rs](../crates/hide-mls/src/lib.rs) |
 | 11 | ssh-agent confirmation path and endpoint permissions | A signing oracle reachable by local processes | [../apps/hide-cli/src](../apps/hide-cli/src) |
 | 12 | SDK library loading and handle lifetimes | Injection and use-after-free at the language boundary | [../sdk](../sdk) |
 
@@ -827,18 +849,31 @@ A design review of the spec alone, without reading code, is roughly 3–4 days a
 
 None. No component has a machine-checked proof, a Tamarin or ProVerif model, or a verified implementation. It is not planned before 1.0; a third-party code audit is the prerequisite, and a symbolic model of the container key schedule and the signature transcript would be the first candidate after it.
 
+## Road to 1.0
+
+Status of each criterion in [stability.md](stability.md#what-10-requires), as of 0.8.0. 0.9.0 is planned as the format release candidate.
+
+| # | Criterion | Status |
+| --- | --- | --- |
+| 1 | Third-party audit | Open; not scheduled, no sponsor |
+| 2 | One year of frozen container format | Not started; the clock starts at the 0.9.0 format release candidate |
+| 3 | Two independent implementations | In progress: the Node verifier covers containers and signatures; spec §8–§10 (identity log, epoch chain, transparency) planned for 0.9.0 |
+| 4 | HPKE-PQ published as an RFC | Blocked, external; the maintainers chose to wait for the RFC rather than freeze on the draft |
+| 5 | Epoch secrets persisted | Planned for 0.9.0 (epoch-secret keystore) |
+| 6 | No evolving crate in the container path | Open; `hide-format` stays evolving until the freeze |
+
 # ===== docs/stability.md =====
 
 # HIDE stability policy
 
 *HIDE is experimental and has not been audited by a third party. See [audit-status.md](audit-status.md).*
 
-This document says what may change while the version is 0.x, how a change is announced, and what has to be true before 1.0. Current version: 0.6.2 (0.7.0 in progress). It applies to the wire format, the Rust crates, the C ABI, the SDKs and the CLI.
+This document says what may change while the version is 0.x, how a change is announced, and what has to be true before 1.0. Current version: 0.8.0. It applies to the wire format, the Rust crates, the C ABI, the SDKs and the CLI.
 
 ## Wire format
 
 - **Before 1.0 the format may change.** Any change to bytes on disk — container, key file, detached signature, identity log, epoch chain, transparency checkpoint, MLS credential — is a **format change** and is called out in [../CHANGELOG.md](../CHANGELOG.md) under its own heading, with the version that introduced it. A format change bumps the *minor* version.
-- **Frozen vectors must keep opening.** The containers under `conformance/vectors/` produced by 0.1.0 are tested byte-for-byte on every commit, in Rust and in the independent Node implementation. A release that cannot open them is not made. Every 0.1.0–0.6.2 container opens in 0.6.2.
+- **Frozen vectors must keep opening.** The containers under `conformance/vectors/` produced by 0.1.0 are tested byte-for-byte on every commit, in Rust and in the independent Node implementation. A release that cannot open them is not made. Every 0.1.0–0.8.0 container opens in 0.8.0.
 - **New capabilities are additive when possible.** Signatures (0.5.0) reused header key 5, which 0.1.0 wrote as an empty array, so unsigned containers stayed byte-identical; signed ones advertise preamble minor 2 so an old reader refuses rather than silently ignores.
 - **Vectors are frozen artifacts.** Regenerating them is a protocol change and is done only deliberately (`cargo run -p hide-object --features test-vectors --example generate_vectors`), never as a side effect.
 - **Upstream drafts.** X-Wing's byte format has been stable across `draft-ietf-hpke-pq` revisions and its KEM id `0x647A` is IANA-allocated. If the final RFC changed the construction, HIDE would add a new suite id rather than alter suite 1; existing containers would keep opening.
@@ -851,7 +886,7 @@ This document says what may change while the version is 0.x, how a change is ann
 | `hide-object` | stable-intent | `encrypt`, `encrypt_signed`, `decrypt`, the `Decrypted` type. Signatures may gain optional parameters; existing calls keep compiling within a minor except when a format change forces otherwise |
 | `hide-crypto` | stable-intent | `RecipientPublic`, `RecipientSecret`, `Identity::from_seed`. Secret types will never gain `Debug`, `Clone` or `Serialize` |
 | `hide-sign` | stable-intent | `SigningIdentity`, `sign`, `verify`, challenge–response, `SpentNonces` |
-| `hide-keyring` | stable-intent | `open`, `protect`, `unprotect_seed`, `KeyPurpose`. Argon2id parameters may be raised; the floor may be raised (which refuses weaker files) |
+| `hide-keyring` | stable-intent | `open`, `protect`, `unprotect_seed`, `KeyPurpose`. Argon2id parameters may be raised; the floor may be raised (which refuses weaker files). Since 0.8.0 `open` also enforces ceilings (memory 8–256 MiB, parallelism ≤ 4, passes 1–64), which may be adjusted |
 | `hide-ffi` (C ABI) | stable-intent | Functions and error codes in `include/hide.h`. Additions only; a removed function breaks every SDK at import, so it will not happen in a patch |
 | `hide-format` | evolving | Parser internals; used by `hide-object`, not intended for direct use |
 | `hide-identity` | evolving | Event types and `Membership` may change shape while the log format is 0.x |
@@ -870,7 +905,7 @@ This document says what may change while the version is 0.x, how a change is ann
 | **Minor** (0.6 → 0.7) | Format changes, API changes in any crate, new features, MSRV bump, dependency major bumps, removed deprecated items | — |
 | **Patch** (0.6.1 → 0.6.2) | Bug fixes, security fixes, packaging fixes, documentation, new SDK platform targets | Format changes, API breaks, MSRV bump, removal of anything |
 
-All crates in the workspace share one version (`Cargo.toml` `[workspace.package]`) and are released together; `scripts/set-version.ps1 -Check` runs in CI so the version cannot drift across the 22 files in seven ecosystems that carry it.
+All crates in the workspace share one version (`Cargo.toml` `[workspace.package]`) and are released together; `scripts/set-version.ps1 -Check` runs in CI so the version cannot drift across the 23 files in seven ecosystems that carry it.
 
 ## Minimum supported Rust version
 
@@ -909,6 +944,8 @@ All of the following, in this order of dependency:
 5. Epoch secrets persisted, so forward security by erasure is operational rather than demonstrable.
 6. The stability table above with no "evolving" row among the crates a container depends on.
 
+The one-year clock in criterion 2 starts at 0.9.0, the planned format release candidate. Current status of each criterion: [audit-status.md](audit-status.md#road-to-10).
+
 1.0 does not require post-quantum MLS, a key directory, hardware key storage, or formal verification. Those remain out of scope and are listed as such in [threat-model.md](threat-model.md).
 
 # ===== SECURITY.md =====
@@ -933,8 +970,8 @@ composes, from established crates, all pinned to exact versions:
   over the header.
 - **Signatures**: hybrid Ed25519 + ML-DSA-65 (FIPS 204); both halves must
   verify.
-- **Key files**: Argon2id with an enforced parameter floor, then
-  ChaCha20-Poly1305.
+- **Key files**: Argon2id with an enforced parameter floor and ceiling
+  (memory 8–256 MiB, at most 4 lanes, 1–64 passes), then ChaCha20-Poly1305.
 - **Transparency**: RFC 6962 Merkle tree, inclusion and consistency proofs.
 - **Group messaging**: MLS (RFC 9420) through `mls-rs`, classical X25519 suite
   only — post-quantum MLS suites are still an IETF draft.
@@ -986,6 +1023,25 @@ Known and documented, not new findings:
 - **Replay is only detectable by the verifier.** A replayed challenge answer is
   a genuine signature; a verifier that keeps no spent-nonce record gains nothing
   over a plain signature.
+
+## What changed in 0.8.0
+
+- **Advisory [HIDE-2026-001](docs/advisories.md#hide-2026-001--a-95-byte-key-file-could-make-open-allocate-up-to-4-gib):
+  a 95-byte key file could make `open` allocate up to 4 GiB** (affected
+  0.2.0–0.7.x). Found by the nightly fuzzer after 0.7.0 shipped, which is why
+  it has an advisory and the 0.7.0 findings below do not. Memory is now capped
+  at 256 MiB and parallelism at 4, before any allocation.
+- Identity and epoch decoders no longer reserve memory from the declared entry
+  count; MLS messages and `hide unseal` input are capped at 1 MiB; a `u64`
+  length or index is refused on 32-bit targets instead of being truncated.
+- Eight fuzz targets now cover every parser of untrusted bytes, each fuzzed
+  four hours every night with the corpus carried forward.
+
+Found after 0.8.0 shipped, not yet fixed: the identity-log transport encoding
+declares six fields per entry and writes seven. Rust reads its own output, so
+no HIDE surface is affected, but any other CBOR decoder misreads the log. It
+is an interoperability defect, not a security one; the correction is part of
+the 0.9.0 format revision.
 
 ## What changed in 0.7.0
 
