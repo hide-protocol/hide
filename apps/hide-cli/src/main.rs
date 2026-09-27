@@ -660,6 +660,7 @@ fn encrypt_file(
         filename: Some(filename.into()),
         media_type: None,
         signature: None,
+        extensions: Vec::new(),
     };
     let mut buffered = BufWriter::with_capacity(IO_BUFFER, staging);
     let written = match sign_with {
@@ -907,6 +908,7 @@ fn seal_message(
         filename: None,
         media_type: Some("text/plain".into()),
         signature: None,
+        extensions: Vec::new(),
     };
     hide_object::encrypt(
         &mut plaintext.as_bytes(),
@@ -1035,17 +1037,24 @@ fn describe(path: &Path) -> Result<()> {
     }
     let size = std::fs::metadata(path)?.len();
     println!("{}: HIDE container", path.display());
-    println!("  format version: {}.{}", preamble[8], preamble[9]);
-    println!("  container size: {size} bytes");
-    // Minor 2 is the signed form; the signer is only knowable after decryption.
     println!(
-        "  signed: {}",
-        if preamble[9] >= 2 {
-            "yes; open it to learn who signed"
-        } else {
-            "no"
-        }
+        "  format version: {}.{}, flags 0x{:02x}",
+        preamble[8], preamble[9], preamble[11]
     );
+    println!("  container size: {size} bytes");
+    // The SIGNED flag (or legacy minor 2) says so; the signer is only knowable
+    // after decryption. A preamble this build cannot read is said so plainly.
+    match hide_object::Preamble::decode(&preamble) {
+        Ok(decoded) => println!(
+            "  signed: {}",
+            if decoded.is_signed() {
+                "yes; open it to learn who signed"
+            } else {
+                "no"
+            }
+        ),
+        Err(error) => println!("  not readable by this version: {error}"),
+    }
     println!("  recipients, filename and contents are encrypted; open it to learn more");
     Ok(())
 }

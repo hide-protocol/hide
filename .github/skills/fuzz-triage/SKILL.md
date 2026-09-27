@@ -52,7 +52,7 @@ PowerShell types a `[byte[]]` variable as XmlDocument in long sessions and
 python -c "import sys,pathlib; b=pathlib.Path(sys.argv[1]).read_bytes(); print(len(b)); print(b.hex(' '))" .copilot-tmp/fuzz/<file>
 ```
 
-Read the bytes against the wire layout in `spec/hide-0.1.md`. Known shapes:
+Read the bytes against the wire layout in `spec/hide-1.md`. Known shapes:
 
 - `9a 00 00 00 00` — CBOR array(0) with a 4-byte length prefix: non-canonical.
 - Key file offset 10 = Argon2 `m_cost` u32 BE; offset 14 = `t_cost`; 18 = `p`.

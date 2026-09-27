@@ -3,11 +3,11 @@ use std::io::{self, Read, Write};
 use hide_crypto::{
     ChunkCipher, ContentKey, CryptoError, DerivedKey, RecipientPublic, RecipientSecret,
 };
-pub use hide_format::Metadata;
 use hide_format::{
-    CHUNK_LEN, FormatError, MAX_RECIPIENTS, PREAMBLE_LEN, Preamble, ProtectedHeader,
-    RecipientStanza, SUITE, SignatureStanza, TAG_LEN,
+    CHUNK_LEN, FormatError, MAX_RECIPIENTS, PREAMBLE_LEN, RecipientStanza, SUITE, SignatureStanza,
+    TAG_LEN,
 };
+pub use hide_format::{Extension, Metadata, Preamble, ProtectedHeader, Stanza, UnknownStanza};
 use hide_sign::{SigningIdentity, VerifyingIdentity};
 use thiserror::Error;
 use zeroize::Zeroizing;
@@ -20,7 +20,9 @@ const MAX_CHUNKS: u64 = 1 << 32;
 pub const MAX_SIGNED_INPUT: u64 = 1 << 30;
 const RECORD_LEN: usize = CHUNK_LEN + TAG_LEN;
 const CHUNK_AAD_LEN: usize = 91;
-const SIGNING_CONTEXT: &[u8] = b"HIDE/0.5 container";
+const SIGNING_CONTEXT: &[u8] = b"HIDE/1.0 container";
+/// HIDE/0.5–0.8 signed containers (preamble minor 2). Verified, never produced.
+const LEGACY_SIGNING_CONTEXT: &[u8] = b"HIDE/0.5 container";
 
 #[derive(Debug, Error)]
 pub enum ObjectError {
@@ -59,10 +61,15 @@ pub enum SignaturePlacement {
     /// Inside the encrypted metadata. Hides the signer from non-recipients.
     Confidential,
     /// Signs, then discards the signature while leaving the preamble claiming
-    /// minor 2. Exists only so tests can reach the stripped-signature check.
+    /// to be signed. Exists only so tests can reach the stripped-signature check.
     #[cfg(feature = "test-vectors")]
     #[doc(hidden)]
     Stripped,
+    /// The HIDE/0.5 wire form: minor 2 and the legacy transcript. Exists only so
+    /// tests and vectors can prove that such files are still read.
+    #[cfg(feature = "test-vectors")]
+    #[doc(hidden)]
+    LegacyPublic,
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -146,6 +153,7 @@ pub fn encrypt_signed<R: Read, W: Write>(
         material,
         stanzas,
         Some((identity, placement)),
+        &VectorShape::default(),
     )
 }
 
@@ -156,7 +164,36 @@ fn encrypt_with_material<R: Read, W: Write>(
     material: ObjectMaterial,
     recipients: Vec<RecipientStanza>,
 ) -> Result<u64, ObjectError> {
-    encrypt_inner(input, output, metadata, material, recipients, None)
+    encrypt_inner(
+        input,
+        output,
+        metadata,
+        material,
+        recipients,
+        None,
+        &VectorShape::default(),
+    )
+}
+
+/// Wire features a HIDE/1.0 writer never emits but every reader must accept.
+/// Production code always uses the default; the vector generator uses the rest
+/// to freeze GREASE containers that prove readers skip what they do not know.
+#[derive(Debug, Clone)]
+#[doc(hidden)]
+pub struct VectorShape {
+    pub minor: u8,
+    pub header_extensions: Vec<hide_format::Extension>,
+    pub leading_stanzas: Vec<Stanza>,
+}
+
+impl Default for VectorShape {
+    fn default() -> Self {
+        Self {
+            minor: hide_format::CURRENT_MINOR,
+            header_extensions: Vec::new(),
+            leading_stanzas: Vec::new(),
+        }
+    }
 }
 
 /// Commits to the recipient set, the metadata and the plaintext. Binding only
@@ -168,9 +205,52 @@ fn encrypt_with_material<R: Read, W: Write>(
 /// header's ciphertext: sealing is randomised and the confidential placement
 /// reseals after signing, so the ciphertext a verifier sees is not the one that
 /// existed when the signature was made.
+///
+/// HIDE/1.0 also binds the preamble's version and flags, every stanza's tag and
+/// every field length (so unknown stanzas and a stanza boundary cannot be
+/// shifted), and the header extensions, which the metadata base does not cover.
 fn transcript(
-    object_id: &[u8; 32],
-    recipients: &[RecipientStanza],
+    preamble: Preamble,
+    header: &ProtectedHeader,
+    metadata_base: &[u8],
+    plaintext_hash: &[u8; 32],
+    plaintext_len: u64,
+) -> Vec<u8> {
+    if preamble.is_legacy() {
+        return legacy_transcript(header, metadata_base, plaintext_hash, plaintext_len);
+    }
+    let mut message = Vec::new();
+    message.extend_from_slice(b"HIDE/1.0 transcript");
+    message.extend_from_slice(&preamble.signed_prefix());
+    message.extend_from_slice(&SUITE.to_be_bytes());
+    message.extend_from_slice(&header.object_id);
+    message.extend_from_slice(&(header.recipients.len() as u64).to_be_bytes());
+    for stanza in &header.recipients {
+        let fields = stanza.fields();
+        message.extend_from_slice(&u64::from(stanza.tag()).to_be_bytes());
+        message.extend_from_slice(&(fields.len() as u64).to_be_bytes());
+        for field in fields {
+            message.extend_from_slice(&(field.len() as u64).to_be_bytes());
+            message.extend_from_slice(field);
+        }
+    }
+    message.extend_from_slice(&(header.extensions.len() as u64).to_be_bytes());
+    for extension in &header.extensions {
+        message.extend_from_slice(&extension.key.to_be_bytes());
+        message.extend_from_slice(&(extension.value.len() as u64).to_be_bytes());
+        message.extend_from_slice(&extension.value);
+    }
+    message.extend_from_slice(&(metadata_base.len() as u64).to_be_bytes());
+    message.extend_from_slice(metadata_base);
+    message.extend_from_slice(plaintext_hash);
+    message.extend_from_slice(&plaintext_len.to_be_bytes());
+    message
+}
+
+/// The HIDE/0.5 transcript. Only reachable for minor 2, which admits neither
+/// extensions nor unknown stanzas, so every stanza here is X-Wing.
+fn legacy_transcript(
+    header: &ProtectedHeader,
     metadata_base: &[u8],
     plaintext_hash: &[u8; 32],
     plaintext_len: u64,
@@ -178,9 +258,9 @@ fn transcript(
     let mut message = Vec::new();
     message.extend_from_slice(b"HIDE/0.5 transcript");
     message.extend_from_slice(&SUITE.to_be_bytes());
-    message.extend_from_slice(object_id);
-    message.extend_from_slice(&(recipients.len() as u64).to_be_bytes());
-    for stanza in recipients {
+    message.extend_from_slice(&header.object_id);
+    message.extend_from_slice(&(header.recipients.len() as u64).to_be_bytes());
+    for stanza in header.recipients.iter().filter_map(Stanza::as_xwing) {
         message.extend_from_slice(&stanza.encapsulation);
         message.extend_from_slice(&stanza.wrapped_cek);
     }
@@ -191,6 +271,14 @@ fn transcript(
     message
 }
 
+fn signing_context(preamble: Preamble) -> &'static [u8] {
+    if preamble.is_legacy() {
+        LEGACY_SIGNING_CONTEXT
+    } else {
+        SIGNING_CONTEXT
+    }
+}
+
 fn encrypt_inner<R: Read, W: Write>(
     input: &mut R,
     output: &mut W,
@@ -198,6 +286,7 @@ fn encrypt_inner<R: Read, W: Write>(
     material: ObjectMaterial,
     recipients: Vec<RecipientStanza>,
     signer: Option<(&SigningIdentity, SignaturePlacement)>,
+    shape: &VectorShape,
 ) -> Result<u64, ObjectError> {
     // Signing needs the plaintext hash, which is only known once the payload has
     // been consumed, so the container is built in memory and written at the end.
@@ -226,29 +315,59 @@ fn encrypt_inner<R: Read, W: Write>(
     let base_metadata = Zeroizing::new(metadata.signing_base()?);
     let mut header = ProtectedHeader {
         object_id: material.object_id,
-        recipients,
+        recipients: shape
+            .leading_stanzas
+            .iter()
+            .cloned()
+            .chain(recipients.into_iter().map(Stanza::from))
+            .collect(),
         encrypted_metadata: Vec::new(),
         signatures: Vec::new(),
+        extensions: shape.header_extensions.clone(),
+    };
+
+    // The signed prefix does not include header_len, so the preamble the
+    // transcript binds can be fixed before the header is sized.
+    #[cfg(feature = "test-vectors")]
+    let legacy = matches!(signer, Some((_, SignaturePlacement::LegacyPublic)));
+    #[cfg(not(feature = "test-vectors"))]
+    let legacy = false;
+    let preamble_for = |length: usize| -> Result<Preamble, FormatError> {
+        if legacy {
+            Preamble::legacy_signed(length)
+        } else {
+            let flags = if signer.is_some() {
+                hide_format::FLAG_SIGNED
+            } else {
+                0
+            };
+            Preamble::from_parts(length, shape.minor, flags)
+        }
     };
 
     let mut metadata = metadata;
     if let Some((identity, placement)) = signer {
+        let provisional = preamble_for(1)?;
         let message = transcript(
-            &material.object_id,
-            &header.recipients,
+            provisional,
+            &header,
             &base_metadata,
             &plaintext_hash.expect("set when signing"),
             plaintext_len.expect("set when signing"),
         );
         let stanza = SignatureStanza {
             verifying_key: identity.verifying_key().to_bytes().to_vec(),
-            signature: identity.sign(SIGNING_CONTEXT, &message).to_vec(),
+            signature: identity
+                .sign(signing_context(provisional), &message)
+                .to_vec(),
         };
         match placement {
             SignaturePlacement::Public => header.signatures.push(stanza),
             SignaturePlacement::Confidential => metadata.signature = Some(stanza),
             #[cfg(feature = "test-vectors")]
             SignaturePlacement::Stripped => drop(stanza),
+            #[cfg(feature = "test-vectors")]
+            SignaturePlacement::LegacyPublic => header.signatures.push(stanza),
         }
     }
 
@@ -264,7 +383,7 @@ fn encrypt_inner<R: Read, W: Write>(
     let signed = signer.is_some();
     let protected = header.encode()?;
     let header_length = hide_format::encode_header(&protected, &[0; 32])?.len();
-    let preamble = Preamble::with_signed(header_length, signed)?.encode();
+    let preamble = preamble_for(header_length)?.encode();
     let mac_key =
         hide_crypto::derive_key(&material.cek, &material.object_id, b"HIDE/0.1 header-mac")?;
     let mac = hide_crypto::mac(&mac_key, &[&preamble, &protected])?;
@@ -301,6 +420,14 @@ pub fn decrypt_to_staging<R: Read, W: Write>(
     input.read_exact(&mut header_bytes)?;
     let (protected, mac) = hide_format::decode_header(&header_bytes)?;
     let header = ProtectedHeader::decode(&protected)?;
+    // The legacy transcript binds neither extensions nor stanza tags, so a
+    // minor-2 container carrying either could have them added after signing.
+    if preamble.is_legacy()
+        && (!header.extensions.is_empty()
+            || header.recipients.iter().any(|s| s.as_xwing().is_none()))
+    {
+        return Err(FormatError::MalformedHeader.into());
+    }
     let cek = recover_cek(secret, &header, &preamble_bytes, &protected, &mac)?;
     let metadata_key = hide_crypto::derive_key(&cek, &header.object_id, b"HIDE/0.1 metadata")?;
     let metadata_plaintext = hide_crypto::open(
@@ -310,6 +437,9 @@ pub fn decrypt_to_staging<R: Read, W: Write>(
         &header.encrypted_metadata,
     )?;
     let metadata = Metadata::decode(&metadata_plaintext)?;
+    if preamble.is_legacy() && !metadata.extensions.is_empty() {
+        return Err(FormatError::InvalidMetadata.into());
+    }
     let mut salt = [0; 16];
     read_payload(input, &mut salt)?;
     let key = payload_key(&cek, &header.object_id, &salt)?;
@@ -326,13 +456,7 @@ pub fn decrypt_to_staging<R: Read, W: Write>(
     )?;
     let plaintext_hash = hasher.finish();
 
-    let signer = verify_signature(
-        &header,
-        &metadata,
-        preamble.is_signed(),
-        &plaintext_hash,
-        plaintext_len,
-    )?;
+    let signer = verify_signature(preamble, &header, &metadata, &plaintext_hash, plaintext_len)?;
     Ok(VerifiedObject {
         metadata,
         plaintext_len,
@@ -343,17 +467,18 @@ pub fn decrypt_to_staging<R: Read, W: Write>(
 /// Returns the signer when the container carries a signature that verifies, and
 /// refuses the object otherwise. Called before the caller may publish plaintext.
 fn verify_signature(
+    preamble: Preamble,
     header: &ProtectedHeader,
     metadata: &Metadata,
-    preamble_says_signed: bool,
     plaintext_hash: &[u8; 32],
     plaintext_len: u64,
 ) -> Result<Option<VerifyingIdentity>, ObjectError> {
+    let preamble_says_signed = preamble.is_signed();
     let stanza = match (header.signatures.first(), metadata.signature.as_ref()) {
         (Some(_), Some(_)) => return Err(ObjectError::InvalidSignature),
         (Some(stanza), None) | (None, Some(stanza)) => stanza,
         (None, None) => {
-            // A preamble claiming minor 2 with no signature is a stripped
+            // A preamble claiming to be signed with no signature is a stripped
             // signature, not an unsigned object.
             return if preamble_says_signed {
                 Err(ObjectError::MissingSignature)
@@ -369,14 +494,14 @@ fn verify_signature(
     let identity = VerifyingIdentity::from_bytes(&stanza.verifying_key)
         .map_err(|_| ObjectError::InvalidSignature)?;
     let message = transcript(
-        &header.object_id,
-        &header.recipients,
+        preamble,
+        header,
         &metadata.signing_base()?,
         plaintext_hash,
         plaintext_len,
     );
     identity
-        .verify(SIGNING_CONTEXT, &message, &stanza.signature)
+        .verify(signing_context(preamble), &message, &stanza.signature)
         .map_err(|_| ObjectError::InvalidSignature)?;
     Ok(Some(identity))
 }
@@ -388,7 +513,9 @@ fn recover_cek(
     protected: &[u8],
     mac: &[u8; 32],
 ) -> Result<ContentKey, ObjectError> {
-    for stanza in &header.recipients {
+    // Unknown stanza types are skipped, not refused: a later recipient type must
+    // not lock out the recipients a file already had.
+    for stanza in header.recipients.iter().filter_map(Stanza::as_xwing) {
         if let Ok(cek) = hide_crypto::unwrap_cek(
             secret,
             &header.object_id,
@@ -622,6 +749,7 @@ pub fn encrypt_stripped_signature_for_test<R: Read, W: Write>(
         material,
         stanzas,
         Some((identity, SignaturePlacement::Stripped)),
+        &VectorShape::default(),
     )
 }
 
@@ -670,7 +798,129 @@ pub fn encrypt_for_vector<R: Read, W: Write>(
     recipient: &RecipientPublic,
     metadata: &Metadata,
 ) -> Result<u64, ObjectError> {
-    encrypt_for_vector_inner(input, output, recipient, metadata, None)
+    encrypt_for_vector_inner(
+        input,
+        output,
+        recipient,
+        metadata,
+        None,
+        &VectorShape::default(),
+    )
+}
+
+/// Everything a recipient can do to a container: open it, change the header
+/// (and optionally the minor), then recompute the header MAC and re-encrypt
+/// the payload so every authenticator a recipient controls is valid again.
+/// What survives this is exactly what a signature must catch. Test-only; it is
+/// also how the rejection vectors that need an authentic MAC are produced.
+#[cfg(feature = "test-vectors")]
+pub fn rewrite_header_for_test(
+    container: &[u8],
+    secret: &RecipientSecret,
+    minor: Option<u8>,
+    edit: impl FnOnce(&mut ProtectedHeader),
+) -> Result<Vec<u8>, ObjectError> {
+    rewrite_for_test(container, secret, minor, None, edit, |_| {})
+}
+
+/// As [`rewrite_header_for_test`], and also sets the flags byte and edits the
+/// decrypted metadata before resealing it.
+#[cfg(feature = "test-vectors")]
+pub fn rewrite_for_test(
+    container: &[u8],
+    secret: &RecipientSecret,
+    minor: Option<u8>,
+    flags: Option<u8>,
+    edit: impl FnOnce(&mut ProtectedHeader),
+    edit_metadata: impl FnOnce(&mut Vec<u8>),
+) -> Result<Vec<u8>, ObjectError> {
+    let preamble = Preamble::decode(&container[..PREAMBLE_LEN])?;
+    let header_end = PREAMBLE_LEN + preamble.header_len();
+    let (protected, mac) = hide_format::decode_header(&container[PREAMBLE_LEN..header_end])?;
+    let mut header = ProtectedHeader::decode(&protected)?;
+    let cek = recover_cek(
+        secret,
+        &header,
+        &container[..PREAMBLE_LEN],
+        &protected,
+        &mac,
+    )?;
+    let mut plaintext = Vec::new();
+    decrypt_to_staging(&mut &container[..], &mut plaintext, secret)?;
+
+    let metadata_key = hide_crypto::derive_key(&cek, &header.object_id, b"HIDE/0.1 metadata")?;
+    let aad = metadata_aad(&header.object_id);
+    let mut metadata =
+        hide_crypto::open(&metadata_key, &[0; 12], &aad, &header.encrypted_metadata)?;
+    edit_metadata(&mut metadata);
+    header.encrypted_metadata = hide_crypto::seal(&metadata_key, &[0; 12], &aad, &metadata)?;
+    edit(&mut header);
+
+    // Encoded by hand where the edit left the header outside what encode()
+    // accepts would defeat the purpose; every edit used here stays encodable.
+    let protected = header.encode()?;
+    let length = hide_format::encode_header(&protected, &[0; 32])?.len();
+    let mut bytes = Preamble::decode(&container[..PREAMBLE_LEN])?.encode();
+    bytes[9] = minor.unwrap_or(bytes[9]);
+    bytes[11] = flags.unwrap_or(bytes[11]);
+    bytes[12..].copy_from_slice(&(length as u32).to_be_bytes());
+    let mac_key = hide_crypto::derive_key(&cek, &header.object_id, b"HIDE/0.1 header-mac")?;
+    let mac = hide_crypto::mac(&mac_key, &[&bytes, &protected])?;
+    let salt: [u8; 16] = container[header_end..header_end + 16]
+        .try_into()
+        .map_err(|_| ObjectError::TruncatedPayload)?;
+
+    let mut out = bytes.to_vec();
+    out.extend_from_slice(&hide_format::encode_header(&protected, &mac)?);
+    out.extend_from_slice(&salt);
+    let key = payload_key(&cek, &header.object_id, &salt)?;
+    encrypt_records(
+        &mut plaintext.as_slice(),
+        &mut out,
+        &key,
+        &header.object_id,
+        &hide_crypto::hash(&[&protected]),
+    )?;
+    Ok(out)
+}
+
+/// Swaps in `protected` verbatim, which may be bytes `encode()` refuses, and
+/// re-authenticates everything a recipient controls around it. Lets the vector
+/// generator prove a reader refuses a malformed header for that reason alone,
+/// not because the MAC failed first. Test-only.
+#[cfg(feature = "test-vectors")]
+pub fn replace_protected_for_test(
+    container: &[u8],
+    secret: &RecipientSecret,
+    protected: &[u8],
+) -> Result<Vec<u8>, ObjectError> {
+    let preamble = Preamble::decode(&container[..PREAMBLE_LEN])?;
+    let header_end = PREAMBLE_LEN + preamble.header_len();
+    let (original, mac) = hide_format::decode_header(&container[PREAMBLE_LEN..header_end])?;
+    let header = ProtectedHeader::decode(&original)?;
+    let cek = recover_cek(secret, &header, &container[..PREAMBLE_LEN], &original, &mac)?;
+    let mut plaintext = Vec::new();
+    decrypt_to_staging(&mut &container[..], &mut plaintext, secret)?;
+
+    let length = hide_format::encode_header(protected, &[0; 32])?.len();
+    let mut bytes = preamble.encode();
+    bytes[12..].copy_from_slice(&(length as u32).to_be_bytes());
+    let mac_key = hide_crypto::derive_key(&cek, &header.object_id, b"HIDE/0.1 header-mac")?;
+    let mac = hide_crypto::mac(&mac_key, &[&bytes, protected])?;
+    let salt = &container[header_end..header_end + 16];
+    let mut out = bytes.to_vec();
+    out.extend_from_slice(&hide_format::encode_header(protected, &mac)?);
+    out.extend_from_slice(salt);
+    let salt: [u8; 16] = salt.try_into().map_err(|_| ObjectError::TruncatedPayload)?;
+    let key = payload_key(&cek, &header.object_id, &salt)?;
+    encrypt_records(
+        &mut plaintext.as_slice(),
+        &mut out,
+        &key,
+        &header.object_id,
+        &hide_crypto::hash(&[protected]),
+    )?;
+    Ok(out)
 }
 
 /// Deterministic signed container, so the vectors are reproducible.
@@ -689,7 +939,22 @@ pub fn encrypt_signed_for_vector<R: Read, W: Write>(
         recipient,
         metadata,
         Some((identity, placement)),
+        &VectorShape::default(),
     )
+}
+
+/// Deterministic container with an explicit wire shape (GREASE, other minors),
+/// signed or not. The vector generator is the only caller.
+#[cfg(feature = "test-vectors")]
+pub fn encrypt_shaped_for_vector<R: Read, W: Write>(
+    input: &mut R,
+    output: &mut W,
+    recipient: &RecipientPublic,
+    metadata: &Metadata,
+    signer: Option<(&SigningIdentity, SignaturePlacement)>,
+    shape: &VectorShape,
+) -> Result<u64, ObjectError> {
+    encrypt_for_vector_inner(input, output, recipient, metadata, signer, shape)
 }
 
 #[cfg(feature = "test-vectors")]
@@ -699,6 +964,7 @@ fn encrypt_for_vector_inner<R: Read, W: Write>(
     recipient: &RecipientPublic,
     metadata: &Metadata,
     signer: Option<(&SigningIdentity, SignaturePlacement)>,
+    shape: &VectorShape,
 ) -> Result<u64, ObjectError> {
     let material = ObjectMaterial {
         cek: ContentKey::from_bytes([0x11; 32]),
@@ -721,6 +987,7 @@ fn encrypt_for_vector_inner<R: Read, W: Write>(
             wrapped_cek: wrapped.wrapped_cek,
         }],
         signer,
+        shape,
     )
 }
 
@@ -770,6 +1037,7 @@ mod tests {
             filename: Some("hello.txt".into()),
             media_type: Some("text/plain".into()),
             signature: None,
+            extensions: Vec::new(),
         };
         encrypt(
             &mut b"Hello HIDE\n".as_slice(),

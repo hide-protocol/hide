@@ -2,7 +2,7 @@
 
 *HIDE is experimental and has not been audited by a third party. See [audit-status.md](audit-status.md).*
 
-This document states what HIDE defends, against whom, and what it does not. Every "provided" claim below is backed by a test in the repository; every "not provided" is a deliberate statement, not an omission. The normative wire format is [../spec/hide-0.1.md](../spec/hide-0.1.md).
+This document states what HIDE defends, against whom, and what it does not. Every "provided" claim below is backed by a test in the repository; every "not provided" is a deliberate statement, not an omission. The normative wire format is [../spec/hide-1.md](../spec/hide-1.md).
 
 ## Assets
 
@@ -14,18 +14,18 @@ This document states what HIDE defends, against whom, and what it does not. Ever
 | Signing key | Same master seed, domain-separated | Same key file |
 | Metadata (filename, media type, confidential signature) | Encrypted in the header | ChaCha20-Poly1305 under a key derived from the CEK |
 | Container integrity: chunk order, count, end of stream, recipient set | Header MAC + per-chunk AAD + FINAL record | HMAC-SHA256 over `preamble ‖ protected`; 91-byte AAD binding object id, header hash, counter, kind, length |
-| Authorship of content | Only if signed | Ed25519 + ML-DSA-65 (FIPS 204) hybrid over a transcript that includes `SHA-256(plaintext)` and the recipient set |
+| Authorship of content | Only if signed | Ed25519 + ML-DSA-65 (FIPS 204) hybrid over a transcript that includes the preamble, every recipient stanza (unknown types too), header and metadata extensions, and `SHA-256(plaintext)` |
 | Device membership of an identity | Public hash-linked log | Signatures by already-trusted devices; authority evaluated at entry position |
 | Epoch history | Public hash-linked chain | SHA-256 links; secrets are independent random keys |
 | Published log state | Checkpoint `size ‖ root` | RFC 6962 inclusion and consistency proofs |
 
 ## Adversaries
 
-**Passive network observer.** Sees containers in transit. Learns ciphertext length, recipient count (number of stanzas), and whether the container is signed (preamble minor 2). Learns a *public* signer's key. Cannot read plaintext, metadata, or a confidential signature.
+**Passive network observer.** Sees containers in transit. Learns ciphertext length, recipient count (number of stanzas), and whether the container is signed (preamble flag `0x01` SIGNED, or minor 2 for a legacy 0.5–0.8 signed container). Learns a *public* signer's key. Cannot read plaintext, metadata, or a confidential signature.
 
 **Storage or cloud provider.** Holds containers indefinitely. Same view as the network observer, plus the ability to serve altered or old containers. Alteration is detected; substitution of a whole older container is not (HIDE has no freshness).
 
-**Malicious co-recipient.** Holds the CEK. For an *unsigned* container can rewrite the recipient set, re-encrypt arbitrary plaintext under the same header, and recompute a valid header MAC — the container will look authentic to every other recipient. For a *signed* container, cannot do any of that without invalidating the signature, because the transcript binds the stanza list and the plaintext hash. Cannot learn the other recipients' secret keys.
+**Malicious co-recipient.** Holds the CEK. For an *unsigned* container can rewrite the recipient set, re-encrypt arbitrary plaintext under the same header, and recompute a valid header MAC — the container will look authentic to every other recipient. For a *signed* container, cannot do any of that without invalidating the signature, because the transcript binds the stanza list (including stanza types it does not understand), the extensions and the plaintext hash. Cannot learn the other recipients' secret keys.
 
 **Compromised device.** An attacker with a recipient's secret key reads every container encrypted to that key, past and future, until the key is revoked *and* senders stop using it. Can sign as that device until revocation appears in the log. Cannot forge entries that appear after its revocation, cannot re-enrol itself, cannot revoke the device that removed it.
 
@@ -87,7 +87,7 @@ Legend: **P** provided (tested) · **–** not provided · **~** partial, reason
 - **Unaudited composition.** The primitives are upstream and pinned; the composition (key schedule, AAD layout, transcript, log encoding) is ours and has been reviewed only internally. Internal review found seven real defects in 0.7.0 ([audit-status.md](audit-status.md)); fuzzing found a key-file Argon2 memory exhaustion affecting 0.2.0–0.7.x, fixed in 0.8.0 ([HIDE-2026-001](advisories.md)); more exist.
 - **Moving standards.** X-Wing is stable across draft-ietf-hpke-pq revisions and KEM id `0x647A` is IANA-allocated, but the HPKE-PQ document is still a draft. A change would require regenerating vectors and is a format change ([stability.md](stability.md)).
 - **Unsigned containers are trusted by habit.** Users may assume an unsigned container that decrypts came from who they think. It proves only that it was not altered by a non-recipient.
-- **Epoch secrets are not persisted.** `hide epoch-init` publishes a history but the secret lives only in that process, so erasure is demonstrable and not yet operationally useful.
+- **Epoch erasure depends on the storage.** The CLI keeps epoch secrets in one passphrase-sealed store (`HIDE-EPK`) and `hide epoch-erase` reseals it without the erased epoch. A backup, snapshot or remapped flash block holding an older copy still has the epochs that copy held, for anyone who also has the passphrase.
 - **Key file passphrase is the only at-rest protection.** A weak passphrase plus a copied key file is a recoverable key. There is no escrow or reset; a forgotten passphrase is unrecoverable.
 - **The MLS binding is parsed by exactly one implementation.** Ours.
 - **SDK boundaries.** Nine bindings over one ABI mean one bug is nine bugs. The cross-surface test catches divergence, not shared defects.

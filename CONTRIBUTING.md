@@ -5,7 +5,7 @@ independent implementations, adversarial tests, and review of the wire format.
 
 ## Before you start
 
-Read [spec/hide-0.1.md](spec/hide-0.1.md). The specification is the source of
+Read [spec/hide-1.md](spec/hide-1.md). The specification is the source of
 truth; the Rust code is one implementation of it.
 
 ## Running everything
@@ -64,7 +64,7 @@ them fail, that is a protocol change, and it must be deliberate:
    `cargo run -p hide-object --features test-vectors --example generate_vectors`
 3. Confirm `conformance/node/verify.mjs` still passes, so the new format is
    still implementable from the spec alone.
-4. Update `spec/hide-0.1.md` in the same PR.
+4. Update `spec/hide-1.md` in the same PR.
 
 While the version is 0.x, breaking the format is allowed. After 1.0 it is not.
 

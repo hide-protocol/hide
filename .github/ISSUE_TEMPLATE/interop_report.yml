@@ -5,7 +5,7 @@ body:
   - type: markdown
     attributes:
       value: |
-        Independent implementations are how a format earns trust, and a disagreement is valuable whichever side turns out to be wrong. The frozen vectors live in [conformance/vectors](https://github.com/hide-protocol/hide/tree/main/conformance/vectors); the normative text is [spec/hide-0.1.md](https://github.com/hide-protocol/hide/blob/main/spec/hide-0.1.md).
+        Independent implementations are how a format earns trust, and a disagreement is valuable whichever side turns out to be wrong. The frozen vectors live in [conformance/vectors](https://github.com/hide-protocol/hide/tree/main/conformance/vectors); the normative text is [spec/hide-1.md](https://github.com/hide-protocol/hide/blob/main/spec/hide-1.md).
 
         If the disagreement means a vector that should be *rejected* is accepted by HIDE, that is a security finding: use private vulnerability reporting per [SECURITY.md](https://github.com/hide-protocol/hide/blob/main/SECURITY.md) instead.
   - type: input
@@ -52,7 +52,7 @@ body:
     id: spec_section
     attributes:
       label: Spec section
-      placeholder: "spec/hide-0.1.md §5 (FINAL rule)"
+      placeholder: "spec/hide-1.md §5 (FINAL rule)"
   - type: textarea
     id: expected
     attributes:

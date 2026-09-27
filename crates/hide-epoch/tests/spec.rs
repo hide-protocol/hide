@@ -1,4 +1,4 @@
-//! Checks `spec/hide-0.1.md` §9 against the implementation.
+//! Checks `spec/hide-1.md` §11 against the implementation.
 //!
 //! The first draft of that section had the field order wrong and omitted the
 //! length prefix. Prose is not checkable; this is.
@@ -6,7 +6,7 @@
 use hide_epoch::EpochChain;
 use sha2::{Digest, Sha256};
 
-/// §9: `SHA-256("HIDE/0.6 epoch chain" || previous || number || len(key) || key)`.
+/// §11: `SHA-256("HIDE/0.6 epoch chain" || previous || number || len(key) || key)`.
 #[test]
 fn the_epoch_link_matches_the_spec() {
     let mut chain = EpochChain::new().unwrap();
@@ -25,14 +25,14 @@ fn the_epoch_link_matches_the_spec() {
 
         assert_eq!(
             record.link, expected,
-            "epoch {}: the implementation and spec §9 disagree about the link",
+            "epoch {}: the implementation and spec §11 disagree about the link",
             record.number
         );
         previous = record.link;
     }
 }
 
-/// §9 claims epoch secrets are independent random keys rather than derived, and
+/// §11 claims epoch secrets are independent random keys rather than derived, and
 /// that this is what forward security rests on. Two chains made the same way
 /// must therefore share no key material.
 #[test]
@@ -47,7 +47,7 @@ fn epoch_keys_are_independent_not_derived() {
     assert_ne!(first.public_key(0).unwrap(), first.public_key(1).unwrap());
 }
 
-/// §9: the published chain still proves an erased epoch existed and where it
+/// §11: the published chain still proves an erased epoch existed and where it
 /// sat, which is what distinguishes "erased" from "never existed".
 #[test]
 fn an_erased_epoch_remains_in_the_published_history() {

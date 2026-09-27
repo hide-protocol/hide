@@ -525,6 +525,7 @@ fn info_recognises_signing_keys_signatures_and_signed_containers() -> Result<(),
     );
     let text = String::from_utf8_lossy(&container.stdout);
     assert!(text.contains("signed: yes"), "{text}");
-    assert!(text.contains("format version: 0.2"), "{text}");
+    // HIDE/1.0 marks a signature with the critical SIGNED flag, not minor 2.
+    assert!(text.contains("format version: 0.1, flags 0x01"), "{text}");
     Ok(())
 }

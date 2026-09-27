@@ -63,7 +63,7 @@ jobs:
           d="fuzz/corpus/${{ matrix.target }}"
           mkdir -p "$d"
           case "${{ matrix.target }}" in
-            format_header|object_open) cp conformance/vectors/*.hide "$d/" ;;
+            format_header|object_open) cp conformance/vectors/*.hide conformance/vectors/rejections/*.hide "$d/" ;;
             keyring_open) cp conformance/vectors/*.test-secret conformance/vectors/*.test-seed "$d/" ;;
             identity_log) cp conformance/vectors/subsystems/identity-*.bin "$d/" ;;
             epoch_chain) cp conformance/vectors/subsystems/epoch-*.bin "$d/" ;;

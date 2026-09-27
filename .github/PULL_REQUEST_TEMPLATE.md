@@ -10,7 +10,7 @@
 - [ ] `conformance/vectors` are unchanged, **or** intentionally regenerated
       (`cargo run -p hide-object --features test-vectors --example generate_vectors`)
       and the format change is explained below.
-- [ ] `spec/hide-0.1.md` updated if any byte on the wire changed.
+- [ ] `spec/hide-1.md` updated if any byte on the wire changed.
 - [ ] `CHANGELOG.md` entry under the unreleased version; a format change is called out explicitly.
 - [ ] `./scripts/set-version.ps1 -Check` passes.
 - [ ] No new cryptographic primitives and no hand-rolled KEM combiner (`AGENTS.md` invariants);

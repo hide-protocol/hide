@@ -228,10 +228,24 @@ jobs:
         with:
           node-version: 22
       - run: cargo test -p hide-object --test vectors
+      # Exits non-zero when any HIDE/1.0 vector (grease, v1-signed, manifest)
+      # no longer matches what the current code produces.
+      - run: cargo run -p hide-object --features test-vectors --example generate_v1_vectors -- --check
       - run: npm install --no-package-lock --no-audit --no-fund
         working-directory: conformance/node
       - run: node verify.mjs
         working-directory: conformance/node
+      # Same mutants into both readers; any accept/reject disagreement fails.
+      # The seed changes per run, so CI keeps exploring; a finding is kept.
+      - run: cargo build -p hide-object --features test-vectors --example differential_oracle
+      - run: node conformance/differential/run.mjs --iterations 1500 --seed ${{ github.run_number }}
+      - name: Keep any differential finding
+        if: failure()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: differential-findings
+          path: conformance/differential/findings/
+          if-no-files-found: ignore
 
   minimum-supported-rust:
     needs: lint
@@ -281,6 +295,10 @@ jobs:
           mkdir -p fuzz/corpus/{format_header,object_open,keyring_open,identity_log,epoch_chain,transparency_proofs,challenge_decode,mls_message}
           cp conformance/vectors/*.hide fuzz/corpus/format_header/
           cp conformance/vectors/*.hide fuzz/corpus/object_open/
+          # Each rejection sits one field away from an accepted container, which
+          # is exactly where a refusal rule can be wrong.
+          cp conformance/vectors/rejections/*.hide fuzz/corpus/format_header/
+          cp conformance/vectors/rejections/*.hide fuzz/corpus/object_open/
           cp conformance/vectors/*.test-secret conformance/vectors/*.test-seed fuzz/corpus/keyring_open/
           cp conformance/vectors/subsystems/identity-*.bin fuzz/corpus/identity_log/
           cp conformance/vectors/subsystems/epoch-*.bin fuzz/corpus/epoch_chain/

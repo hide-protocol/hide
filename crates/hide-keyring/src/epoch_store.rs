@@ -6,7 +6,7 @@
 //! passphrase, and erasing an epoch means resealing the file without it, so the
 //! store that remains on disk holds no copy — readable or sealed — of that seed.
 //!
-//! Layout (see `spec/epoch-store.md` for the normative text):
+//! Layout (implementation-defined; described in `spec/hide-1.md` §14):
 //!
 //! ```text
 //! "HIDE-EPK" || version u8 = 1 || parallelism u8 || memory_kib u32be ||

@@ -28,9 +28,10 @@ assert!(!encoded.is_empty());
 ```
 
 The normative description lives in
-[`spec/hide-0.1.md`](https://github.com/hide-protocol/hide/blob/main/spec/hide-0.1.md);
+[`spec/hide-1.md`](https://github.com/hide-protocol/hide/blob/main/spec/hide-1.md);
 the frozen vectors under `conformance/vectors/` are what this crate is tested
 against.
 
-**Experimental and unaudited.** The format may still change before 1.0.
+**Experimental and unaudited.** The wire format is frozen from 0.9.0, the
+release candidate for 1.0; this crate's Rust API may still change.
 Licensed Apache-2.0.

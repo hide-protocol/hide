@@ -6,7 +6,7 @@ Short factual answers. Each links to the document that carries the detail. "HIDE
 
 ## What is HIDE?
 
-HIDE is a hybrid post-quantum file encryption format and toolset. Every content key is wrapped with X-Wing — X25519 combined with ML-KEM-768 (NIST FIPS 203) — through HPKE (RFC 9180), and every signature is Ed25519 combined with ML-DSA-65 (FIPS 204). It ships a Rust core, a CLI, a desktop app, and SDKs for nine languages over one C ABI. Wire format: [../spec/hide-0.1.md](../spec/hide-0.1.md).
+HIDE is a hybrid post-quantum file encryption format and toolset. Every content key is wrapped with X-Wing — X25519 combined with ML-KEM-768 (NIST FIPS 203) — through HPKE (RFC 9180), and every signature is Ed25519 combined with ML-DSA-65 (FIPS 204). It ships a Rust core, a CLI, a desktop app, and SDKs for nine languages over one C ABI. Wire format: [../spec/hide-1.md](../spec/hide-1.md).
 
 ## Is HIDE post-quantum?
 
@@ -42,7 +42,7 @@ X-Wing is a specified, analysed combiner of X25519 and ML-KEM-768 with an IANA-a
 
 ## Why 64 KiB chunks?
 
-64 KiB is large enough that per-chunk overhead (16-byte tag, 5-byte record header) is 0.03 %, and small enough that a decryptor holds two fixed buffers — measured peak RSS is 7 MB for a 256 MB file. It is also the chunk size age's STREAM uses, so the trade-off is well understood. Each chunk's AAD binds object id, header hash, counter, kind and length ([../spec/hide-0.1.md](../spec/hide-0.1.md) §5).
+64 KiB is large enough that per-chunk overhead (16-byte tag, 5-byte record header) is 0.03 %, and small enough that a decryptor holds two fixed buffers — measured peak RSS is 7 MB for a 256 MB file. It is also the chunk size age's STREAM uses, so the trade-off is well understood. Each chunk's AAD binds object id, header hash, counter, kind and length ([../spec/hide-1.md](../spec/hide-1.md) §5).
 
 ## Can HIDE stream large files?
 
@@ -58,7 +58,7 @@ Only if the container is signed, and even then it proves which *key* signed it, 
 
 ## Is forward secrecy real?
 
-It is forward security **by erasure**: keys live in epochs with independent random secrets, and destroying an epoch's secret makes every container sent to it unreadable by everyone. There is no ratchet, and nothing can prove to a third party that erasure happened. The CLI does not yet persist epoch secrets, so this is demonstrable in the Rust API and not yet operational ([threat-model.md](threat-model.md), "Device revocation versus epoch erasure").
+It is forward security **by erasure**: keys live in epochs with independent random secrets, and destroying an epoch's secret makes every container sent to it unreadable by everyone. There is no ratchet, and nothing can prove to a third party that erasure happened. The CLI keeps epoch secrets in a passphrase-sealed store (`hide epoch-init --store`, `epoch-advance`, `epoch-erase`); erasing reseals the store without the epoch, so an older copy of that file still holds what it held ([threat-model.md](threat-model.md), "Device revocation versus epoch erasure").
 
 ## What happens if my device is stolen?
 
@@ -92,11 +92,11 @@ Every release asset, `SHA256SUMS` included, has a keyless Sigstore-signed [SLSA 
 
 ## Why is the version 0.x?
 
-Because the wire format and APIs may still change, the HPKE-PQ document is a draft, and no audit has happened. A 0.x minor bump may break format or API and is always called out in the changelog; frozen vectors must keep opening. What 1.0 requires is in [stability.md](stability.md).
+Because 1.0 needs more than a frozen format: a third-party audit (none has happened), a year without format changes, an independent implementation, and the HPKE-PQ document published as an RFC (it is still a draft). The wire format is frozen from 0.9.0, the release candidate; APIs may still change in a 0.x minor, always called out in the changelog. What 1.0 requires is in [stability.md](stability.md).
 
 ## Will files I encrypt today open in a future version?
 
-Every container produced by 0.1.0 through 0.8.0 still opens; the frozen vectors are tested on every commit. If a 0.x release ever cannot open an earlier container, the changelog will say so and the previous binary will still be available. After 1.0 the format never breaks ([stability.md](stability.md)).
+Every container produced by 0.1.0 onward still opens; the frozen vectors are tested on every commit. The format is frozen from 0.9.0 and changes only if a security flaw forces it. A later 1.x can add optional data through extension keys and a higher preamble minor, which a 0.9.0 reader opens, or a critical feature, which it refuses explicitly rather than misreads ([stability.md](stability.md)). One direction does not work: a *signed* container written by 0.9.0 does not open in 0.1–0.8, which predate the SIGNED flag.
 
 ## Is my filename hidden?
 
@@ -120,7 +120,7 @@ No. It calls the same Rust crates as the CLI, key material never reaches the web
 
 ## Is there a formal specification and are there test vectors?
 
-Yes: [../spec/hide-0.1.md](../spec/hide-0.1.md) is normative, and `conformance/vectors/` holds frozen containers plus ten rejection vectors. An independent Node implementation (`conformance/node/verify.mjs`) decrypts the vectors and refuses the rejections, so two implementations agree on what is invalid, not only on what is valid.
+Yes: [../spec/hide-1.md](../spec/hide-1.md) is normative, and `conformance/vectors/` holds frozen containers, GREASE vectors that exercise the extension points, subsystem vectors and thirty rejection vectors, all listed with expected outcome and SHA-256 in `manifest.json` ([../conformance/vectors/README.md](../conformance/vectors/README.md)). An independent Node implementation (`conformance/node/verify.mjs`) decrypts the vectors and refuses the rejections, so two implementations agree on what is invalid, not only on what is valid. Both are maintained in this repository; an outside implementation would be worth more.
 
 ## How can I help, audit or fund?
 

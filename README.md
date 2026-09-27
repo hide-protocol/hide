@@ -11,8 +11,9 @@ quantum-resistant by construction: every content key is wrapped with X-Wing, a h
 and ML-KEM-768 as standardised in **NIST FIPS 203 (ML-KEM)**, and every signature is a hybrid of
 Ed25519 and ML-DSA-65 from **FIPS 204 (ML-DSA)**. A break of either half alone is not enough.
 
-> **HIDE is experimental and unaudited. Do not use this for sensitive data.** The protocol is a
-> draft, no third party has reviewed the code, and the hybrid KEM tracks a moving IETF draft.
+> **HIDE is experimental and unaudited. Do not use this for sensitive data.** The wire format is a
+> release candidate, not 1.0; no third party has reviewed the code, and the hybrid KEM tracks an
+> IETF draft.
 
 ## What is verified today
 
@@ -24,16 +25,22 @@ Every claim below was produced by a command in this repository, on Rust 1.98.1.
   (`cargo test -p hide-object --test vectors`), and property tests extend that to random
   single-byte mutations of random containers.
 - Truncation, chunk reordering, duplication, deletion and trailing bytes are all rejected.
-- Ten **frozen rejection vectors** (`conformance/vectors/rejections/`) — bad magic, unsupported
-  major version, header-length overflow, flipped header and FINAL bits, truncation before FINAL,
-  trailing bytes, altered payload salt, a small-order recipient key, a key file demanding 2.4 GiB
-  of Argon2 memory — are refused by both the Rust crates and the independent Node
-  implementation, so the two agree on what is *invalid*, not only on what is valid.
+- Thirty **frozen rejection vectors** (`conformance/vectors/rejections/`) — among them bad magic,
+  minor 0, an unknown preamble flag, header-length overflow, flipped header and FINAL bits,
+  truncation before FINAL, trailing bytes, a stripped or unexpected signature, a recipient who
+  re-MACed a changed extension or removed an unknown stanza, critical header and metadata keys,
+  oversize extensions, a small-order recipient key, a key file demanding 2.4 GiB of Argon2
+  memory — are refused by both the Rust crates and the independent Node implementation, so the
+  two agree on what is *invalid*, not only on what is valid.
+- **Forward compatibility is tested, not promised**: the GREASE vectors (`grease.hide`,
+  `grease-signed.hide`, `grease-minor.hide`) carry an unknown recipient stanza, ignorable header and
+  metadata extensions and a future minor, and must open. `conformance/vectors/manifest.json` lists
+  all 67 vectors with expected outcome and SHA-256 ([conformance/vectors/README.md](conformance/vectors/README.md)).
 - **Fuzzed**: eight libFuzzer targets under `fuzz/` (`format_header`, `object_open`,
   `keyring_open`, `identity_log`, `epoch_chain`, `transparency_proofs`, `challenge_decode`,
   `mls_message`) run briefly in CI on every push and four hours each nightly with a corpus carried
   forward; a crash or hang opens an issue.
-- `unsafe_code = "forbid"` in every crate except `hide-ffi`, where the C ABI needs it; 306 tests.
+- `unsafe_code = "forbid"` in every crate except `hide-ffi`, where the C ABI needs it; 360 tests.
 - **Independent interoperability**: a separate Node implementation (`@hpke/hybridkem-x-wing`, `cbor`,
   Node `crypto`) decrypts the Rust vectors, and Rust decrypts Node's container byte-identically.
 - **Cross-OS**: the full suite passes on Windows 11 and on Linux (WSL2 Ubuntu 24.04), and a Linux
@@ -137,9 +144,11 @@ Being explicit here matters more than the feature list.
 - **A transparency log cannot detect a split view by itself.** Two divergent logs are each internally
   consistent; catching that needs independent witnesses who gossip roots and refuse to sign two roots
   for one size. No witnessing is implemented, so the log is a promise rather than a proof.
-- **Epoch secrets are not persisted.** `hide epoch-init` publishes a history, but the secret exists
-  only in the process that made it. A durable epoch store is not built, so erasure is demonstrable
-  but not yet operationally useful.
+- **Epoch erasure is only as strong as the storage underneath.** `hide epoch-init --store`,
+  `epoch-advance` and `epoch-erase` keep epoch secrets in one passphrase-sealed store, and erasing
+  an epoch reseals the store without it. An older copy of that file — a backup, a filesystem
+  snapshot, an SSD's remapped blocks — still holds the epochs it held, for whoever also has the
+  passphrase.
 - **Revocation is deliberately not retroactive.** Entries signed before a device was revoked stay
   valid, because invalidating them would invalidate every message that device ever sent. Revoking a
   device also does not evict it from MLS groups automatically; that is a separate, explicit call.
@@ -359,7 +368,7 @@ that each surface can open what the other produced, so they cannot silently dive
 | `conformance/` | Frozen vectors, rejection vectors, the independent Node verifier and the cross-surface check |
 | `fuzz/` | libFuzzer targets, run in CI |
 | `docs/` | Threat model, comparison, architecture, stability policy, tracker |
-| `spec/hide-0.1.md` | Wire format |
+| `spec/hide-1.md` | Wire format (HIDE 1, release candidate); `spec/hide-0.1.md` is superseded |
 
 ## Cryptography
 
@@ -368,8 +377,9 @@ ChaCha20-Poly1305 in 64 KiB chunks, via the `hpke` and RustCrypto crates. Signat
 ML-DSA-65 (FIPS 204). Key files are sealed with Argon2id. The transparency log is an RFC 6962 Merkle
 tree. Group messaging is MLS (RFC 9420) through `mls-rs`, on the classical X25519 suite only. No
 primitive is implemented here. Because X-Wing and HPKE-PQ are still drafts, every dependency is
-pinned to an exact version and the wire format will change; vectors will be regenerated when the
-upstream construction changes.
+pinned to an exact version. The wire format is frozen from 0.9.0 ([`spec/hide-1.md`](spec/hide-1.md));
+if the final HPKE-PQ RFC changed X-Wing, HIDE would add a new suite id rather than alter suite 1
+([`docs/stability.md`](docs/stability.md)).
 
 ## Documentation
 
@@ -387,10 +397,10 @@ upstream construction changes.
 
 No third party has audited HIDE, and an unaudited encryption tool should be treated as broken until
 proven otherwise. An audit that would change that should cover: the HPKE/X-Wing composition and the
-key schedule (`spec/hide-0.1.md` §3); the authenticated streaming and the FINAL rule (§5); the
-signature transcript and what a recipient can forge without one (§6–7); the identity log's
-authority-at-position rule (§8); the epoch chain and what "erased" actually guarantees (§9); the
-RFC 6962 proofs (§10); the MLS credential binding (§11); the C ABI's memory and panic handling in
+key schedule (`spec/hide-1.md` §3); the authenticated streaming and the FINAL rule (§5); the
+signature transcripts and what a recipient can forge without one (§6–7); the identity log's
+authority-at-position rule (§10); the epoch chain and what "erased" actually guarantees (§11); the
+RFC 6962 proofs (§12); the MLS credential binding (§13); the C ABI's memory and panic handling in
 `hide-ffi`; and the ssh-agent's confirmation path. Internal review found real defects in 0.7.0
 ([`SECURITY.md`](SECURITY.md) lists them) and fuzzing found a key-file memory exhaustion fixed in
 0.8.0 ([HIDE-2026-001](docs/advisories.md)), which is evidence that more exist. Report through

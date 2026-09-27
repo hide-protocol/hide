@@ -397,6 +397,7 @@ pub unsafe extern "C" fn hide_encrypt(
             filename: filename.map(str::to_owned),
             media_type: media_type.map(str::to_owned),
             signature: None,
+            extensions: Vec::new(),
         };
 
         let mut container = Vec::new();

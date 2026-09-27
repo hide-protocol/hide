@@ -21,6 +21,7 @@ fn main() -> Result<(), Box<dyn Error>> {
             filename: Some(format!("{name}.txt")),
             media_type: Some("text/plain".into()),
             signature: None,
+            extensions: Vec::new(),
         };
         let mut ciphertext = Vec::new();
         encrypt_for_vector(&mut &*plaintext, &mut ciphertext, &public, &metadata)?;
@@ -45,6 +46,7 @@ fn main() -> Result<(), Box<dyn Error>> {
             filename: Some("signed.txt".into()),
             media_type: Some("text/plain".into()),
             signature: None,
+            extensions: Vec::new(),
         };
         let mut ciphertext = Vec::new();
         encrypt_signed_for_vector(
@@ -78,6 +80,7 @@ fn main() -> Result<(), Box<dyn Error>> {
             filename: Some("identity.txt".into()),
             media_type: Some("text/plain".into()),
             signature: None,
+            extensions: Vec::new(),
         };
         let mut ciphertext = Vec::new();
         encrypt_for_vector(

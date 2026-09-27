@@ -1,15 +1,33 @@
 use hide_format::{
-    FormatError, MAX_HEADER_LEN, MAX_METADATA_LEN, MAX_RECIPIENTS, MAX_SIGNATURES, Metadata,
-    PREAMBLE_LEN, Preamble, ProtectedHeader, RecipientStanza, SIGNATURE_LEN, SignatureStanza,
-    VERIFYING_KEY_LEN, decode_header, encode_header,
+    Extension, FormatError, MAX_HEADER_LEN, MAX_METADATA_LEN, MAX_RECIPIENTS, MAX_SIGNATURES,
+    Metadata, PREAMBLE_LEN, Preamble, ProtectedHeader, RecipientStanza, SIGNATURE_LEN,
+    SignatureStanza, Stanza, UnknownStanza, VERIFYING_KEY_LEN, decode_header, encode_header,
 };
 use proptest::prelude::*;
 
-fn stanza() -> impl Strategy<Value = RecipientStanza> {
-    (any::<u8>(), any::<u8>()).prop_map(|(first, second)| RecipientStanza {
+fn xwing(first: u8, second: u8) -> Stanza {
+    Stanza::XWing(RecipientStanza {
         encapsulation: vec![first; 1120],
         wrapped_cek: vec![second; 48],
     })
+}
+
+fn stanza() -> impl Strategy<Value = Stanza> {
+    prop_oneof![
+        3 => (any::<u8>(), any::<u8>()).prop_map(|(first, second)| xwing(first, second)),
+        1 => (2u16.., prop::collection::vec(prop::collection::vec(any::<u8>(), 0..40), 0..7))
+            .prop_map(|(tag, fields)| Stanza::Unknown(UnknownStanza { tag, fields })),
+    ]
+}
+
+fn extensions() -> impl Strategy<Value = Vec<Extension>> {
+    prop::collection::btree_map(64u16.., prop::collection::vec(any::<u8>(), 0..40), 0..4).prop_map(
+        |map| {
+            map.into_iter()
+                .map(|(key, value)| Extension { key, value })
+                .collect()
+        },
+    )
 }
 
 fn header() -> impl Strategy<Value = ProtectedHeader> {
@@ -18,13 +36,15 @@ fn header() -> impl Strategy<Value = ProtectedHeader> {
         prop::collection::vec(stanza(), 1..=4),
         16usize..600,
         prop::collection::vec(signature_stanza(), 0..=MAX_SIGNATURES),
+        extensions(),
     )
         .prop_map(
-            |(object_id, recipients, metadata_len, signatures)| ProtectedHeader {
+            |(object_id, recipients, metadata_len, signatures, extensions)| ProtectedHeader {
                 object_id,
                 recipients,
                 encrypted_metadata: vec![0x2b; metadata_len],
                 signatures,
+                extensions,
             },
         )
 }
@@ -91,6 +111,7 @@ proptest! {
             filename: Some(filename),
             media_type: Some(media_type),
             signature: None,
+            extensions: Vec::new(),
         };
         match metadata.encode() {
             Ok(encoded) => {
@@ -107,10 +128,10 @@ proptest! {
 
     #[test]
     fn oversized_structures_are_refused(count in (MAX_RECIPIENTS + 1)..=(MAX_RECIPIENTS + 8), metadata_len in (MAX_METADATA_LEN + 17)..(MAX_METADATA_LEN + 64)) {
-        let base = RecipientStanza { encapsulation: vec![1; 1120], wrapped_cek: vec![2; 48] };
-        let too_many = ProtectedHeader { object_id: [0; 32], recipients: vec![base.clone(); count], encrypted_metadata: vec![0; 32], signatures: Vec::new() };
+        let base = xwing(1, 2);
+        let too_many = ProtectedHeader { object_id: [0; 32], recipients: vec![base.clone(); count], encrypted_metadata: vec![0; 32], signatures: Vec::new(), extensions: Vec::new() };
         prop_assert!(too_many.encode().is_err());
-        let too_large = ProtectedHeader { object_id: [0; 32], recipients: vec![base], encrypted_metadata: vec![0; metadata_len], signatures: Vec::new() };
+        let too_large = ProtectedHeader { object_id: [0; 32], recipients: vec![base], encrypted_metadata: vec![0; metadata_len], signatures: Vec::new(), extensions: Vec::new() };
         prop_assert!(too_large.encode().is_err());
     }
 }

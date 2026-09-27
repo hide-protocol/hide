@@ -120,6 +120,7 @@ pub fn encrypt(
         filename,
         media_type,
         signature: None,
+        extensions: Vec::new(),
     };
     let mut container = Vec::new();
     hide_object::encrypt(&mut &*plaintext, &mut container, &keys, &metadata).map_err(error)?;

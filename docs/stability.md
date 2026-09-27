@@ -2,16 +2,43 @@
 
 *HIDE is experimental and has not been audited by a third party. See [audit-status.md](audit-status.md).*
 
-This document says what may change while the version is 0.x, how a change is announced, and what has to be true before 1.0. Current version: 0.8.0. It applies to the wire format, the Rust crates, the C ABI, the SDKs and the CLI.
+This document says what may change while the version is 0.x, how a change is announced, and what has to be true before 1.0. It applies to the wire format, the Rust crates, the C ABI, the SDKs and the CLI. The normative wire format is [../spec/hide-1.md](../spec/hide-1.md); 0.9.0 is its release candidate.
 
 ## Wire format
 
-- **Before 1.0 the format may change.** Any change to bytes on disk — container, key file, detached signature, identity log, epoch chain, transparency checkpoint, MLS credential — is a **format change** and is called out in [../CHANGELOG.md](../CHANGELOG.md) under its own heading, with the version that introduced it. A format change bumps the *minor* version.
-- **Frozen vectors must keep opening.** The containers under `conformance/vectors/` produced by 0.1.0 are tested byte-for-byte on every commit, in Rust and in the independent Node implementation. A release that cannot open them is not made. Every 0.1.0–0.8.0 container opens in 0.8.0.
-- **New capabilities are additive when possible.** Signatures (0.5.0) reused header key 5, which 0.1.0 wrote as an empty array, so unsigned containers stayed byte-identical; signed ones advertise preamble minor 2 so an old reader refuses rather than silently ignores.
-- **Vectors are frozen artifacts.** Regenerating them is a protocol change and is done only deliberately (`cargo run -p hide-object --features test-vectors --example generate_vectors`), never as a side effect.
+### Frozen from 0.9.0
+
+These are the HIDE 1 wire format ([../spec/hide-1.md](../spec/hide-1.md), "Frozen vs implementation-defined"). From 0.9.0 they change only if a security flaw forces it, and such a change is recorded in the spec's change log (Appendix B) and in [../CHANGELOG.md](../CHANGELOG.md) with the release that made it.
+
+- The container (spec §1–§7): preamble, protected header, recipient and signature stanzas, key schedule, metadata, payload, both signature transcripts, and the read rules for legacy minor 2.
+- HIDE-Sign (§8): key derivation, the signed payload framing, verification rules.
+- Key files (§9): the unprotected 32-byte master seed, the protected `HIDE-KEY` file, the recipient and signing public key files.
+- The identity log (§10), including the read rule for the 0.6–0.8 six-item entry head.
+- The epoch chain (§11).
+- Transparency hashing and proof verification (§12).
+- The MLS credential binding (§13).
+- Every domain-separation label and registry (spec Appendix A).
+
+### Implementation-defined
+
+Described in spec §14 so other tools can interoperate with the reference implementation, but they may change in any release without a format version:
+
+- ASCII armor for messages and public keys.
+- The challenge format (`hide_sign::Challenge`).
+- The detached-signature file (`<file>.hide-sig`).
+- The epoch keystore file (`HIDE-EPK`). It holds one holder's secrets for that holder's own tool and is never exchanged; epochs interoperate through the public, frozen epoch chain.
+- CLI commands and flags, SDK and C ABI functions, and the text of error messages. Their own stability is governed by the tables below, not by the format.
+
+### How the format evolves without breaking
+
+- **The preamble minor is a non-breaking revision number.** Writers of HIDE 1 write minor 1. A reader accepts any minor except 0 and processes minor ≥ 3 exactly as minor 1; the minor is inside the header MAC and the signature transcript, so it cannot be altered undetected. Minor 2 is the legacy HIDE/0.5–0.8 signed form: still read, with its own transcript, never written. Minor 0 is refused.
+- **Every preamble flag is critical.** A reader refuses a container with a flag it does not know. Flag `0x01` (SIGNED) marks a signed container; a stripped or unexpected signature is refused.
+- **Extension ranges.** Header and metadata keys 64–65535 are ignorable byte-string extensions (at most 16, each at most 64 KiB): a reader that does not understand one keeps its bytes, which are authenticated and signed, and opens the container. Keys 6–63 are critical and refused while unassigned. Unknown recipient stanza types are skipped (a container with only unknown stanzas has no matching recipient); unknown signature stanzas are refused.
+- **What this means in practice.** A later 1.x can add optional data that a 0.9.0 reader opens, or a critical feature that a 0.9.0 reader refuses explicitly. It cannot add something an old reader silently misreads. HIDE 1 writers emit no extensions, so an unsigned HIDE 1 container without extensions is structurally identical to HIDE/0.1 and opens in every 0.x reader; a signed HIDE 1 container (flag `0x01`) does not open in 0.1–0.8 readers.
+- **Old files keep opening.** Every container, key file and identity log written by 0.1–0.8 remains readable. The frozen vectors under `conformance/vectors/` are tested byte-for-byte on every commit, in Rust and in the independent Node implementation, and `conformance/vectors/manifest.json` lists every vector with its expected outcome and SHA-256 ([../conformance/vectors/README.md](../conformance/vectors/README.md)). A release that cannot open them is not made.
+- **Vectors are frozen artifacts.** The generators refuse to rewrite an existing vector with different bytes; changing one is a protocol change and is done only deliberately, never as a side effect.
 - **Upstream drafts.** X-Wing's byte format has been stable across `draft-ietf-hpke-pq` revisions and its KEM id `0x647A` is IANA-allocated. If the final RFC changed the construction, HIDE would add a new suite id rather than alter suite 1; existing containers would keep opening.
-- **After 1.0 the format never breaks.** A reader of version 1.x opens every container written by any 1.y. New features arrive as new suite ids, new optional header keys, or new preamble minors that old readers refuse explicitly.
+- **Before 0.9.0 the format changed in minor releases** (0.5.0 signatures, 0.6.0 identity logs and epochs, 0.7.0 one signature and the MLS binding). That is history; see the spec change log.
 
 ## Public API, per crate
 
@@ -23,8 +50,8 @@ This document says what may change while the version is 0.x, how a change is ann
 | `hide-keyring` | stable-intent | `open`, `protect`, `unprotect_seed`, `KeyPurpose`. Argon2id parameters may be raised; the floor may be raised (which refuses weaker files). Since 0.8.0 `open` also enforces ceilings (memory 8–256 MiB, parallelism ≤ 4, passes 1–64), which may be adjusted |
 | `hide-ffi` (C ABI) | stable-intent | Functions and error codes in `include/hide.h`. Additions only; a removed function breaks every SDK at import, so it will not happen in a patch |
 | `hide-format` | evolving | Parser internals; used by `hide-object`, not intended for direct use |
-| `hide-identity` | evolving | Event types and `Membership` may change shape while the log format is 0.x |
-| `hide-epoch` | evolving | `EpochChain` will gain persistence; the in-memory API may change |
+| `hide-identity` | evolving | The log's bytes are frozen (spec §10); the Rust event types and `Membership` may still change shape |
+| `hide-epoch` | evolving | The chain's bytes are frozen (spec §11); the in-memory `EpochChain` API may change. Epoch secrets persist in `hide-keyring`'s implementation-defined `EpochStore` |
 | `hide-transparency` | evolving | Proof types follow RFC 6962 and are unlikely to change; the checkpoint format may gain a signature |
 | `hide-mls` | evolving | New in 0.6/0.7; follows `mls-rs` 0.56, whose own API is 0.x |
 | `hide-wasm` | evolving | Browser surface; not published to crates.io |
@@ -36,7 +63,7 @@ This document says what may change while the version is 0.x, how a change is ann
 
 | Bump | May include | Never includes |
 | --- | --- | --- |
-| **Minor** (0.6 → 0.7) | Format changes, API changes in any crate, new features, MSRV bump, dependency major bumps, removed deprecated items | — |
+| **Minor** (0.9 → 0.10) | API changes in any crate, new features, MSRV bump, dependency major bumps, removed deprecated items, changes to implementation-defined formats | A change to a frozen format, unless a security flaw forces it (then recorded in the spec change log) |
 | **Patch** (0.6.1 → 0.6.2) | Bug fixes, security fixes, packaging fixes, documentation, new SDK platform targets | Format changes, API breaks, MSRV bump, removal of anything |
 
 All crates in the workspace share one version (`Cargo.toml` `[workspace.package]`) and are released together; `scripts/set-version.ps1 -Check` runs in CI so the version cannot drift across the 23 files in seven ecosystems that carry it.
@@ -73,11 +100,11 @@ All of the following, in this order of dependency:
 
 1. **A third-party audit** of the container format, the key schedule, the authenticated streaming and the signature transcript (items 1–4 in [audit-status.md](audit-status.md)), with every finding fixed or documented as a known limitation, and the report published unredacted.
 2. **One year of frozen container format** after the last format change to suite 1, measured from the release that made it.
-3. **Two independent implementations** passing the full vector set, including the rejection vectors. The Rust crates are one; the Node verifier under `conformance/node` is a second for the container, and must be extended to signatures, identity logs and epoch chains — or replaced by an implementation maintained outside this repository.
+3. **Two independent implementations** passing the full vector set in `conformance/vectors/manifest.json`, including the rejection vectors. The Rust crates are one; the Node verifier under `conformance/node` (`verify.mjs` for the container and signatures, `subsystems.mjs` for identity logs, epoch chains and transparency proofs) is written in this repository by the same maintainers, so an implementation maintained outside it is still wanted.
 4. The HPKE-PQ specification carrying X-Wing published as an RFC, or a documented decision to freeze on the draft with a HIDE-owned suite id.
 5. Epoch secrets persisted, so forward security by erasure is operational rather than demonstrable.
 6. The stability table above with no "evolving" row among the crates a container depends on.
 
-The one-year clock in criterion 2 starts at 0.9.0, the planned format release candidate. Current status of each criterion: [audit-status.md](audit-status.md#road-to-10).
+The one-year clock in criterion 2 starts at 0.9.0, the format release candidate. Meeting the format freeze alone does not make 1.0: every criterion above must hold. Current status of each: [audit-status.md](audit-status.md#road-to-10).
 
 1.0 does not require post-quantum MLS, a key directory, hardware key storage, or formal verification. Those remain out of scope and are listed as such in [threat-model.md](threat-model.md).

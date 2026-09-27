@@ -151,5 +151,5 @@ than a desktop one.
 
 - Repository: <https://github.com/hide-protocol/hide>
 - Documentation: [docs/](https://github.com/hide-protocol/hide/tree/main/docs)
-- Specification: [spec/hide-0.1.md](https://github.com/hide-protocol/hide/blob/main/spec/hide-0.1.md)
+- Specification: [spec/hide-1.md](https://github.com/hide-protocol/hide/blob/main/spec/hide-1.md)
 - [CHANGELOG](https://github.com/hide-protocol/hide/blob/main/CHANGELOG.md)

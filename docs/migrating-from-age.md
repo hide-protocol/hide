@@ -30,7 +30,7 @@ Every `hide` flag below was checked against `hide --help` and each subcommand's 
 | Encrypt to a GitHub user's keys | `curl https://github.com/user.keys \| age -R - …` | not supported |
 | Hardware token | `age-plugin-yubikey` | not supported |
 | Multi-device identity | — | `identity-create`, `identity-enrol`, `identity-revoke`, `identity-show` |
-| Key rotation with erasure | — | `epoch-init`, `epoch-show` (public history; the CLI does not yet persist the secret) |
+| Key rotation with erasure | — | `epoch-init`, `epoch-advance`, `epoch-erase`, `epoch-public`, `epoch-show`; secrets in a passphrase-sealed store, `open --epoch-store` to decrypt |
 
 ## Format differences
 
@@ -46,8 +46,8 @@ Every `hide` flag below was checked against `hide --help` and each subcommand's 
 | Identity | One key; files list identities | Master seed → encryption key + signing key; optional hash-linked device log with revocation and recovery key |
 | Public key size | 62 characters (`age1…`); ~2000 for PQ | 1216 bytes binary (encryption); 1984 bytes (signing) |
 | Per-recipient overhead | ~100 bytes; ~1.6 KB for PQ | 1168 bytes (1120-byte encapsulation + 48-byte wrapped CEK) |
-| Interoperable implementations | Go, Rust, TypeScript | Rust; an independent Node verifier for the container only |
-| Specification | C2SP `age-encryption.org/v1`, stable | [../spec/hide-0.1.md](../spec/hide-0.1.md), draft; may change before 1.0 ([stability.md](stability.md)) |
+| Interoperable implementations | Go, Rust, TypeScript | Rust; an independent Node verifier (in this repository) for the container, signatures, identity logs, epoch chains and transparency proofs |
+| Specification | C2SP `age-encryption.org/v1`, stable | [../spec/hide-1.md](../spec/hide-1.md), release candidate frozen from 0.9.0; not 1.0 until audited ([stability.md](stability.md)) |
 
 ## What you lose
 
@@ -56,7 +56,7 @@ Every `hide` flag below was checked against `hide --help` and each subcommand's 
 - **The plugin ecosystem.** YubiKey/PIV, TPM, and other `age-plugin-*` recipients have no HIDE equivalent.
 - **SSH-key recipients.** Encrypting to `ssh-ed25519`/`ssh-rsa` public keys, and to a GitHub user's published keys, is an age convenience HIDE does not have. HIDE's SSH integration goes the other way: a HIDE identity can act as an ssh-agent for login (Ed25519 half only, not post-quantum).
 - **Passphrase-encrypted files.** HIDE has no scrypt-style passphrase recipient.
-- **Three implementations.** age has Go, Rust and TypeScript; HIDE has one Rust core behind nine bindings plus a Node container verifier.
+- **Three implementations.** age has Go, Rust and TypeScript; HIDE has one Rust core behind nine bindings plus a Node verifier written by the same maintainers.
 - **Small keys.** A HIDE public key is 1216 bytes; an age key is 62 characters.
 - **stdout decryption and overwrite.** `hide open` requires `--output` and refuses to overwrite, by design.
 

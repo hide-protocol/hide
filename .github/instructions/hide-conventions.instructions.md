@@ -57,7 +57,7 @@ Every bullet below was paid for by a real failure. Mechanism, not story.
 
 - `conformance/vectors/**` are frozen. Changing one is a protocol change: regenerate
   with `cargo run -p hide-object --features test-vectors --example generate_vectors`,
-  update `spec/hide-0.1.md` in the same PR.
+  update `spec/hide-1.md` in the same PR.
 - Rejection vectors: `conformance/vectors/rejections/<name>.{hide,test-public,test-secret}`
   listed in `rejections.txt` as `name<TAB>reason`. Both
   `crates/hide-object/tests/vectors.rs` and `conformance/node/verify.mjs` branch on the

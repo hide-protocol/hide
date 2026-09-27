@@ -11,6 +11,7 @@ fn metadata() -> Metadata {
         filename: Some("hello.txt".into()),
         media_type: Some("text/plain".into()),
         signature: None,
+        extensions: Vec::new(),
     }
 }
 
@@ -223,28 +224,37 @@ fn a_stripped_signature_is_detected() -> Result<(), ObjectError> {
     let identity = SigningIdentity::from_bytes(&[0x55; 32]).expect("valid seed");
     let container = seal(b"hello", &identity, SignaturePlacement::Public, &recipient)?;
 
-    // Byte 9 is the preamble minor version: 2 for signed, 1 for unsigned.
-    assert_eq!(container[9], 2, "signed containers advertise minor 2");
+    // Byte 11 is the flags byte; HIDE/1.0 marks a signature with SIGNED (0x01).
+    assert_eq!(
+        (container[9], container[11]),
+        (1, 0x01),
+        "signed containers set the SIGNED flag"
+    );
     let mut downgraded = container.clone();
-    downgraded[9] = 1;
+    downgraded[11] = 0;
 
     let mut staging = Vec::new();
     assert!(
         decrypt_to_staging(&mut &downgraded[..], &mut staging, &recipient).is_err(),
         "a downgraded container was accepted"
     );
+    // Nor may it be relabelled as the legacy minor-2 form.
+    let mut relabelled = container.clone();
+    relabelled[9] = 2;
+    relabelled[11] = 0;
+    assert!(decrypt_to_staging(&mut &relabelled[..], &mut Vec::new(), &recipient).is_err());
     Ok(())
 }
 
-/// The mirror case: a container whose preamble claims minor 2 but carries no
+/// The mirror case: a container whose preamble claims SIGNED but carries no
 /// signature must be refused rather than treated as unsigned.
 ///
-/// Editing byte 9 of a real container is caught earlier, by the header MAC,
+/// Editing the flags of a real container is caught earlier, by the header MAC,
 /// which covers the preamble. To reach the signature check itself the preamble
 /// has to be authentic, so this builds a signed container and removes the
 /// signature stanza at the source.
 #[test]
-fn a_minor_2_container_without_a_signature_is_refused() -> Result<(), ObjectError> {
+fn a_signed_flag_without_a_signature_is_refused() -> Result<(), ObjectError> {
     let recipient = RecipientSecret::generate()?;
     let identity = SigningIdentity::from_bytes(&[0x99; 32]).expect("valid seed");
     let mut container = Vec::new();
@@ -255,7 +265,7 @@ fn a_minor_2_container_without_a_signature_is_refused() -> Result<(), ObjectErro
         &metadata(),
         &identity,
     )?;
-    assert_eq!(container[9], 2, "preamble must still claim signed");
+    assert_eq!(container[11], 0x01, "preamble must still claim signed");
 
     let mut staging = Vec::new();
     assert!(
@@ -265,5 +275,160 @@ fn a_minor_2_container_without_a_signature_is_refused() -> Result<(), ObjectErro
         ),
         "a stripped signature was accepted as an unsigned container"
     );
+    Ok(())
+}
+
+fn grease() -> hide_object::VectorShape {
+    hide_object::VectorShape {
+        minor: 1,
+        header_extensions: vec![hide_object::Extension {
+            key: 0xFAFA,
+            value: b"grease".to_vec(),
+        }],
+        leading_stanzas: vec![hide_object::Stanza::Unknown(hide_object::UnknownStanza {
+            tag: 0x7A7A,
+            fields: vec![vec![0x7A; 33], Vec::new()],
+        })],
+    }
+}
+
+fn shaped(
+    signer: Option<(&SigningIdentity, SignaturePlacement)>,
+    shape: &hide_object::VectorShape,
+    recipient: &RecipientSecret,
+) -> Result<Vec<u8>, ObjectError> {
+    let mut metadata = metadata();
+    metadata.extensions = vec![hide_object::Extension {
+        key: 0x4A4A,
+        value: b"metadata grease".to_vec(),
+    }];
+    let mut container = Vec::new();
+    hide_object::encrypt_shaped_for_vector(
+        &mut b"hello".as_slice(),
+        &mut container,
+        &recipient.public_key()?,
+        &metadata,
+        signer,
+        shape,
+    )?;
+    Ok(container)
+}
+
+/// What a future writer may add, a 1.0 reader must skip: an ignorable header
+/// key, an ignorable metadata key, an unknown recipient type, a newer minor.
+#[test]
+fn grease_is_skipped_and_still_signed() -> Result<(), ObjectError> {
+    let recipient = RecipientSecret::generate()?;
+    let identity = SigningIdentity::from_bytes(&[0x42; 32]).expect("valid seed");
+    for minor in [1, 7] {
+        let shape = hide_object::VectorShape { minor, ..grease() };
+        for signer in [
+            None,
+            Some((&identity, SignaturePlacement::Public)),
+            Some((&identity, SignaturePlacement::Confidential)),
+        ] {
+            let container = shaped(signer, &shape, &recipient)?;
+            assert_eq!(container[9], minor);
+            let mut staging = Vec::new();
+            let verified = decrypt_to_staging(&mut &container[..], &mut staging, &recipient)?;
+            assert_eq!(staging, b"hello");
+            assert_eq!(verified.metadata.extensions.len(), 1);
+            assert_eq!(verified.signer.is_some(), signer.is_some());
+        }
+    }
+    Ok(())
+}
+
+/// The 1.0 transcript binds the preamble's minor and flags, every stanza's tag
+/// and the header extensions. Each is authenticated by the header MAC already;
+/// what the signature adds is that a RECIPIENT, who can recompute the MAC,
+/// still cannot change them. So re-MAC after editing, then expect the
+/// signature to fail.
+#[test]
+fn a_recipient_cannot_rewrite_what_the_signature_binds() -> Result<(), ObjectError> {
+    let recipient = RecipientSecret::generate()?;
+    let identity = SigningIdentity::from_bytes(&[0x43; 32]).expect("valid seed");
+    let container = shaped(
+        Some((&identity, SignaturePlacement::Public)),
+        &grease(),
+        &recipient,
+    )?;
+    type Edit = fn(&mut hide_object::ProtectedHeader);
+    let edits: [(&str, Edit); 3] = [
+        ("header extension value", |h| h.extensions[0].value[0] ^= 1),
+        ("unknown stanza field", |h| {
+            if let hide_object::Stanza::Unknown(s) = &mut h.recipients[0] {
+                s.fields[0][0] ^= 1;
+            }
+        }),
+        ("unknown stanza dropped", |h| {
+            h.recipients.remove(0);
+        }),
+    ];
+    for (what, edit) in edits {
+        let forged = hide_object::rewrite_header_for_test(&container, &recipient, None, edit)?;
+        assert!(
+            matches!(
+                decrypt_to_staging(&mut &forged[..], &mut Vec::new(), &recipient),
+                Err(ObjectError::InvalidSignature)
+            ),
+            "{what}: a re-MACed edit kept a valid signature"
+        );
+    }
+    // The minor is bound too: 1 -> 5 is a readable revision, but not this one.
+    let forged = hide_object::rewrite_header_for_test(&container, &recipient, Some(5), |_| {})?;
+    assert!(matches!(
+        decrypt_to_staging(&mut &forged[..], &mut Vec::new(), &recipient),
+        Err(ObjectError::InvalidSignature)
+    ));
+    // Control: a rewrite with no edit must still open, or the checks above
+    // would pass for the wrong reason.
+    let untouched = hide_object::rewrite_header_for_test(&container, &recipient, None, |_| {})?;
+    decrypt_to_staging(&mut &untouched[..], &mut Vec::new(), &recipient)?;
+    Ok(())
+}
+
+/// HIDE/0.5–0.8 signed containers stay readable, and stay unextendable: the
+/// legacy transcript does not bind extensions, so minor 2 must not carry any.
+#[test]
+fn legacy_minor_two_verifies_but_refuses_extensions() -> Result<(), ObjectError> {
+    let recipient = RecipientSecret::generate()?;
+    let identity = SigningIdentity::from_bytes(&[0x44; 32]).expect("valid seed");
+    let legacy = Some((&identity, SignaturePlacement::LegacyPublic));
+    let plain = hide_object::VectorShape::default();
+    let mut container = Vec::new();
+    hide_object::encrypt_shaped_for_vector(
+        &mut b"hello".as_slice(),
+        &mut container,
+        &recipient.public_key()?,
+        &metadata(),
+        legacy,
+        &plain,
+    )?;
+    assert_eq!((container[9], container[11]), (2, 0));
+    let verified = decrypt_to_staging(&mut &container[..], &mut Vec::new(), &recipient)?;
+    assert!(verified.signer.is_some());
+
+    let extended = shaped(legacy, &grease(), &recipient)?;
+    assert!(
+        decrypt_to_staging(&mut &extended[..], &mut Vec::new(), &recipient).is_err(),
+        "minor 2 with extensions was accepted"
+    );
+    Ok(())
+}
+
+/// Skipping unknown stanzas must not turn into accepting a file with no
+/// stanza this reader can use.
+#[test]
+fn only_unknown_stanzas_is_no_matching_recipient() -> Result<(), ObjectError> {
+    let recipient = RecipientSecret::generate()?;
+    let container = shaped(None, &grease(), &recipient)?;
+    let forged = hide_object::rewrite_header_for_test(&container, &recipient, None, |h| {
+        h.recipients.retain(|s| s.as_xwing().is_none());
+    })?;
+    assert!(matches!(
+        decrypt_to_staging(&mut &forged[..], &mut Vec::new(), &recipient),
+        Err(ObjectError::NoMatchingRecipient)
+    ));
     Ok(())
 }

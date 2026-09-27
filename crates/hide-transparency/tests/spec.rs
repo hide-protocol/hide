@@ -1,10 +1,10 @@
-//! Checks `spec/hide-0.1.md` §10 against the implementation, and against
+//! Checks `spec/hide-1.md` §12 against the implementation, and against
 //! RFC 6962 itself where the RFC gives a concrete value.
 
 use hide_transparency::{TransparencyLog, decode_checkpoint, encode_checkpoint, leaf_hash};
 use sha2::{Digest, Sha256};
 
-/// §10 and RFC 6962 §2.1: a leaf is `SHA-256(0x00 || data)`.
+/// §12 and RFC 6962 §2.1: a leaf is `SHA-256(0x00 || data)`.
 #[test]
 fn the_leaf_hash_matches_rfc_6962() {
     let mut hasher = Sha256::new();
@@ -23,7 +23,7 @@ fn the_empty_root_matches_rfc_6962() {
     assert_eq!(TransparencyLog::new().root(), expected);
 }
 
-/// §10 and RFC 6962 §2.1: an interior node is `SHA-256(0x01 || left || right)`.
+/// §12 and RFC 6962 §2.1: an interior node is `SHA-256(0x01 || left || right)`.
 #[test]
 fn the_node_hash_matches_rfc_6962() {
     let mut log = TransparencyLog::new();
@@ -39,7 +39,7 @@ fn the_node_hash_matches_rfc_6962() {
     assert_eq!(log.root(), expected);
 }
 
-/// §10: a subtree of n leaves splits at the largest power of two strictly below
+/// §12: a subtree of n leaves splits at the largest power of two strictly below
 /// n. Asserted through the shape of a 3-leaf tree, where the split must be 2
 /// and not 1 — the case that distinguishes RFC 6962 from a naive pairing.
 #[test]
@@ -65,7 +65,7 @@ fn the_split_matches_rfc_6962_for_an_odd_tree() {
     assert_eq!(log.root(), expected, "the tree split at the wrong point");
 }
 
-/// §10: a checkpoint is `size(u64be) || root(32)`.
+/// §12: a checkpoint is `size(u64be) || root(32)`.
 #[test]
 fn the_checkpoint_layout_matches_the_spec() {
     let mut log = TransparencyLog::new();
@@ -83,7 +83,7 @@ fn the_checkpoint_layout_matches_the_spec() {
     assert_eq!(root, log.root());
 }
 
-/// §10 states the prefixes exist so a leaf cannot be reinterpreted as a node.
+/// §12 states the prefixes exist so a leaf cannot be reinterpreted as a node.
 /// Assert the two hashes of the same bytes actually differ.
 #[test]
 fn a_leaf_and_a_node_over_the_same_bytes_differ() {

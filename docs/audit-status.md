@@ -22,7 +22,7 @@ The only reviews are internal — performed by the maintainers on their own code
 
 From [../SECURITY.md](../SECURITY.md) and [../CHANGELOG.md](../CHANGELOG.md):
 
-1. **MLS credentials were self-asserted** — a member could present another device's id; nothing proved it held that device's key. Now a HIDE-signed binding over the MLS signature key ([../spec/hide-0.1.md](../spec/hide-0.1.md) §11).
+1. **MLS credentials were self-asserted** — a member could present another device's id; nothing proved it held that device's key. Now a HIDE-signed binding over the MLS signature key ([../spec/hide-1.md](../spec/hide-1.md) §13).
 2. **7 of 8 signature stanzas were never verified** — only the first of up to eight public stanzas was checked. `MAX_SIGNATURES` is now 1 and a second stanza is rejected.
 3. **One metadata key and nonce sealed two plaintexts** in the confidential-signature path. No disclosure, but nonce reuse under one key.
 4. **The identity-log encoding was not canonical** — two event sequences could serialise identically. Every variable-length field is now length-prefixed.
@@ -45,17 +45,17 @@ The identity-log transport encoding declares `array(6)` per entry but writes sev
 
 These are not audits. They constrain what a bug can look like; they do not show its absence.
 
-- 306 tests, run on Linux, Windows and macOS in CI.
+- 360 tests, run on Linux, Windows and macOS in CI.
 - Property tests (`proptest`): the parser never panics on arbitrary input; any single-byte mutation of a container fails to decrypt; truncation and appended bytes always fail.
 - Eight libFuzzer targets under [../fuzz/fuzz_targets](../fuzz/fuzz_targets) (`format_header`, `object_open`, `keyring_open`, `identity_log`, `epoch_chain`, `transparency_proofs`, `challenge_decode`, `mls_message`), run briefly in CI on every push and for four hours per target every night, in parallel, with the corpus carried forward ([fuzz-nightly.yml](../.github/workflows/fuzz-nightly.yml)). A crash or hang opens an issue labelled `fuzz` + `security`. A manual four-hour run of all eight in 2026-09 was clean (tracker P12.9). Three bugs found so far: two fixed in 0.7.0, the third (a key file requesting 2.4 GiB of Argon2 memory, [#6](https://github.com/hide-protocol/hide/issues/6)) released in 0.8.0 as [HIDE-2026-001](advisories.md).
 - Supply chain, CI job `supply-chain`: `cargo audit --deny warnings`, and `cargo deny check` ([../deny.toml](../deny.toml)) — licence allow-list, a ban on a second cryptographic stack (`openssl`, `ring`), unknown registries refused, and every duplicated dependency version attributed to its cause so a new one is visible. Every dependency is pinned to an exact version.
-- Frozen vectors under [../conformance/vectors](../conformance/vectors), including ten rejection vectors; flipping every byte position of the frozen containers is asserted to fail.
+- Frozen vectors under [../conformance/vectors](../conformance/vectors), including 30 rejection vectors and a `manifest.json` over every vector; flipping every byte position of the frozen containers is asserted to fail.
 - An independent Node implementation ([../conformance/node/verify.mjs](../conformance/node/verify.mjs)) decrypts the Rust vectors and refuses the rejection vectors.
 - Mutation testing was applied by hand to the signing and keyring code during development; results are recorded in commit messages, not in a report.
 
 ## What an audit should cover
 
-In priority order. File references are the entry points; the normative text is [../spec/hide-0.1.md](../spec/hide-0.1.md).
+In priority order. File references are the entry points; the normative text is [../spec/hide-1.md](../spec/hide-1.md).
 
 | # | Component | Why it is first | Where |
 | --- | --- | --- | --- |
@@ -63,11 +63,11 @@ In priority order. File references are the entry points; the normative text is [
 | 2 | Authenticated streaming and the FINAL rule | Truncation, reordering, and early plaintext release | spec §5; [../crates/hide-object/src/lib.rs](../crates/hide-object/src/lib.rs) |
 | 3 | Header parsing and limits | Untrusted input; bounded canonical CBOR | spec §1–2; [../crates/hide-format/src/lib.rs](../crates/hide-format/src/lib.rs) |
 | 4 | Signature transcript and what a recipient can forge | Recipients hold the CEK; the transcript is the only thing that stops them re-encrypting under a valid signature | spec §7; [../crates/hide-sign/src/lib.rs](../crates/hide-sign/src/lib.rs), `transcript()` in hide-object |
-| 5 | Identity log: authority-at-position | Revocation is meaningless if a revoked device can author a later entry | spec §8; [../crates/hide-identity/src/lib.rs](../crates/hide-identity/src/lib.rs) |
+| 5 | Identity log: authority-at-position | Revocation is meaningless if a revoked device can author a later entry | spec §12; [../crates/hide-identity/src/lib.rs](../crates/hide-identity/src/lib.rs) |
 | 6 | C ABI: memory ownership, panic catching, error codes | Nine SDKs sit on it; a bug is a bug in all of them | [../crates/hide-ffi/src/lib.rs](../crates/hide-ffi/src/lib.rs), [../crates/hide-ffi/include/hide.h](../crates/hide-ffi/include/hide.h) |
 | 7 | Key files: Argon2id parameters (floor and the 0.8.0 ceilings: memory 8–256 MiB, parallelism ≤ 4, passes 1–64), purpose byte, seed derivation | The at-rest protection of every secret, and an untrusted header that sets the cost of opening it | [../crates/hide-keyring/src/lib.rs](../crates/hide-keyring/src/lib.rs) |
-| 8 | Epoch chain: what "erased" guarantees | Independent random keys, no derivation | spec §9; [../crates/hide-epoch/src/lib.rs](../crates/hide-epoch/src/lib.rs) |
-| 9 | RFC 6962 proofs | Consistency-proof forgery would make history rewriting undetectable | spec §10; [../crates/hide-transparency/src/lib.rs](../crates/hide-transparency/src/lib.rs) |
+| 8 | Epoch chain: what "erased" guarantees | Independent random keys, no derivation | spec §11; [../crates/hide-epoch/src/lib.rs](../crates/hide-epoch/src/lib.rs) |
+| 9 | RFC 6962 proofs | Consistency-proof forgery would make history rewriting undetectable | spec §12; [../crates/hide-transparency/src/lib.rs](../crates/hide-transparency/src/lib.rs) |
 | 10 | MLS credential binding and message size limit (1 MiB since 0.8.0) | New in 0.7.0, parsed by no other implementation | spec §11; [../crates/hide-mls/src/lib.rs](../crates/hide-mls/src/lib.rs) |
 | 11 | ssh-agent confirmation path and endpoint permissions | A signing oracle reachable by local processes | [../apps/hide-cli/src](../apps/hide-cli/src) |
 | 12 | SDK library loading and handle lifetimes | Injection and use-after-free at the language boundary | [../sdk](../sdk) |
@@ -94,7 +94,7 @@ A design review of the spec alone, without reading code, is roughly 3–4 days a
 
 ## How to perform or fund one
 
-- **Perform one**: clone the repository, read [../spec/hide-0.1.md](../spec/hide-0.1.md), start with the table above. Report through the private advisory channel in [../SECURITY.md](../SECURITY.md). Every finding is credited in the changelog and in [advisories.md](advisories.md).
+- **Perform one**: clone the repository, read [../spec/hide-1.md](../spec/hide-1.md), start with the table above. Report through the private advisory channel in [../SECURITY.md](../SECURITY.md). Every finding is credited in the changelog and in [advisories.md](advisories.md).
 - **Fund one**: open a GitHub issue titled "audit funding" to coordinate. The maintainers have no budget for a commercial audit; a sponsor who engages a firm directly is the realistic path.
 - **Commitment**: the full report of any third-party audit will be published in this directory, unredacted, with the maintainers' response and the fix status of each finding. Findings that cannot be fixed will be listed as known limitations in [threat-model.md](threat-model.md).
 
@@ -104,13 +104,13 @@ None. No component has a machine-checked proof, a Tamarin or ProVerif model, or 
 
 ## Road to 1.0
 
-Status of each criterion in [stability.md](stability.md#what-10-requires), as of 0.8.0. 0.9.0 is planned as the format release candidate.
+Status of each criterion in [stability.md](stability.md#what-10-requires), as of 0.9.0, the format release candidate.
 
 | # | Criterion | Status |
 | --- | --- | --- |
 | 1 | Third-party audit | Open; not scheduled, no sponsor |
-| 2 | One year of frozen container format | Not started; the clock starts at the 0.9.0 format release candidate |
-| 3 | Two independent implementations | In progress: the Node verifier covers containers and signatures; spec §8–§10 (identity log, epoch chain, transparency) planned for 0.9.0 |
+| 2 | One year of frozen container format | Started with 0.9.0 (2026-09-27); the format in [../spec/hide-1.md](../spec/hide-1.md) changes before 1.0 only for a security flaw, which restarts the clock |
+| 3 | Two independent implementations | Done for the wire: the independent Node verifier covers containers, signatures (strict Ed25519), identity logs, epoch chains and transparency (spec §1–§12), and a differential fuzzer feeds both readers the same mutants in CI. Still one author |
 | 4 | HPKE-PQ published as an RFC | Blocked, external; the maintainers chose to wait for the RFC rather than freeze on the draft |
-| 5 | Epoch secrets persisted | Planned for 0.9.0 (epoch-secret keystore) |
-| 6 | No evolving crate in the container path | Open; `hide-format` stays evolving until the freeze |
+| 5 | Epoch secrets persisted | Done in 0.9.0: passphrase-sealed epoch keystore in `hide-keyring` (`epoch_store.rs`), CLI `--epoch-store`, restore test in `hide-epoch/tests/restore.rs` |
+| 6 | No evolving crate in the container path | Wire frozen in 0.9.0 (versioning via critical flags and ignorable extensions); the `hide-format` Rust API stays evolving until 1.0 |

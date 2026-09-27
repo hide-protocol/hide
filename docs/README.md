@@ -17,4 +17,4 @@ HIDE is hybrid post-quantum file encryption (X25519 + ML-KEM-768 via X-Wing, NIS
 | [advisories.md](advisories.md) | Published security advisories (none yet) and their format |
 | [TRACKER.md](TRACKER.md) | Work tracker |
 
-Elsewhere in the repository: the wire format in [../spec/hide-0.1.md](../spec/hide-0.1.md), the security policy and reporting channel in [../SECURITY.md](../SECURITY.md), release history in [../CHANGELOG.md](../CHANGELOG.md), and the engineering invariants in [../AGENTS.md](../AGENTS.md).
+Elsewhere in the repository: the wire format in [../spec/hide-1.md](../spec/hide-1.md) (the superseded 0.1–0.8 text is [../spec/hide-0.1.md](../spec/hide-0.1.md)), the conformance vectors in [../conformance/vectors/README.md](../conformance/vectors/README.md), the security policy and reporting channel in [../SECURITY.md](../SECURITY.md), release history in [../CHANGELOG.md](../CHANGELOG.md), and the engineering invariants in [../AGENTS.md](../AGENTS.md).

@@ -1,13 +1,73 @@
 use minicbor::{Decoder, Encoder};
 
 use crate::{
-    FormatError, MAX_HEADER_LEN, MAX_METADATA_LEN, MAX_RECIPIENTS, MAX_SIGNATURES, SUITE, TAG_LEN,
+    FIRST_IGNORABLE_KEY, FormatError, MAX_EXTENSION_LEN, MAX_EXTENSIONS, MAX_HEADER_LEN,
+    MAX_METADATA_LEN, MAX_RECIPIENTS, MAX_SIGNATURES, MAX_STANZA_ITEMS, SUITE, TAG_LEN,
 };
+
+/// Stanza tag of the one recipient type HIDE/1.0 defines.
+const XWING_TAG: u64 = 1;
+const ENCAPSULATION_LEN: usize = 1120;
+const WRAPPED_CEK_LEN: usize = 48;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct RecipientStanza {
     pub encapsulation: Vec<u8>,
     pub wrapped_cek: Vec<u8>,
+}
+
+/// A recipient stanza of a type this implementation does not know. It is kept
+/// so the header re-encodes canonically and a signature can cover it, and it is
+/// skipped when looking for a key: a future recipient type must not make the
+/// file unreadable to the recipients it already had.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct UnknownStanza {
+    pub tag: u16,
+    pub fields: Vec<Vec<u8>>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Stanza {
+    XWing(RecipientStanza),
+    Unknown(UnknownStanza),
+}
+
+impl Stanza {
+    pub fn tag(&self) -> u16 {
+        match self {
+            Self::XWing(_) => XWING_TAG as u16,
+            Self::Unknown(stanza) => stanza.tag,
+        }
+    }
+
+    /// The byte-string items after the tag, in wire order.
+    pub fn fields(&self) -> Vec<&[u8]> {
+        match self {
+            Self::XWing(stanza) => vec![&stanza.encapsulation, &stanza.wrapped_cek],
+            Self::Unknown(stanza) => stanza.fields.iter().map(Vec::as_slice).collect(),
+        }
+    }
+
+    pub fn as_xwing(&self) -> Option<&RecipientStanza> {
+        match self {
+            Self::XWing(stanza) => Some(stanza),
+            Self::Unknown(_) => None,
+        }
+    }
+}
+
+impl From<RecipientStanza> for Stanza {
+    fn from(stanza: RecipientStanza) -> Self {
+        Self::XWing(stanza)
+    }
+}
+
+/// An ignorable map entry: key 64..=65535, value an opaque byte string. A reader
+/// that does not know the key skips it; it is still authenticated and signed.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Extension {
+    pub key: u16,
+    pub value: Vec<u8>,
 }
 
 /// A public signature over the container, readable by anyone holding the file.
@@ -24,11 +84,13 @@ pub const SIGNATURE_LEN: usize = 3373;
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ProtectedHeader {
     pub object_id: [u8; 32],
-    pub recipients: Vec<RecipientStanza>,
+    pub recipients: Vec<Stanza>,
     pub encrypted_metadata: Vec<u8>,
     /// Occupies the slot reserved as an empty array in v0.1. Empty here encodes
     /// byte-for-byte as a v0.1 header, which is what keeps old files readable.
     pub signatures: Vec<SignatureStanza>,
+    /// Ignorable keys after 5, ascending. Empty encodes exactly as HIDE/0.1.
+    pub extensions: Vec<Extension>,
 }
 
 impl ProtectedHeader {
@@ -52,23 +114,17 @@ impl ProtectedHeader {
         if self.signatures.len() > MAX_SIGNATURES {
             return Err(FormatError::MalformedHeader);
         }
+        check_extensions(&self.extensions).map_err(|_| FormatError::MalformedHeader)?;
         let mut encoder = Encoder::new(Vec::new());
         encoder
-            .map(5)?
+            .map(5 + self.extensions.len() as u64)?
             .u8(1)?
             .u16(SUITE)?
             .u8(2)?
             .bytes(&self.object_id)?;
         encoder.u8(3)?.array(self.recipients.len() as u64)?;
         for stanza in &self.recipients {
-            if stanza.encapsulation.len() != 1120 || stanza.wrapped_cek.len() != 48 {
-                return Err(FormatError::MalformedHeader);
-            }
-            encoder
-                .array(3)?
-                .u8(1)?
-                .bytes(&stanza.encapsulation)?
-                .bytes(&stanza.wrapped_cek)?;
+            encode_stanza(&mut encoder, stanza)?;
         }
         encoder.u8(4)?.bytes(&self.encrypted_metadata)?.u8(5)?;
         let signatures: &[SignatureStanza] = if include { &self.signatures } else { &[] };
@@ -85,6 +141,9 @@ impl ProtectedHeader {
                 .bytes(&stanza.verifying_key)?
                 .bytes(&stanza.signature)?;
         }
+        for extension in &self.extensions {
+            encoder.u16(extension.key)?.bytes(&extension.value)?;
+        }
         let bytes = encoder.into_writer();
         check_header_len(bytes.len())?;
         Ok(bytes)
@@ -93,7 +152,8 @@ impl ProtectedHeader {
     pub fn decode(bytes: &[u8]) -> Result<Self, FormatError> {
         check_header_len(bytes.len())?;
         let mut decoder = Decoder::new(bytes);
-        if decoder.map()? != Some(5) {
+        let entries = decoder.map()?.ok_or(FormatError::MalformedHeader)?;
+        if !(5..=5 + MAX_EXTENSIONS as u64).contains(&entries) {
             return Err(FormatError::MalformedHeader);
         }
         key(&mut decoder, 1)?;
@@ -128,30 +188,137 @@ impl ProtectedHeader {
         for _ in 0..signature_count {
             signatures.push(decode_signature(&mut decoder)?);
         }
+        let extensions =
+            decode_extensions(&mut decoder, entries - 5, 5).map_err(|error| match error {
+                FormatError::UnsupportedFeature => error,
+                _ => FormatError::MalformedHeader,
+            })?;
         let header = Self {
             object_id,
             recipients,
             encrypted_metadata: metadata.to_vec(),
             signatures,
+            extensions,
         };
         canonical(bytes, decoder.position(), &header.encode()?)?;
         Ok(header)
     }
 }
 
-fn decode_stanza(decoder: &mut Decoder<'_>) -> Result<RecipientStanza, FormatError> {
-    if decoder.array()? != Some(3) || decoder.u8()? != 1 {
-        return Err(FormatError::UnsupportedFeature);
+fn encode_stanza(encoder: &mut Encoder<Vec<u8>>, stanza: &Stanza) -> Result<(), FormatError> {
+    match stanza {
+        Stanza::XWing(stanza) => {
+            if stanza.encapsulation.len() != ENCAPSULATION_LEN
+                || stanza.wrapped_cek.len() != WRAPPED_CEK_LEN
+            {
+                return Err(FormatError::MalformedHeader);
+            }
+            encoder
+                .array(3)?
+                .u64(XWING_TAG)?
+                .bytes(&stanza.encapsulation)?
+                .bytes(&stanza.wrapped_cek)?;
+        }
+        Stanza::Unknown(stanza) => {
+            if u64::from(stanza.tag) <= XWING_TAG
+                || stanza.fields.len() >= MAX_STANZA_ITEMS
+                || stanza.fields.iter().any(|f| f.len() > MAX_EXTENSION_LEN)
+            {
+                return Err(FormatError::MalformedHeader);
+            }
+            encoder
+                .array(1 + stanza.fields.len() as u64)?
+                .u16(stanza.tag)?;
+            for field in &stanza.fields {
+                encoder.bytes(field)?;
+            }
+        }
     }
-    let encapsulation = decoder.bytes()?;
-    let wrapped_cek = decoder.bytes()?;
-    if encapsulation.len() != 1120 || wrapped_cek.len() != 48 {
+    Ok(())
+}
+
+fn decode_stanza(decoder: &mut Decoder<'_>) -> Result<Stanza, FormatError> {
+    let items = decoder.array()?.ok_or(FormatError::MalformedHeader)?;
+    if !(1..=MAX_STANZA_ITEMS as u64).contains(&items) {
         return Err(FormatError::MalformedHeader);
     }
-    Ok(RecipientStanza {
-        encapsulation: encapsulation.to_vec(),
-        wrapped_cek: wrapped_cek.to_vec(),
-    })
+    let tag = decoder.u64()?;
+    if tag == XWING_TAG {
+        if items != 3 {
+            return Err(FormatError::MalformedHeader);
+        }
+        let encapsulation = decoder.bytes()?;
+        let wrapped_cek = decoder.bytes()?;
+        if encapsulation.len() != ENCAPSULATION_LEN || wrapped_cek.len() != WRAPPED_CEK_LEN {
+            return Err(FormatError::MalformedHeader);
+        }
+        return Ok(Stanza::XWing(RecipientStanza {
+            encapsulation: encapsulation.to_vec(),
+            wrapped_cek: wrapped_cek.to_vec(),
+        }));
+    }
+    let tag = u16::try_from(tag).map_err(|_| FormatError::MalformedHeader)?;
+    if tag == 0 {
+        return Err(FormatError::MalformedHeader);
+    }
+    let mut fields = Vec::new();
+    for _ in 1..items {
+        let field = decoder.bytes()?;
+        if field.len() > MAX_EXTENSION_LEN {
+            return Err(FormatError::MalformedHeader);
+        }
+        fields.push(field.to_vec());
+    }
+    Ok(Stanza::Unknown(UnknownStanza { tag, fields }))
+}
+
+/// Every rule an extension list must satisfy, on the way out as on the way in.
+fn check_extensions(extensions: &[Extension]) -> Result<(), FormatError> {
+    if extensions.len() > MAX_EXTENSIONS {
+        return Err(FormatError::MalformedHeader);
+    }
+    let mut previous = 0;
+    for extension in extensions {
+        let key = u64::from(extension.key);
+        if key < FIRST_IGNORABLE_KEY || key <= previous || extension.value.len() > MAX_EXTENSION_LEN
+        {
+            return Err(FormatError::MalformedHeader);
+        }
+        previous = key;
+    }
+    Ok(())
+}
+
+/// Reads `count` map entries after the core keys, the last of which was
+/// `last_core`. A key in the critical range 6..=63 is refused as
+/// `UnsupportedFeature`: 1.0 defines none, so no reader can honour one.
+fn decode_extensions(
+    decoder: &mut Decoder<'_>,
+    count: u64,
+    last_core: u64,
+) -> Result<Vec<Extension>, FormatError> {
+    let mut extensions = Vec::new();
+    let mut previous = last_core;
+    for _ in 0..count {
+        let key = decoder.u64()?;
+        if key <= previous {
+            return Err(FormatError::MalformedHeader);
+        }
+        if key < FIRST_IGNORABLE_KEY {
+            return Err(FormatError::UnsupportedFeature);
+        }
+        let key = u16::try_from(key).map_err(|_| FormatError::MalformedHeader)?;
+        let value = decoder.bytes()?;
+        if value.len() > MAX_EXTENSION_LEN {
+            return Err(FormatError::MalformedHeader);
+        }
+        previous = u64::from(key);
+        extensions.push(Extension {
+            key,
+            value: value.to_vec(),
+        });
+    }
+    Ok(extensions)
 }
 
 fn decode_signature(decoder: &mut Decoder<'_>) -> Result<SignatureStanza, FormatError> {
@@ -200,6 +367,8 @@ pub struct Metadata {
     /// A signature visible only to recipients. Excluded from the signing base,
     /// because it cannot cover itself.
     pub signature: Option<SignatureStanza>,
+    /// Ignorable keys 64..=65535, ascending. Part of the signing base.
+    pub extensions: Vec<Extension>,
 }
 
 impl Metadata {
@@ -219,10 +388,12 @@ impl Metadata {
             None
         };
         let mut encoder = Encoder::new(Vec::new());
+        check_extensions(&self.extensions).map_err(|_| FormatError::InvalidMetadata)?;
         encoder.map(
             u64::from(self.filename.is_some())
                 + u64::from(self.media_type.is_some())
-                + u64::from(signature.is_some()),
+                + u64::from(signature.is_some())
+                + self.extensions.len() as u64,
         )?;
         if let Some(filename) = &self.filename {
             validate_filename(filename)?;
@@ -250,6 +421,9 @@ impl Metadata {
                 .bytes(&stanza.verifying_key)?
                 .bytes(&stanza.signature)?;
         }
+        for extension in &self.extensions {
+            encoder.u16(extension.key)?.bytes(&extension.value)?;
+        }
         Ok(encoder.into_writer())
     }
 
@@ -259,14 +433,22 @@ impl Metadata {
         }
         let mut decoder = Decoder::new(bytes);
         let count = decoder.map()?.ok_or(FormatError::InvalidMetadata)?;
-        if count > 3 {
+        if count > 3 + MAX_EXTENSIONS as u64 {
             return Err(FormatError::InvalidMetadata);
         }
         let mut metadata = Self::default();
         let mut previous = 0;
-        for _ in 0..count {
-            let field = decoder.u8()?;
-            if field <= previous || field > 3 {
+        let mut remaining = count;
+        while remaining > 0 {
+            // Peek: a key past 3 starts the extension run, which must be last.
+            let mut probe = decoder.clone();
+            let field = probe.u64()?;
+            if field > 3 {
+                break;
+            }
+            decoder.u64()?;
+            remaining -= 1;
+            if field <= previous || field == 0 {
                 return Err(FormatError::InvalidMetadata);
             }
             previous = field;
@@ -285,6 +467,11 @@ impl Metadata {
                 _ => return Err(FormatError::InvalidMetadata),
             }
         }
+        metadata.extensions =
+            decode_extensions(&mut decoder, remaining, previous).map_err(|error| match error {
+                FormatError::UnsupportedFeature => error,
+                _ => FormatError::InvalidMetadata,
+            })?;
         canonical(bytes, decoder.position(), &metadata.encode()?)?;
         Ok(metadata)
     }
@@ -342,12 +529,13 @@ mod tests {
     fn header() -> ProtectedHeader {
         ProtectedHeader {
             object_id: [1; 32],
-            recipients: vec![RecipientStanza {
+            recipients: vec![Stanza::XWing(RecipientStanza {
                 encapsulation: vec![2; 1120],
                 wrapped_cek: vec![3; 48],
-            }],
+            })],
             encrypted_metadata: vec![4; 17],
             signatures: Vec::new(),
+            extensions: Vec::new(),
         }
     }
 
@@ -477,8 +665,7 @@ mod tests {
     fn metadata_has_exact_encoding() -> Result<(), FormatError> {
         let metadata = Metadata {
             filename: Some("hello.txt".into()),
-            media_type: None,
-            signature: None,
+            ..Metadata::default()
         };
         assert_eq!(metadata.encode()?, b"\xa1\x01\x69hello.txt");
         assert_eq!(Metadata::decode(b"\xa1\x01\x69hello.txt")?, metadata);
@@ -547,8 +734,7 @@ mod tests {
             assert!(
                 Metadata {
                     filename: Some(filename.into()),
-                    media_type: None,
-                    signature: None
+                    ..Metadata::default()
                 }
                 .encode()
                 .is_err(),

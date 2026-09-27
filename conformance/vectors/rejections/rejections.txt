@@ -1,5 +1,5 @@
 # name	reason
-# Every file here MUST fail to decrypt with recipient.test-secret.
+# Every file here MUST be refused: containers with recipient.test-secret, keys by their parser.
 bad-magic	preamble magic does not match
 unsupported-major	major version is not 0
 header-len-overflow	header_len exceeds MAX_HEADER_LEN; refuse before allocating
@@ -10,3 +10,23 @@ trailing-bytes-after-final	bytes after FINAL
 payload-salt-altered	payload key derives from the altered salt; first record fails
 small-order.test-public	X25519 component is a small-order point; refuse as a recipient
 argon2-memory.test-secret	key file header demands 2.4 GiB of Argon2 memory; refuse before allocating
+unknown-flag	preamble flag 0x02 is not defined; every flag is critical
+minor-zero	preamble minor 0 is not a HIDE version
+legacy-minor-with-flag	minor 2 (legacy signed) with a flag set is not a valid preamble
+stripped-signature	SIGNED flag set but no signature is present
+unexpected-signature	a signature is present but the SIGNED flag is clear
+signature-extension-rewritten	a recipient re-MACed a changed header extension; the 1.0 transcript binds it
+signature-unknown-stanza-removed	a recipient re-MACed with an unknown stanza removed; the 1.0 transcript binds every stanza
+legacy-minor2-with-extension	minor 2 (legacy signed) carries a header extension its transcript cannot bind
+only-unknown-stanzas	no recipient stanza of a known type; skipping unknown ones leaves nothing to open
+critical-header-key	header key 6 is in the critical range 6..=63 and not defined
+header-key-over-u16	header key above 65535 is outside every range
+ignorable-ext-oversize	ignorable header extension value exceeds 65536 bytes
+ignorable-ext-not-bstr	ignorable header extension value is not a byte string
+too-many-extensions	17 ignorable header extensions; at most 16 are admitted
+two-signatures	two public signature stanzas; exactly one is verified, so a second is refused
+unknown-signature-tag	signature stanza tag 2 is unknown; unlike recipient stanzas it is refused, not skipped
+critical-metadata-key	metadata key 7 is in the critical range and not defined
+reserved-metadata-key	metadata key 4 is reserved core and not defined
+filename-dotdot	filename '..' is a path component, not a name
+non-canonical-metadata	metadata integer key not in shortest form

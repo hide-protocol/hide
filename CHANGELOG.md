@@ -3,7 +3,74 @@
 This project is pre-1.0. The wire format may change while the version is 0.x,
 and a format change is always called out here explicitly.
 
-## Unreleased
+## 0.9.0 — 2026-09-27
+
+**Format release candidate for 1.0.** The wire described in
+[`spec/hide-1.md`](spec/hide-1.md) is frozen from this release: before 1.0 it
+changes only for a security flaw, and the one-year clock in "Road to 1.0"
+starts here. Every frozen vector from 0.1.0 onward still opens. A container
+signed by 0.9.0 does **not** open in 0.1–0.8 (they refuse the new flag, by
+design); unsigned output is byte-identical to HIDE/0.1.
+
+### Format
+
+- **Signed containers set the critical preamble flag SIGNED (0x01)** with
+  minor 1, and sign the new "HIDE/1.0 transcript" under context
+  "HIDE/1.0 container". It binds preamble bytes 0..12, every recipient
+  stanza's tag and field lengths, and the header extensions, so a recipient
+  who can recompute the header MAC still cannot add, drop or edit them.
+  HIDE/0.5–0.8 signed containers (minor 2) are read with the legacy
+  transcript and are never written; minor 2 with extensions or unknown
+  stanzas is refused, because its transcript cannot bind them.
+- **Versioning rules.** A minor is a non-breaking revision: every minor except
+  0 is readable. Every flag bit is critical: an unknown one is refused.
+- **Extension ranges.** Header and metadata keys 64..65535 are ignorable byte
+  strings (at most 16 per map, 64 KiB each), authenticated and signed; keys
+  6..63 are critical and refused; metadata keys 4..5 are reserved.
+- **Unknown recipient stanza types are skipped**, so a future recipient type
+  does not lock out existing recipients. A file with only unknown stanzas is
+  "no matching recipient". An unknown signature stanza is refused.
+- **Identity log framing fixed.** Entries were written as CBOR `array(6)`
+  followed by 7 items, which a generic CBOR reader misparses. Writers now emit
+  `array(7)`; the legacy framing is still read, per log, never mixed.
+- `spec/hide-1.md` replaces `spec/hide-0.1.md` (kept, superseded): frozen
+  versus implementation-defined formats, registries of keys, tags, flags,
+  labels and limits, HIDE-Sign, key files, identity/epoch/transparency and
+  MLS sections, and known limitations of the freeze. The §4 filename rule is
+  corrected: dots are allowed except for `.`, `..` and a trailing dot.
+
+### Conformance
+
+- New positive vectors: `v1-signed`, `v1-signed-confidential`, and GREASE
+  vectors `grease` (ignorable header key 0xFAFA, metadata key 0x4A4A, unknown
+  stanza 0x7A7A), `grease-signed`, `grease-minor` (minor 7).
+- 20 new rejection vectors (30 in total), each re-authenticated so it fails
+  for its stated reason, with the Rust test pinning the exact error:
+  unknown-flag, minor-zero, legacy-minor-with-flag, stripped-signature,
+  unexpected-signature, signature-extension-rewritten,
+  signature-unknown-stanza-removed, legacy-minor2-with-extension,
+  only-unknown-stanzas, critical-header-key, header-key-over-u16,
+  ignorable-ext-oversize, ignorable-ext-not-bstr, too-many-extensions,
+  two-signatures, unknown-signature-tag, critical-metadata-key,
+  reserved-metadata-key, filename-dotdot, non-canonical-metadata.
+- `conformance/vectors/manifest.json` lists every vector with kind, expected
+  outcome, reason and SHA-256; `generate_v1_vectors -- --check` fails CI on drift.
+- The independent Node verifier implements the 1.0 reader (extensions, unknown
+  stanzas, both transcripts, strict Ed25519, one signature, metadata limits)
+  and §10–§12 (identity logs, epoch chains, transparency) in
+  `conformance/node/subsystems.mjs`.
+- **Differential fuzzing**: `conformance/differential/run.mjs` feeds the same
+  mutants to the Rust reader and the Node reader and fails on any
+  accept/reject or content disagreement; in CI on every run with a new seed.
+  3 × 3351 containers locally: 0 disagreements.
+
+### Added
+
+- Epoch keystore: epoch secrets persisted in a passphrase-sealed file
+  (`hide-keyring`), `--epoch-store` in the CLI, restore test.
+- Release artifacts carry keyless build-provenance attestations.
+- `hide info` prints the flags byte and says when a container needs a newer
+  reader.
 
 ### Security
 

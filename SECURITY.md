@@ -2,8 +2,9 @@
 
 ## HIDE is experimental — do not protect real data with it
 
-The protocol is a draft, the implementation has never been audited by a third
-party, and the hybrid KEM follows IETF drafts that are still changing. Treat
+The wire format is a release candidate (0.9.0), not 1.0; the implementation has
+never been audited by a third party, and the hybrid KEM follows an IETF draft
+that is not yet an RFC. Treat
 every container as a test artifact. The CLI requires `--experimental` for this
 reason.
 
@@ -51,8 +52,10 @@ Known and documented, not new findings:
   container holds the CEK and can rewrite the recipient set and recompute a
   valid header MAC. A signature closes this; its absence does not.
 - **Forward secrecy is by erasure, not by ratchet.** It exists only if the
-  holder actually destroys the epoch secret, and epoch secrets are not yet
-  persisted, so this is demonstrable rather than operational.
+  holder actually destroys the epoch secret. The CLI keeps epoch secrets in a
+  passphrase-sealed store and erasing reseals it without the epoch, but an
+  older copy of that file (backup, snapshot, remapped flash blocks) still holds
+  what it held.
 - **No recipient anonymity.** Ciphertext size and recipient count are visible;
   metadata is encrypted, not hidden. A public signature reveals the signer.
 - **No hardware protection.** Argon2id resists an attacker who copies a key
@@ -85,11 +88,11 @@ Known and documented, not new findings:
 - Eight fuzz targets now cover every parser of untrusted bytes, each fuzzed
   four hours every night with the corpus carried forward.
 
-Found after 0.8.0 shipped, not yet fixed: the identity-log transport encoding
-declares six fields per entry and writes seven. Rust reads its own output, so
-no HIDE surface is affected, but any other CBOR decoder misreads the log. It
-is an interoperability defect, not a security one; the correction is part of
-the 0.9.0 format revision.
+Found after 0.8.0 shipped: the identity-log transport encoding declared six
+fields per entry and wrote seven. Rust read its own output, so no HIDE surface
+was affected, but any other CBOR decoder misread the log. It is an
+interoperability defect, not a security one. 0.9.0 writes `array(7)` and still
+reads the 0.6–0.8 form (`spec/hide-1.md` §10.3).
 
 ## What changed in 0.7.0
 
@@ -100,7 +103,7 @@ are listed because their existence is the best evidence that others remain.
 - **MLS credentials were self-asserted.** A group member could present another
   device's id in its credential; nothing proved it held that device's key. The
   credential is now a HIDE-signed binding over the MLS signature key
-  (`spec/hide-0.1.md` §11), verified on every roster change.
+  (`spec/hide-1.md` §13), verified on every roster change.
 - **7 of 8 signature stanzas were never verified.** The header admitted up to
   eight public signatures but checked only the first, so a recipient could
   append stanzas nobody examined. `MAX_SIGNATURES` is now 1 and a second stanza

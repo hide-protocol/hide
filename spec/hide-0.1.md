@@ -1,3 +1,7 @@
+> **SUPERSEDED** by [`hide-1.md`](hide-1.md), the HIDE 1 wire format (0.9.0 release candidate).
+> This document is kept as the record of the 0.1–0.8 wire. Everything it describes is still
+> readable under `hide-1.md`; new implementations should follow `hide-1.md`.
+
 # HIDE wire format — specification
 
 **Status:** experimental. This document covers versions 0.1 (container), 0.5 (signatures),
@@ -83,7 +87,8 @@ Each derived key is used for exactly one purpose, so the fixed all-zero metadata
 
 `{ 1: filename, 2: media_type, 3: signature }`, all optional, the strings each ≤ 255 bytes, encrypted with
 `AAD = "HIDE/0.1 metadata" || object_id || 0x0001`. A filename MUST be a single portable component:
-no `/`, `\`, `:`, `.`, `..`, control characters, trailing dot or space, or Windows reserved name.
+not `.` or `..`, no trailing `.` or space, no control characters or any of `<>:"/\|?*`, and no
+Windows reserved name. Dots are otherwise allowed (`hello.txt` is valid).
 **A decrypting application MUST treat the filename as untrusted** and MUST NOT use it to choose an
 output path.
 

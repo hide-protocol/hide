@@ -114,7 +114,7 @@ test must FAIL naming your vector. Restore.
   `evidence=cargo test -p hide-object --test vectors; node conformance/node/verify.mjs`.
 - `docs/TRACKER.md`: bump "N frozen rejection vectors".
 - `CHANGELOG.md` `## Unreleased`: one line, name + reason.
-- `spec/hide-0.1.md` only if the refusal rule itself is new to the spec.
+- `spec/hide-1.md` only if the refusal rule itself is new to the spec.
 
 Commit explicit paths (shared clone). `.husky/pre-push` refuses a push while
 `conformance/vectors` has uncommitted changes.

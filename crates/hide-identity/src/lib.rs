@@ -163,7 +163,7 @@ pub struct Entry {
 
 impl Entry {
     /// The exact bytes this entry's signature covers, laid out as in
-    /// `spec/hide-0.1.md` §8. Public so a second implementation can be checked
+    /// `spec/hide-1.md` §10. Public so a second implementation can be checked
     /// against this one instead of against prose.
     pub fn signed_bytes(&self, previous: &[u8; 32]) -> Vec<u8> {
         signed_bytes(previous, self.sequence, &self.event, &self.signer)

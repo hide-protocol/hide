@@ -189,6 +189,7 @@ fn encrypt_file(input: String, recipients: Vec<String>, output: String) -> Resul
         filename: Some(filename.into()),
         media_type: None,
         signature: None,
+        extensions: Vec::new(),
     };
 
     let source = File::open(&input).map_err(|error| fail("could not open the input", error))?;
@@ -275,6 +276,7 @@ fn seal_message(message: String, recipients: Vec<String>) -> Result<String> {
         filename: None,
         media_type: Some("text/plain".into()),
         signature: None,
+        extensions: Vec::new(),
     };
     let mut container = Vec::new();
     hide_object::encrypt(

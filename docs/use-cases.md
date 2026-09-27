@@ -85,12 +85,15 @@ Revoking a device does *not* evict it from the group automatically; `untrusted_m
 
 **Fits when** backups go to a cloud bucket you do not trust, you want them unreadable by a quantum-capable adversary who copies the bucket today, and you want to bound how much a *future* key compromise exposes by erasing old epochs.
 
-**Does not fit when** the backup key must be recoverable after loss (erasure is permanent and affects the legitimate owner too), or when you need operational epoch storage today: **epoch secrets are not persisted by the CLI**. `hide epoch-init` publishes the public history; the secret lives only in that process. The Rust API is complete; a durable store is not built.
+**Does not fit when** the backup key must be recoverable after loss (erasure is permanent and affects the legitimate owner too), or when the storage holding the epoch store keeps old copies you cannot destroy (backups, snapshots, flash wear levelling): erasing an epoch reseals the store without it, and an older copy of the store still holds what it held.
 
 ```powershell
-# Publish an epoch history (public; the secret is NOT saved by the CLI yet).
-hide --experimental epoch-init --output backups.hide-epochs
-hide --experimental epoch-show --chain backups.hide-epochs
+# Public history + passphrase-sealed store of the epoch secrets.
+hide --experimental epoch-init --output backups.hide-epochs --store backups.hide-epk
+hide --experimental epoch-public --chain backups.hide-epochs --output current.pub   # senders encrypt to this
+hide --experimental epoch-advance --chain backups.hide-epochs --store backups.hide-epk
+hide --experimental epoch-erase 0 --chain backups.hide-epochs --store backups.hide-epk
+hide --experimental open backup.hide --epoch-store backups.hide-epk --output backup.tar
 ```
 
 ```rust
