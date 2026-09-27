@@ -30,7 +30,7 @@ hmac = { version = "=0.13.0", features = ["zeroize"] }
 sha2 = { version = "=0.11.0", features = ["zeroize"] }
 zeroize = { version = "=1.9.0", features = ["derive"] }
 getrandom = "=0.4.3"
-clap = { version = "=4.6.6", features = ["derive"] }
+clap = { version = "=4.6.7", features = ["derive"] }
 tempfile = "=3.27.0"
 proptest = "=1.11.0"
 argon2 = { version = "=0.6.0", features = ["alloc"] }
