@@ -6,7 +6,7 @@ one-screen summary. Update both in the same commit as the work they describe.
 A row that claims DONE without a verifying command in its Evidence column is not
 done.
 
-## What exists at 0.9.0 (published 2026-09-27 to every registry)
+## What exists at 0.9.1 (published 2026-09-27 to every registry)
 
 - **Format release candidate**: the wire in `spec/hide-1.md` is frozen from
   0.9.0 (security fixes only before 1.0). Critical flags (SIGNED 0x01), minor
@@ -49,7 +49,7 @@ done.
   the independent Node verifier (containers, signatures, §10–§12 and §16 subsystems),
   a Rust↔Node differential fuzzer in CI, cross-surface conformance,
   `unsafe_code = "forbid"` outside `hide-ffi`, every dependency pinned exactly.
-- **Relying-party layer (unreleased, P14)**: recovery binding, signed C2SP
+- **Relying-party layer (0.9.1, P14)**: recovery binding, signed C2SP
   checkpoints with witness thresholds, transparency leaves and proof encoding,
   epoch binding (spec §16) in Rust, C ABI, WASM and all seven SDKs; every
   spec §15 limitation closed or decided without a wire change.
