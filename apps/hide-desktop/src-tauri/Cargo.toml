@@ -22,7 +22,7 @@ tauri-build = { version = "=2.6.3", features = [] }
 hide-crypto = { path = "../../../crates/hide-crypto" }
 hide-keyring = { path = "../../../crates/hide-keyring" }
 hide-object = { path = "../../../crates/hide-object" }
-tauri = { version = "=2.11.5", features = [] }
+tauri = { version = "=2.11.6", features = [] }
 tauri-plugin-dialog = "=2.7.3"
 serde = { version = "=1.0.229", features = ["derive"] }
 serde_json = "=1.0.151"
