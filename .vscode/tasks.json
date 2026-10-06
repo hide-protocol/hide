@@ -1,0 +1,72 @@
+{
+	"version": "2.0.0",
+	"tasks": [
+		{
+			"label": "fuzz-log",
+			"type": "shell",
+			"command": "pwsh",
+			"args": [
+				"-NoProfile",
+				"-Command",
+				"$j=((gh run view 34189460354 --json jobs | ConvertFrom-Json).jobs | Where-Object name -eq 'fuzz').databaseId; gh run view 34189460354 --log-failed --job=$j 2>&1 | Select-String -Pattern 'panicked|##\\[error\\]|Running:|crash-|timeout|SUMMARY|attempt to|Base64|MS: ' | Select-Object -First 25 | ForEach-Object { $_.Line } | Set-Content .copilot-tmp/fuzz-fail.txt; Get-Content .copilot-tmp/fuzz-fail.txt"
+			],
+			"isBackground": false,
+			"problemMatcher": [],
+			"group": "none"
+		},
+		{
+			"label": "fuzz-fail-log",
+			"type": "shell",
+			"command": "pwsh",
+			"args": [
+				"-NoProfile",
+				"-ExecutionPolicy",
+				"Bypass",
+				"-File",
+				".copilot-tmp/fuzz-fail.ps1"
+			],
+			"isBackground": false,
+			"problemMatcher": []
+		},
+		{
+			"label": "fuzz-log",
+			"type": "shell",
+			"command": "pwsh",
+			"args": [
+				"-NoProfile",
+				"-Command",
+				"Set-Location 'e:\\gh\\HIDE'; New-Item -ItemType Directory .copilot-tmp -Force | Out-Null; $j=((gh run view 34189460354 --json jobs | ConvertFrom-Json).jobs | Where-Object name -eq 'fuzz').databaseId; gh run view 34189460354 --log-failed --job=$j 2>&1 | Out-File -Encoding utf8 .copilot-tmp/fuzz-log.txt; 'written'"
+			],
+			"isBackground": false,
+			"problemMatcher": [],
+			"group": "none"
+		},
+		{
+			"label": "fuzz-log-fetch",
+			"type": "shell",
+			"command": "pwsh",
+			"args": [
+				"-NoProfile",
+				"-ExecutionPolicy",
+				"Bypass",
+				"-File",
+				".copilot-tmp/fetch-fuzz-log.ps1"
+			],
+			"isBackground": false,
+			"problemMatcher": []
+		},
+		{
+			"label": "fuzz-log",
+			"type": "shell",
+			"command": "pwsh",
+			"args": [
+				"-NoProfile",
+				"-Command",
+				"Set-Location 'e:\\gh\\HIDE'; $j=((gh run view 34189460354 --json jobs | ConvertFrom-Json).jobs | Where-Object name -eq 'fuzz').databaseId; gh run view 34189460354 --log-failed --job=$j 2>&1 | Select-String 'panicked|##\\[error\\]|Running:|crash-|timeout|SUMMARY|attempt to|Output of|Base64' | Select-Object -First 25 | ForEach-Object { $_.Line } | Set-Content .copilot-tmp/fuzz-fail.txt; 'done'"
+			],
+			"isBackground": false,
+			"problemMatcher": [],
+			"group": "none"
+		}
+	]
+}
