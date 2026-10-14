@@ -42,7 +42,7 @@ unicode-normalization = "=0.1.25"
 ed25519-dalek = { version = "=3.0.0", default-features = false, features = ["alloc", "fast", "zeroize"] }
 # zeroize: without it the expanded ML-DSA signing key (several KiB) is not wiped on drop.
 ml-dsa = { version = "=0.1.1", default-features = false, features = ["alloc", "zeroize"] }
-interprocess = "=2.4.4"
+interprocess = "=2.4.5"
 # RFC 9420 group messaging. No third-party audit yet, which is stated in the
 # README; HIDE adds no cryptography of its own on top.
 mls-rs = "=0.56.0"
