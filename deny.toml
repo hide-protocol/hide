@@ -9,7 +9,12 @@ all-features = true
 [advisories]
 version = 2
 yanked = "deny"
-ignore = []
+# Keep in sync with .cargo/audit.toml (read by `cargo audit`).
+ignore = [
+  # crypto-bigint 0.5.5 via mls-rs-crypto-rustcrypto 0.22.1 -> p256/p384 only;
+  # the fix is semver-incompatible and hide-mls uses CURVE25519_AES128 alone.
+  { id = "RUSTSEC-2026-0387", reason = "P-256/P-384 path unused (SUITE = CURVE25519_AES128); waits on mls-rs-crypto-rustcrypto" },
+]
 
 [licenses]
 version = 2

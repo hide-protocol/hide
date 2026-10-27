@@ -1,0 +1,11 @@
+# Read by `cargo audit` (the supply-chain CI job). Keep in sync with
+# deny.toml [advisories].ignore: every entry needs the same written reason.
+[advisories]
+ignore = [
+  # crypto-bigint 0.5.5 timing variability. Reached only through
+  # mls-rs-crypto-rustcrypto 0.22.1 -> p256/p384 -> elliptic-curve 0.13, whose
+  # fix (>=0.7.6) is semver-incompatible. hide-mls pins CURVE25519_AES128
+  # (crates/hide-mls/src/lib.rs SUITE), so no P-256/P-384 arithmetic runs.
+  # Remove when mls-rs-crypto-rustcrypto moves to elliptic-curve 0.14.
+  "RUSTSEC-2026-0387",
+]
