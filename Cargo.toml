@@ -47,7 +47,7 @@ interprocess = "=2.4.7"
 # README; HIDE adds no cryptography of its own on top.
 mls-rs = "=0.56.0"
 mls-rs-core = "=0.27.0"
-mls-rs-crypto-rustcrypto = "=0.22.1"
+mls-rs-crypto-rustcrypto = "=0.23.0"
 
 [workspace.lints.rust]
 unsafe_code = "forbid"
