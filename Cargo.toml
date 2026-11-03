@@ -45,7 +45,7 @@ ml-dsa = { version = "=0.1.1", default-features = false, features = ["alloc", "z
 interprocess = "=2.4.7"
 # RFC 9420 group messaging. No third-party audit yet, which is stated in the
 # README; HIDE adds no cryptography of its own on top.
-mls-rs = "=0.56.0"
+mls-rs = "=0.57.0"
 mls-rs-core = "=0.27.0"
 mls-rs-crypto-rustcrypto = "=0.22.1"
 
