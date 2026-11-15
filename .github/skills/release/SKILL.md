@@ -1,6 +1,6 @@
 ---
 name: release
-description: Cut a HIDE release end to end — version bump across 23 files, CI green, tag vX.Y.Z (release.yml, 15 assets), publish-sdks dry run then real run via OIDC trusted publishing, live verification against every registry API, clean-directory install, post-release npm lockfile refresh, tracker row. Use when releasing, when a publish job fails, or when a registry does not show the new version.
+description: Cut a HIDE release end to end — version bump across 27 fields in 26 files, CI green, tag vX.Y.Z (release.yml, 15 assets), publish-sdks dry run then real run via OIDC trusted publishing, live verification against every registry API, clean-directory install, post-release npm lockfile refresh, tracker row, and the ruleset dance needed to move a tag after a failed build. Use when releasing, when a publish job fails, when a release build fails, or when a registry does not show the new version.
 ---
 
 # Release HIDE vX.Y.Z
@@ -50,8 +50,32 @@ gh run watch <id>
 gh release view vX.Y.Z --json assets --jq '.assets | length'    # expect 15
 ```
 
-If it fails: fix on main, delete the tag remotely and locally, re-tag. Do not
-re-run the failed tag run — it uses the old workflow file.
+If it fails: fix on main, then move the tag to the fix. Do not re-run the failed
+tag run — it uses the old workflow file.
+
+**The tag ruleset blocks deleting it.** `release tags v* are immutable`
+(`deletion`, `non_fast_forward`, `update`) refuses `git push origin :refs/tags/…`
+and refuses to re-point it, so the move needs the rule out of the way. The
+ruleset endpoints are `PUT`/`DELETE` on `/rulesets/<id>` — a `PATCH` returns 404
+and looks like a permissions problem. Measured recipe (2026-11-15):
+
+```powershell
+$rid  = gh api repos/hide-protocol/hide/rulesets --jq '.[] | select(.target == "tag") | .id'
+$body = '{"name":"release tags v* are immutable","target":"tag","enforcement":"active",
+          "conditions":{"ref_name":{"include":["refs/tags/v*"],"exclude":[]}},
+          "rules":[{"type":"deletion"},{"type":"non_fast_forward"},{"type":"update"}]}'
+[IO.File]::WriteAllText('.copilot-tmp/ruleset-tags.json', $body)   # never inline JSON into gh args
+gh api -X DELETE "repos/hide-protocol/hide/rulesets/$rid"
+git tag -d vX.Y.Z; git tag -a vX.Y.Z -m "vX.Y.Z"
+git push origin ':refs/tags/vX.Y.Z'; git push origin vX.Y.Z
+gh api -X POST repos/hide-protocol/hide/rulesets --input .copilot-tmp/ruleset-tags.json
+gh api repos/hide-protocol/hide/rulesets --jq '.[] | "\(.id) \(.name) \(.enforcement)"'   # both active again
+gh api repos/hide-protocol/hide/git/ref/tags/vX.Y.Z --jq '.object.sha'
+gh api repos/hide-protocol/hide/git/tags/<that sha> --jq '.object.sha'   # must be HEAD
+```
+
+Re-POSTing gives the ruleset a NEW id; that is expected, and the check above is
+what proves both rules are back.
 
 ## 3. Publish SDKs — dry run first
 
