@@ -10,6 +10,10 @@ import java.lang.foreign.ValueLayout;
  * <p>Replay can only be detected by the verifier: a replayed answer is a
  * genuine signature and nothing about it is invalid on its own. This must
  * therefore outlive a single request.
+ *
+ * <p>Safe for concurrent use: {@link #accept} and {@link #close} are
+ * synchronized, so one record can be shared by every request thread. The
+ * record is in-process memory; it is not shared across JVMs or restarts.
  */
 public final class SpentNonces implements AutoCloseable {
 
@@ -34,7 +38,8 @@ public final class SpentNonces implements AutoCloseable {
      * {@link HideException.ChallengeExpired} after the window, and
      * {@link HideException.Authentication} if it does not verify.
      */
-    public void accept(byte[] challenge, byte[] signature, byte[] publicKey, long now) {
+    public synchronized void accept(byte[] challenge, byte[] signature, byte[] publicKey,
+                                    long now) {
         MemorySegment live = alive();
         try (Arena arena = Arena.ofConfined()) {
             MemorySegment bytes = arena.allocateFrom(ValueLayout.JAVA_BYTE, challenge);
@@ -51,7 +56,7 @@ public final class SpentNonces implements AutoCloseable {
 
     /** Releases the record. Safe to call twice. */
     @Override
-    public void close() {
+    public synchronized void close() {
         if (handle != null) {
             try {
                 Native.SPENT_NONCES_FREE.invokeExact(handle);

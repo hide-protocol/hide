@@ -1,8 +1,16 @@
 blank_issues_enabled: false
 contact_links:
-  - name: Report a security vulnerability (private)
+  - name: Report a security vulnerability (private, GitHub form)
     url: https://github.com/hide-protocol/hide/security/advisories/new
-    about: HIDE is experimental and unaudited. Suspected vulnerabilities go through GitHub private vulnerability reporting, never a public issue. Process in SECURITY.md.
+    about: HIDE is experimental and unaudited. A suspected vulnerability is reported privately, never in a public issue. This form is access-controlled; prefer it for sensitive detail. Process in SECURITY.md.
+  - name: Report a security vulnerability (private, email)
+    # GitHub accepts only http(s) URLs here, so this links to the section that
+    # gives the address rather than to a mailto: link.
+    url: https://github.com/hide-protocol/hide/blob/main/SECURITY.md#reporting-a-vulnerability
+    about: The second private channel is hide-security@codai.ro. Mail is not end-to-end encrypted and no PGP key is published, so keep sensitive detail for the GitHub form.
   - name: Security policy
     url: https://github.com/hide-protocol/hide/blob/main/SECURITY.md
-    about: What is in scope, what is documented as not protected, and how disclosure is coordinated.
+    about: What is in scope, what is documented as not protected, which versions are supported, and how disclosure is coordinated.
+  - name: Report a conduct problem (private)
+    url: https://github.com/hide-protocol/hide/blob/main/CODE_OF_CONDUCT.md#enforcement
+    about: Code of Conduct reports go to conduct@codai.ro, not to a public issue. See CODE_OF_CONDUCT.md.

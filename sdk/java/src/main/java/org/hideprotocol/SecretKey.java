@@ -42,9 +42,7 @@ public final class SecretKey implements AutoCloseable {
             MemorySegment secret = arena.allocate(ValueLayout.ADDRESS);
                 // Bound to a MemorySegment local: invokeExact matches static types,
                 // and a ternary widening to Object would fail to link at runtime.
-            MemorySegment phrase = passphrase == null
-                    ? MemorySegment.NULL
-                    : arena.allocateFrom(passphrase);
+            MemorySegment phrase = Native.optionalCString(arena, passphrase, "passphrase");
             Hide.check((int) Native.SECRET_KEY_OPEN.invokeExact(
                     bytes, (long) data.length, phrase, secret));
             return new SecretKey(secret.get(ValueLayout.ADDRESS, 0));
@@ -78,8 +76,8 @@ public final class SecretKey implements AutoCloseable {
         }
         try (Arena arena = Arena.ofConfined()) {
             MemorySegment out = Native.emptyBuffer(arena);
-            Hide.check((int) Native.SECRET_KEY_PROTECT.invokeExact(
-                    live, arena.allocateFrom(passphrase), out));
+            MemorySegment phrase = Native.cString(arena, passphrase, "passphrase");
+            Hide.check((int) Native.SECRET_KEY_PROTECT.invokeExact(live, phrase, out));
             return Native.take(out);
         } catch (Throwable error) {
             throw Hide.wrap(error);

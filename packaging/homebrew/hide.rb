@@ -34,6 +34,9 @@ class Hide < Formula
     bin.install Dir["*/hide"].first || "hide"
     doc.install Dir["*/README.md"].first if Dir["*/README.md"].any?
     doc.install Dir["*/SECURITY.md"].first if Dir["*/SECURITY.md"].any?
+    # The archive carries the notices of the statically linked third-party
+    # crates; they belong with the binary, not left behind in the download.
+    doc.install Dir["*/THIRD-PARTY-LICENSES.txt"].first if Dir["*/THIRD-PARTY-LICENSES.txt"].any?
   end
 
   def caveats
@@ -45,7 +48,11 @@ class Hide < Formula
       who sent it. Every command requires --experimental so the risk is
       acknowledged explicitly.
 
-      The wire format may change while the version is 0.x.
+      The wire format is frozen since 0.9.0 and changes before 1.0 only if a
+      security flaw forces it. The binaries are not code-signed: Homebrew
+      checks the sha256 above, and every release asset also carries a GitHub
+      build-provenance attestation (gh attestation verify <file> --repo
+      hide-protocol/hide).
     EOS
   end
 

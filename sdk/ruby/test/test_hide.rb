@@ -5,6 +5,10 @@
 $LOAD_PATH.unshift(File.expand_path("../lib", __dir__))
 
 require "minitest/autorun"
+require "fileutils"
+require "open3"
+require "rbconfig"
+require "tmpdir"
 require "hide_protocol"
 require_relative "fixtures"
 
@@ -518,7 +522,426 @@ class TestHide < Minitest::Test
     end
   end
 
+  # --- copies -------------------------------------------------------------
+
+  # A copy would hold the same native pointer, and whichever of the two was
+  # closed first would free it under the other.
+  def test_a_handle_cannot_be_copied_or_serialized
+    handles = [Hide::SecretKey.generate, identity, Hide::SpentNonces.new]
+    handles.each do |handle|
+      error = assert_raises(TypeError, "#{handle.class}#dup") { handle.dup }
+      assert_match(/cannot be copied/, error.message)
+      assert_raises(TypeError, "#{handle.class}#clone") { handle.clone }
+      assert_raises(TypeError, "#{handle.class}#clone(freeze: false)") { handle.clone(freeze: false) }
+      assert_raises(TypeError, "Marshal.dump(#{handle.class})") { Marshal.dump(handle) }
+      refute_predicate handle, :closed?
+    end
+  ensure
+    handles&.each(&:close)
+  end
+
+  def test_the_original_still_works_after_a_refused_copy
+    Hide::SecretKey.generate do |secret|
+      assert_raises(TypeError) { secret.dup }
+      box = Hide.encrypt("still here", recipients: [secret.public_key])
+      assert_equal "still here".b, Hide.decrypt(box, secret).plaintext
+    end
+  end
+
+  # Wrapping a raw address would make a second owner of someone else's pointer,
+  # or an owner of an arbitrary one.
+  def test_a_key_cannot_be_built_from_a_raw_address
+    assert_raises(NoMethodError) { Hide::SecretKey.new(0x1000) }
+    assert_raises(NoMethodError) { Hide::SigningIdentity.new(0x1000) }
+    # The constructors the library itself uses still work.
+    Hide::SecretKey.generate { |secret| refute_predicate secret, :closed? }
+    identity { |signer| refute_predicate signer, :closed? }
+  end
+
+  # --- the empty buffer ----------------------------------------------------
+
+  # hide_buffer_empty returns a 24-byte struct by value. Declared to fiddle as
+  # a function taking one pointer it only worked where the ABI passes the
+  # result address as a first argument, which arm64 does not. The binding now
+  # zero-fills the slot itself and never calls it.
+  def test_an_empty_buffer_is_zeroed_here_and_the_struct_return_is_not_bound
+    refute Hide::Binding::SIGNATURES.key?(:hide_buffer_empty)
+    refute Hide::Binding::FUNCTIONS.key?(:hide_buffer_empty)
+
+    slot = Hide::Binding.empty_buffer
+    assert_equal "\x00".b * Hide::Binding::BUFFER_SIZE, slot[0, Hide::Binding::BUFFER_SIZE]
+    # Freeing an empty buffer is a no-op in the core, and yields no bytes here.
+    assert_equal "".b, Hide::Binding.take(slot)
+  end
+
+  # --- threads -------------------------------------------------------------
+
+  # fiddle releases the interpreter lock during a native call and the native
+  # record is not synchronised, so the per-object lock is what makes sharing a
+  # record safe. Holding it here must hold back a call made on another thread.
+  def test_accept_holds_the_record_lock_for_the_native_call
+    identity do |prover|
+      public_key = prover.public_key
+      challenge = Hide.new_challenge("ssh://host.example", 1_000, 60)
+      answer = prover.answer(challenge)
+
+      Hide::SpentNonces.open do |spent|
+        lock = spent.instance_variable_get(:@lock)
+        assert_instance_of Thread::Mutex, lock
+
+        finished = Queue.new
+        worker = nil
+        lock.synchronize do
+          worker = Thread.new do
+            spent.accept(challenge, answer, public_key, 1_000)
+            finished << true
+          end
+          sleep 0.3
+          assert_predicate finished, :empty?, "accept ran without taking the lock"
+        end
+        worker.join(30)
+        refute_predicate finished, :empty?
+        assert_raises(Hide::ChallengeReplayedError) do
+          spent.accept(challenge, answer, public_key, 1_000)
+        end
+      end
+    end
+  end
+
+  # Before the lock, a run of this size ended with a dozen or more replays
+  # accepted: two threads pushing at once lost entries from the record.
+  def test_one_record_shared_between_threads_accepts_each_answer_once
+    identity do |prover|
+      public_key = prover.public_key
+      work = Array.new(8) do
+        Array.new(60) do
+          challenge = Hide.new_challenge("ssh://host.example", 1_000, 60)
+          [challenge, prover.answer(challenge)]
+        end
+      end
+
+      Hide::SpentNonces.open do |spent|
+        failures = Queue.new
+        start = Queue.new
+        threads = work.map do |answers|
+          Thread.new do
+            start.pop
+            answers.each do |challenge, answer|
+              spent.accept(challenge, answer, public_key, 1_000)
+            rescue StandardError => e
+              failures << e
+            end
+          end
+        end
+        work.length.times { start << true }
+        threads.each { |thread| thread.join(120) }
+        assert_predicate failures, :empty?
+
+        replays_accepted = work.flatten(1).count do |challenge, answer|
+          spent.accept(challenge, answer, public_key, 1_000)
+          true
+        rescue Hide::ChallengeReplayedError
+          false
+        end
+        assert_equal 0, replays_accepted
+      end
+    end
+  end
+
+  # --- text that becomes a C string ----------------------------------------
+
+  # A passphrase that is long enough on its own, then a NUL and more: a C
+  # string read stops at the NUL, so the core would see only the first part.
+  SPLIT = "longenough\x00rest"
+
+  def test_a_passphrase_with_an_embedded_nul_is_refused_not_truncated
+    sealed = nil
+    Hide::SecretKey.generate do |secret|
+      error = assert_raises(Hide::InvalidArgumentError) { secret.protect(SPLIT) }
+      assert_match(/NUL/, error.message)
+      sealed = secret.protect("longenough")
+    end
+    # Opening must refuse too: accepting it here would mean the text before
+    # the NUL is what unlocks the key.
+    assert_raises(Hide::InvalidArgumentError) { Hide::SecretKey.open(sealed, SPLIT) }
+
+    assert_raises(Hide::InvalidArgumentError) { Hide::SigningIdentity.generate(SPLIT) }
+    sealed_identity = Hide::SigningIdentity.generate("longenough")
+    assert_raises(Hide::InvalidArgumentError) { Hide::SigningIdentity.open(sealed_identity, SPLIT) }
+    # The same file still opens under the passphrase it was sealed with.
+    Hide::SigningIdentity.open(sealed_identity, "longenough") { |signer| refute_predicate signer, :closed? }
+  end
+
+  def test_every_other_text_argument_refuses_an_embedded_nul
+    Hide::SecretKey.generate do |secret|
+      public_key = secret.public_key
+      assert_raises(Hide::InvalidArgumentError) do
+        Hide.encrypt("x", recipients: [public_key], filename: "report.txt\x00.exe")
+      end
+      assert_raises(Hide::InvalidArgumentError) do
+        Hide.encrypt("x", recipients: [public_key], media_type: "text/plain\x00x")
+      end
+      assert_raises(Hide::InvalidArgumentError) do
+        Hide.dearmor_public_key("#{Hide.armor_public_key(public_key)}\x00trailing")
+      end
+    end
+    assert_raises(Hide::InvalidArgumentError) do
+      Hide.new_challenge("app.example\x00.evil.example", 1_000, 60)
+    end
+    assert_raises(Hide::InvalidArgumentError) do
+      Hide.verify_checkpoint("note", "log.example\x00/hide", "key")
+    end
+  end
+
+  def test_a_non_ascii_passphrase_still_round_trips
+    passphrase = "parolă lungă — ținută"
+    sealed = Hide::SecretKey.generate { |secret| secret.protect(passphrase) }
+    Hide::SecretKey.open(sealed, passphrase) { |reopened| refute_predicate reopened, :closed? }
+    # The same bytes tagged as binary are the same passphrase.
+    Hide::SecretKey.open(sealed, passphrase.b) { |reopened| refute_predicate reopened, :closed? }
+    # So is the same text in another encoding. UTF-16 is full of NUL bytes:
+    # sent as it stands it would be cut short at the first one.
+    Hide::SecretKey.open(sealed, passphrase.encode(Encoding::UTF_16LE)) do |reopened|
+      refute_predicate reopened, :closed?
+    end
+  end
+
+  def test_a_filename_that_is_not_one_portable_file_name_is_refused
+    Hide::SecretKey.generate do |secret|
+      public_key = secret.public_key
+      ["a/b", "a\\b", "..", "CON", "com1.txt", "trailing.", "trailing ", "tab\there",
+       "what?.txt", "x" * 256].each do |filename|
+        assert_raises(Hide::Error, filename.inspect) do
+          Hide.encrypt("x", recipients: [public_key], filename: filename)
+        end
+      end
+      ["report.txt", "CONSOLE.txt", "x" * 255].each do |filename|
+        box = Hide.encrypt("x", recipients: [public_key], filename: filename)
+        assert_equal filename, Hide.decrypt(box, secret).filename
+      end
+    end
+  end
+
+  # The calls only read the native object, so no lock is involved.
+  def test_one_key_and_one_identity_serve_several_threads
+    Hide::SecretKey.generate do |secret|
+      identity do |signer|
+        public_key = secret.public_key
+        verifying = signer.public_key
+        box = Hide.encrypt("shared", recipients: [public_key])
+        failures = Queue.new
+        threads = Array.new(6) do |index|
+          Thread.new do
+            5.times do |round|
+              message = "#{index}/#{round}"
+              signature = signer.sign("example/threads", message)
+              Hide.verify(verifying, "example/threads", message, signature)
+              raise "wrong plaintext" unless Hide.decrypt(box, secret).plaintext == "shared".b
+              raise "wrong public key" unless secret.public_key == public_key
+            end
+          rescue StandardError => e
+            failures << e
+          end
+        end
+        threads.each { |thread| thread.join(120) }
+        assert_predicate failures, :empty?
+      end
+    end
+  end
+
+  # --- how the native library is found -------------------------------------
+
+  LIB_DIR = File.expand_path("../lib", __dir__)
+  GEMSPEC = File.expand_path("../hide-protocol.gemspec", __dir__)
+  NO_OVERRIDE = { "HIDE_LIBRARY" => nil, "HIDE_ALLOW_LIBRARY_OVERRIDE" => nil }.freeze
+
+  # Reports what was loaded, and every name handed to the system loader.
+  PROBE = <<~'RUBY'
+    require "fiddle"
+    asked = []
+    Fiddle.singleton_class.prepend(Module.new do
+      define_method(:dlopen) do |name|
+        asked << name
+        super(name)
+      end
+    end)
+    begin
+      require "hide_protocol"
+      puts "LOADED #{Hide::Binding::LIBRARY_PATH}"
+    rescue Hide::Binding::LibraryNotFound, Hide::Binding::VersionMismatch => e
+      puts "NOTFOUND #{e.message}"
+    end
+    asked.each { |name| puts "ASKED #{name}" }
+  RUBY
+
+  def test_the_library_is_loaded_by_absolute_path
+    path = Hide::Binding::LIBRARY_PATH
+    assert File.absolute_path?(path), path
+    assert File.file?(path), path
+  end
+
+  # The layout a platform gem installs: the core beside binding.rb. The working
+  # tree never contains the library, so this is the only way to exercise it.
+  def test_the_bundled_library_is_found_with_nothing_set
+    with_installed_gem do |lib|
+      output = probe(NO_OVERRIDE, lib: lib)
+      expected = File.join(lib, "hide_protocol", Hide::Binding.library_names.first)
+      assert_equal "LOADED #{expected}", output.lines.first.chomp
+    end
+  end
+
+  # The copied binding says 0.0.1; the core beside it is the one under test.
+  def test_a_core_from_another_release_is_refused_when_the_gem_loads
+    with_installed_gem(version: "0.0.1") do |lib|
+      first = probe(NO_OVERRIDE, lib: lib).lines.first.chomp
+      assert_match(/\ANOTFOUND the HIDE native library is version /, first)
+      assert_includes first, "this binding is 0.0.1"
+      assert_includes first, "install matching versions"
+    end
+  end
+
+  # The library is chosen once, when the file is required, so only a new
+  # process can show how a different environment is treated.
+  def test_the_system_loader_is_never_asked_to_search_by_name
+    Dir.mktmpdir("hide-planted-") do |planted|
+      # A copy of the real core, so loading it would succeed if anything
+      # searched for it: the working directory, PATH, and the search paths
+      # the Unix loaders honour.
+      FileUtils.cp(Hide::Binding::LIBRARY_PATH, File.join(planted, Hide::Binding.library_names.first))
+      env = NO_OVERRIDE.merge(
+        %w[PATH LD_LIBRARY_PATH DYLD_LIBRARY_PATH DYLD_FALLBACK_LIBRARY_PATH].to_h do |name|
+          # In front of what is already there: the interpreter itself may
+          # need the existing value to start.
+          [name, [planted, ENV[name]].compact.reject(&:empty?).join(File::PATH_SEPARATOR)]
+        end
+      )
+      output = probe(env, chdir: planted)
+
+      asked = output.lines.grep(/\AASKED .*hide_ffi/).map { |line| line.sub("ASKED ", "").chomp }
+      asked.each { |name| assert File.absolute_path?(name), "the loader was asked for #{name.inspect}" }
+      refute_includes output, File.basename(planted)
+      assert_packaged_or_not_found(output)
+    end
+  end
+
+  # One settable variable must not be enough to replace the core. The path
+  # does not exist, so honouring it could only show up as a failure naming it.
+  def test_hide_library_alone_is_ignored
+    [nil, "0", "true", "yes", " 1"].each do |opt_in|
+      output = probe({ "HIDE_LIBRARY" => absent_library, "HIDE_ALLOW_LIBRARY_OVERRIDE" => opt_in })
+      refute_includes output, "no-such-directory", "opt-in #{opt_in.inspect}"
+      assert_packaged_or_not_found(output)
+    end
+  end
+
+  def test_hide_library_with_the_opt_in_is_what_gets_loaded
+    output = probe({ "HIDE_LIBRARY" => absent_library, "HIDE_ALLOW_LIBRARY_OVERRIDE" => "1" })
+    # It is tried, and a failure says so rather than falling back to another copy.
+    assert_match(/\ANOTFOUND /, output)
+    assert_includes output, "no-such-directory"
+    assert_includes output, "could not be loaded"
+
+    real = Hide::Binding::LIBRARY_PATH
+    output = probe({ "HIDE_LIBRARY" => real, "HIDE_ALLOW_LIBRARY_OVERRIDE" => "1" })
+    assert_equal "LOADED #{real}", output.lines.first.chomp
+  end
+
+  # --- the core and the binding are the same release -----------------------
+
+  def test_the_loaded_core_is_this_bindings_version
+    assert_equal Hide::Binding::BINDING_VERSION.split(".").first(3), Hide.version.split(".").first(3)
+    assert_nil Hide::Binding.check_version(Hide.version)
+  end
+
+  def test_matching_versions_are_accepted
+    [%w[0.9.1 0.9.1], %w[1.2.3 1.2.3], %w[0.10.0-rc.1 0.10.0], %w[0.10.0 0.10.0+build.7]].each do |core, binding|
+      assert_nil Hide::Binding.check_version(core, binding)
+    end
+  end
+
+  def test_a_core_of_another_version_is_refused
+    [
+      %w[0.9.0 0.9.1],  # a stale core beside a newer binding
+      %w[0.9.2 0.9.1],  # and the reverse
+      %w[0.10.1 0.9.1],
+      %w[1.9.1 0.9.1],
+      %w[0.9.10 0.9.1], # compared as numbers, not as a text prefix
+      %w[0.91.0 0.9.10]
+    ].each do |core, binding|
+      error = assert_raises(Hide::Binding::VersionMismatch, "#{core} vs #{binding}") do
+        Hide::Binding.check_version(core, binding)
+      end
+      assert_match(/install matching versions/, error.message)
+    end
+  end
+
+  def test_a_core_that_does_not_state_a_version_is_refused
+    ["", "0.9", "v0.9.1", "latest"].each do |core|
+      assert_raises(Hide::Binding::VersionMismatch, core.inspect) do
+        Hide::Binding.check_version(core, "0.9.1")
+      end
+    end
+  end
+
+  # --- packaging -----------------------------------------------------------
+
+  # fiddle stops being a default gem in Ruby 4.0, so without a declared
+  # dependency a Bundler-managed application cannot require it.
+  def test_the_gem_declares_its_dependency_on_fiddle
+    spec = Gem::Specification.load(File.expand_path("../hide-protocol.gemspec", __dir__))
+    fiddle = spec.runtime_dependencies.find { |dependency| dependency.name == "fiddle" }
+    refute_nil fiddle, "no runtime dependency on fiddle"
+    assert fiddle.requirement.satisfied_by?(Gem::Version.new(Fiddle::VERSION))
+    assert_equal Hide::Binding::BINDING_VERSION, spec.version.to_s
+  end
+
   private
+
+  def probe(env, chdir: Dir.pwd, lib: LIB_DIR)
+    output, status = Open3.capture2e(env, RbConfig.ruby, "-I", lib, "-e", PROBE, chdir: chdir)
+    assert_predicate status, :success?, output
+    output
+  end
+
+  # Copies the gem's files the way an installed gem lays them out, with the
+  # core bundled beside binding.rb, and yields its lib directory.
+  def with_installed_gem(version: nil)
+    Dir.mktmpdir("hide-gem-") do |root|
+      root = File.realpath(root)
+      lib = File.join(root, "lib")
+      FileUtils.mkdir_p(File.join(lib, "hide_protocol"))
+      FileUtils.cp(File.join(LIB_DIR, "hide_protocol.rb"), lib)
+      FileUtils.cp(File.join(LIB_DIR, "hide_protocol", "binding.rb"), File.join(lib, "hide_protocol"))
+      FileUtils.cp(
+        Hide::Binding::LIBRARY_PATH,
+        File.join(lib, "hide_protocol", Hide::Binding.library_names.first)
+      )
+      gemspec = File.read(GEMSPEC, encoding: "UTF-8")
+      if version
+        current = %(spec.version = "#{Hide::Binding::BINDING_VERSION}")
+        assert_includes gemspec, current
+        gemspec = gemspec.sub(current, %(spec.version = "#{version}"))
+      end
+      File.write(File.join(root, "hide-protocol.gemspec"), gemspec, encoding: "UTF-8")
+      yield lib
+    end
+  end
+
+  def absent_library
+    File.join(Dir.tmpdir, "no-such-directory", "hide_ffi_override")
+  end
+
+  # With no override, either the copy shipped beside the binding loaded, or
+  # nothing did and the error says what to install.
+  def assert_packaged_or_not_found(output)
+    first = output.lines.first.to_s.chomp
+    if first.start_with?("LOADED ")
+      assert_equal File.join(LIB_DIR, "hide_protocol"), File.dirname(first.sub("LOADED ", ""))
+    else
+      assert_match(/\ANOTFOUND .*was not found/, first)
+      assert_includes first, RUBY_PLATFORM
+    end
+  end
 
   # Exactly AuthenticationError: a MalformedError here would mean the check
   # never got as far as verifying, and the test would pass for the wrong reason.

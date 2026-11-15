@@ -14,6 +14,13 @@ namespace HideProtocol;
  */
 final class Binding
 {
+    /**
+     * The HIDE release this binding was written against. A core of any other
+     * major.minor.patch is refused at load: it would still load, and would
+     * silently lack whatever the newer release enforces.
+     */
+    public const VERSION = '0.9.1';
+
     public const OK = 0;
     public const ERR_INVALID_ARGUMENT = 1;
     public const ERR_WRONG_PASSPHRASE = 2;
@@ -151,19 +158,93 @@ final class Binding
 
     private static ?\FFI $ffi = null;
 
+    private static ?string $path = null;
+
     public static function ffi(): \FFI
     {
-        return self::$ffi ??= \FFI::cdef(self::CDEF, self::locateLibrary());
+        if (self::$ffi === null) {
+            $path = self::locateLibrary();
+            // Asked through a declaration of its own, BEFORE the full one:
+            // ext-ffi resolves every declared function when it loads, so a
+            // stale core would otherwise be reported as whichever newer
+            // function it lacks rather than as the wrong version.
+            // Static and library-owned; ext-ffi returns `const char *` as a string.
+            $version = (string) \FFI::cdef('const char *hide_version(void);', $path)->hide_version();
+            $problem = self::versionMismatch(self::VERSION, $version);
+            if ($problem !== null) {
+                throw new HideException("{$problem} (loaded from {$path})");
+            }
+            $ffi = \FFI::cdef(self::CDEF, $path);
+            self::$path = $path;
+            self::$ffi = $ffi;
+        }
+
+        return self::$ffi;
+    }
+
+    /** The absolute path the core was loaded from. */
+    public static function libraryPath(): string
+    {
+        self::ffi();
+
+        return (string) self::$path;
+    }
+
+    /**
+     * Null when the core is the release this binding was written for,
+     * otherwise the reason it is refused. Only major.minor.patch is compared;
+     * a pre-release or build suffix is ignored.
+     */
+    public static function versionMismatch(string $binding, ?string $core): ?string
+    {
+        $want = self::parseVersion($binding);
+        $got = $core === null ? null : self::parseVersion($core);
+        if ($want !== null && $want === $got) {
+            return null;
+        }
+
+        return sprintf(
+            'this binding is version %s but the HIDE native library reports "%s"; '
+                . 'use the library built from the same release',
+            $binding,
+            $core ?? '',
+        );
+    }
+
+    /** @return array{0: int, 1: int, 2: int}|null */
+    private static function parseVersion(string $text): ?array
+    {
+        if (preg_match('/\A(\d{1,9})\.(\d{1,9})\.(\d{1,9})(?:[-+].*)?\z/s', $text, $parts) !== 1) {
+            return null;
+        }
+
+        return [(int) $parts[1], (int) $parts[2], (int) $parts[3]];
     }
 
     /** @return list<string> */
     public static function libraryNames(): array
     {
-        if (PHP_OS_FAMILY === 'Windows') {
+        return self::libraryNamesFor(PHP_OS_FAMILY);
+    }
+
+    /**
+     * @return list<string>
+     */
+    public static function libraryNamesFor(string $family): array
+    {
+        if ($family === 'Windows') {
             return ['hide_ffi.dll'];
         }
-        if (PHP_OS_FAMILY === 'Darwin') {
+        if ($family === 'Darwin') {
             return ['libhide_ffi.dylib'];
+        }
+        if ($family === 'Unknown') {
+            throw new HideException(
+                'HIDE does not know the native library name for this platform (PHP_OS_FAMILY is '
+                . "Unknown, PHP_OS is " . PHP_OS . '). Build the core with '
+                . '`cargo build --release -p hide-ffi` and set HIDE_LIBRARY to it together with '
+                . 'HIDE_ALLOW_LIBRARY_OVERRIDE=1.'
+            );
         }
 
         return ['libhide_ffi.so'];
@@ -171,37 +252,71 @@ final class Binding
 
     /**
      * HIDE_LIBRARY first (development only, requires HIDE_ALLOW_LIBRARY_OVERRIDE=1),
-     * then beside the package, then the system loader.
+     * then beside the package. Always an absolute path, or an exception.
      */
     private static function locateLibrary(): string
     {
-        $names = self::libraryNames();
-
         $override = getenv('HIDE_LIBRARY');
         // HIDE_LIBRARY replaces the whole cryptographic core, so one settable env
         // var must not be enough: it is honoured only with an explicit second opt-in.
         $allowed = getenv('HIDE_ALLOW_LIBRARY_OVERRIDE') === '1';
-        if ($allowed && is_string($override) && $override !== '') {
-            if (!is_file($override)) {
-                throw new HideException(
-                    "HIDE_LIBRARY points at {$override}, which does not exist."
-                );
-            }
+        $override = is_string($override) ? $override : null;
 
-            return $override;
+        // With the opt-in the override decides, even on a platform whose
+        // library name is unknown.
+        $names = $allowed && $override !== null && $override !== '' ? [] : self::libraryNames();
+
+        return self::locate($override, $allowed, [__DIR__, dirname(__DIR__) . '/lib'], $names);
+    }
+
+    /**
+     * The search itself, free of process state so it can be tested directly.
+     *
+     * The library is never left to the system loader to find by name: that
+     * search covers LD_LIBRARY_PATH / DYLD_LIBRARY_PATH, and on Windows the
+     * working directory and PATH, so whoever controls any of those would
+     * choose the cryptographic core.
+     *
+     * @param list<string> $directories
+     * @param list<string> $names
+     */
+    public static function locate(?string $override, bool $allowed, array $directories, array $names): string
+    {
+        $note = '';
+        if ($override !== null && $override !== '') {
+            if ($allowed) {
+                $resolved = is_file($override) ? realpath($override) : false;
+                if ($resolved === false) {
+                    throw new HideException(
+                        "HIDE_LIBRARY points at {$override}, which does not exist."
+                    );
+                }
+
+                return $resolved;
+            }
+            $note = ' HIDE_LIBRARY is set but was ignored, because HIDE_ALLOW_LIBRARY_OVERRIDE=1 is not.';
         }
 
-        foreach ([__DIR__, dirname(__DIR__) . '/lib'] as $directory) {
+        foreach ($directories as $directory) {
             foreach ($names as $name) {
                 $candidate = $directory . DIRECTORY_SEPARATOR . $name;
-                if (is_file($candidate)) {
-                    return $candidate;
+                $resolved = is_file($candidate) ? realpath($candidate) : false;
+                if ($resolved !== false) {
+                    return $resolved;
                 }
             }
         }
 
-        // Left to the system loader; a failure here surfaces as an FFI error.
-        return $names[0];
+        throw new HideException(
+            'the HIDE native library (' . implode(' / ', $names) . ') was not found for '
+            . PHP_OS_FAMILY . ' (' . PHP_OS . ', ' . (PHP_INT_SIZE * 8) . '-bit) in '
+            . implode(' or ', $directories)
+            . '. This package does not bundle it, and never leaves it to the system loader to'
+            . ' find by name: LD_LIBRARY_PATH, PATH and the working directory are not searched.'
+            . ' Copy the library into one of those directories, or set HIDE_LIBRARY to the file'
+            . ' produced by `cargo build --release -p hide-ffi` AND HIDE_ALLOW_LIBRARY_OVERRIDE=1.'
+            . $note
+        );
     }
 
     /**

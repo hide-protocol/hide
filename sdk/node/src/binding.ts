@@ -1,6 +1,6 @@
 import { existsSync, readFileSync } from "node:fs";
 import { createRequire } from "node:module";
-import { dirname, join } from "node:path";
+import { basename, dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 /**
@@ -37,23 +37,44 @@ function platformPackage(): string {
   return `@hide-protocol/${process.platform}-${process.arch}${suffix}`;
 }
 
+/**
+ * Finds the platform package the way Node resolves a dependency of this
+ * file, by walking up through `node_modules` directories, and nowhere else.
+ *
+ * Not `require.resolve`: that also searches `NODE_PATH` and the global
+ * folders, so one environment variable would choose the cryptographic core
+ * with no opt-in, which is exactly what the HIDE_LIBRARY gate exists to stop.
+ */
+function fromPlatformPackage(here: string): string | undefined {
+  const [scope, name] = platformPackage().split("/") as [string, string];
+  for (let dir = here; ; dir = dirname(dir)) {
+    // Node never looks in node_modules/node_modules.
+    if (basename(dir) !== "node_modules") {
+      const candidate = join(dir, "node_modules", scope, name, libraryName());
+      if (existsSync(candidate)) return candidate;
+    }
+    if (dirname(dir) === dir) return undefined;
+  }
+}
+
+/**
+ * Only absolute paths are ever handed to the loader: a bare file name would
+ * let the operating system search the current directory, PATH or
+ * LD_LIBRARY_PATH for the core.
+ */
 function locate(): string {
   const here = dirname(fileURLToPath(import.meta.url));
-  const fromPackage = (() => {
-    try {
-      return require.resolve(`${platformPackage()}/${libraryName()}`);
-    } catch {
-      return undefined;
-    }
-  })();
   // HIDE_LIBRARY replaces the whole cryptographic core, so one settable env
   // var must not be enough: it is honoured only with an explicit second opt-in.
-  const override =
-    process.env.HIDE_ALLOW_LIBRARY_OVERRIDE === "1" ? process.env.HIDE_LIBRARY : undefined;
+  // Once opted in it is the answer, not one candidate among several: failing
+  // to load it is an error rather than a reason to quietly use another copy.
+  const override = process.env.HIDE_LIBRARY;
+  if (override && process.env.HIDE_ALLOW_LIBRARY_OVERRIDE === "1") {
+    return resolve(override);
+  }
+
   const candidates = [
-    // Set by developers running against a cargo build tree.
-    override,
-    fromPackage,
+    fromPlatformPackage(here),
     join(here, libraryName()),
     join(here, "..", libraryName()),
     join(here, "..", "native", libraryName()),
@@ -63,13 +84,54 @@ function locate(): string {
     if (existsSync(candidate)) return candidate;
   }
   throw new Error(
-    `the HIDE native library (${libraryName()}) was not found. Install a ` +
-      `platform package (npm i ${platformPackage()}). Developers: set HIDE_LIBRARY to ` +
+    `the HIDE native library (${libraryName()}) was not found for ` +
+      `${process.platform} ${process.arch}. Install its platform package beside ` +
+      `hide-protocol (npm i ${platformPackage()}). Developers: set HIDE_LIBRARY to ` +
       "the path produced by `cargo build -p hide-ffi` AND HIDE_ALLOW_LIBRARY_OVERRIDE=1.",
   );
 }
 
-const lib = koffi.load(locate());
+function versionTriple(text: string, what: string): string {
+  const match = /^(\d+)\.(\d+)\.(\d+)/.exec(text);
+  if (!match) throw new Error(`the ${what} version "${text}" is not major.minor.patch`);
+  return `${Number(match[1])}.${Number(match[2])}.${Number(match[3])}`;
+}
+
+/** The version of this binding, from the manifest it is published with. */
+export const BINDING_VERSION: string = (
+  require("../package.json") as { version: string }
+).version;
+
+/**
+ * Refuses a core whose major.minor.patch differs from this binding's.
+ *
+ * Exact, not merely compatible: the core enforces checks this binding only
+ * documents (reserved contexts, metadata rules, limits), so a stale core
+ * beside a newer binding would silently lose them. Pre-release and build
+ * suffixes are not compared.
+ */
+export function checkVersion(core: string, binding: string = BINDING_VERSION): void {
+  if (versionTriple(core, "core") !== versionTriple(binding, "binding")) {
+    throw new Error(
+      `the HIDE native library is version ${core} but this binding is ${binding}; ` +
+        "install matching versions of both",
+    );
+  }
+}
+
+/** The absolute path the core was loaded from. */
+export const libraryPath: string = locate();
+
+const lib = (() => {
+  try {
+    return koffi.load(libraryPath);
+  } catch (error) {
+    const reason = error instanceof Error ? error.message : String(error);
+    throw new Error(
+      `the HIDE native library at ${libraryPath} could not be loaded: ${reason}`,
+    );
+  }
+})();
 
 export const Buffer_ = koffi.struct("HideBuffer", {
   data: "uint8_t *",
@@ -197,5 +259,7 @@ export const fns = {
     "int32_t hide_checkpoint_verify(const uint8_t *note, size_t note_len, const char *origin, const uint8_t *log_public, size_t log_public_len, _Out_ uint64_t *size, _Out_ HideBuffer *root)",
   ),
 };
+
+checkVersion(fns.version());
 
 export { koffi };

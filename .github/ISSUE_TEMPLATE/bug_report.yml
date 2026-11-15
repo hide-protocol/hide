@@ -5,7 +5,7 @@ body:
   - type: markdown
     attributes:
       value: |
-        **Do not report a suspected security vulnerability here.** Use GitHub's private vulnerability reporting as described in [SECURITY.md](https://github.com/hide-protocol/hide/blob/main/SECURITY.md).
+        **Do not report a suspected security vulnerability here.** Report it privately, through [GitHub's private advisory form](https://github.com/hide-protocol/hide/security/advisories/new) or by mail to hide-security@codai.ro, as described in [SECURITY.md](https://github.com/hide-protocol/hide/blob/main/SECURITY.md).
 
         HIDE is experimental and unaudited. A bug report is still welcome: a failing test is the most useful form.
   - type: input
@@ -13,7 +13,7 @@ body:
     attributes:
       label: Version or commit
       description: Output of `hide --version`, the package version, or the git commit.
-      placeholder: "0.6.2 / abc1234"
+      placeholder: "0.9.1 / abc1234"
     validations:
       required: true
   - type: dropdown

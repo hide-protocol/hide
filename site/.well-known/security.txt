@@ -1,0 +1,17 @@
+# Security contact for HIDE (https://github.com/hide-protocol/hide), per RFC 9116.
+#
+# RFC 9116 expects this file at /.well-known/security.txt on the host root.
+# HIDE is published as a GitHub project page, which cannot serve the root of
+# hide-protocol.github.io, so the file lives under /hide/.well-known/ instead.
+# A scanner that only looks at the host root will not find it.
+#
+# Mail is not end-to-end encrypted and no PGP key is published. Prefer the
+# first contact, which is access-controlled, for anything with sensitive detail.
+
+Contact: https://github.com/hide-protocol/hide/security/advisories/new
+Contact: mailto:hide-security@codai.ro
+Expires: 2027-11-01T00:00:00Z
+Preferred-Languages: en, ro
+Canonical: https://hide-protocol.github.io/hide/.well-known/security.txt
+Policy: https://github.com/hide-protocol/hide/blob/main/SECURITY.md
+Acknowledgments: https://github.com/hide-protocol/hide/blob/main/docs/advisories.md

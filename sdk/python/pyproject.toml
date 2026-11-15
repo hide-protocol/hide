@@ -15,7 +15,10 @@ classifiers = [
   "Development Status :: 3 - Alpha",
   "Intended Audience :: Developers",
   "License :: OSI Approved :: Apache Software License",
-  "Operating System :: OS Independent",
+  # Each wheel carries one compiled core, so this is not OS independent.
+  "Operating System :: POSIX :: Linux",
+  "Operating System :: Microsoft :: Windows",
+  "Operating System :: MacOS",
   "Topic :: Security :: Cryptography",
   "Programming Language :: Python :: 3",
   "Programming Language :: Python :: 3.10",

@@ -33,6 +33,18 @@ jobs:
       # and diffing means it cannot silently drift from the documents it quotes.
       - run: node scripts/build-llms-full.mjs
       - run: git diff --exit-code -- llms-full.txt
+      # RFC 9116 makes Expires mandatory and a reader must ignore the file once
+      # it has passed. Nothing else would notice the date going by.
+      - name: security.txt has not expired
+        run: |
+          node -e '
+            const text = require("node:fs").readFileSync("site/.well-known/security.txt", "utf8");
+            const match = /^Expires: (.+)$/m.exec(text);
+            if (!match) { console.error("security.txt has no Expires field"); process.exit(1); }
+            const days = (Date.parse(match[1]) - Date.now()) / 86400000;
+            if (!(days > 0)) { console.error("security.txt expired: " + match[1]); process.exit(1); }
+            if (days < 60) console.log("::warning file=site/.well-known/security.txt::expires in " + Math.floor(days) + " days");
+          '
 
   deploy:
     name: Deploy GitHub Pages
@@ -59,5 +71,8 @@ jobs:
       - uses: actions/upload-pages-artifact@fc324d3547104276b827a68afc52ff2a11cc49c9 # v5.0.0
         with:
           path: site
+          # The action's tar excludes dot-entries by default, which would drop
+          # site/.well-known/security.txt without any error.
+          include-hidden-files: true
       - id: deployment
         uses: actions/deploy-pages@368f82528645a54fb793d4d04e342629a3f51346 # v5.0.1

@@ -1,0 +1,30 @@
+# cargo-about: collects the licence text of every crate compiled into a
+# shipped binary, so each release archive can carry the notices its licences
+# require (MIT, BSD, ISC, Apache-2.0 4(a), BlueOak, Unicode-3.0, MPL-2.0 3.2).
+# Driven by scripts/licences/generate.sh; one config for the root workspace and
+# for apps/hide-desktop/src-tauri (passed there with -c).
+
+# Keep in sync with [licenses].allow in deny.toml. cargo-deny decides what may
+# enter the graph; this list only has to be able to name everything it allows.
+accepted = [
+  "Apache-2.0",
+  "Apache-2.0 WITH LLVM-exception",
+  "MIT",
+  "BSD-2-Clause",
+  "BSD-3-Clause",
+  "ISC",
+  "Unicode-3.0",
+  "Zlib",
+  "CC0-1.0",
+  "MPL-2.0",
+  "OpenSSL",
+  "CDLA-Permissive-2.0",
+  "BSL-1.0",
+  "0BSD",
+  "BlueOak-1.0.0",
+]
+
+# Dev-dependencies (proptest and friends) are never linked into a release
+# binary. Build dependencies stay in: a proc-macro or build script can emit
+# code that is, and listing one too many is harmless where one too few is not.
+ignore-dev-dependencies = true

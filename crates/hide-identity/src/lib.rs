@@ -125,6 +125,8 @@ pub enum IdentityError {
     BadBinding,
     #[error("the binding names a history or chain that is not the one supplied")]
     StaleBinding,
+    #[error("more than one recovery binding verifies for this identity")]
+    ConflictingBindings,
 }
 
 /// What an entry does.

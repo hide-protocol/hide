@@ -1,0 +1,34 @@
+{{!--
+  cargo-about template for the body of THIRD-PARTY-LICENSES.txt. Plain text, so
+  it can be read inside any archive without a browser; triple braces keep
+  licence names and texts as written instead of HTML-escaping them (a name
+  such as BSD 3-Clause "New" would otherwise come out with &quot; in it). The
+  heading that says which binary the file describes is written by
+  scripts/licences/generate.sh, because a template cannot take a parameter.
+--}}
+Licences in this file:
+{{#each overview}}
+  {{{name}}} ({{id}}): {{count}}
+{{/each}}
+
+Each section below gives one licence text and the components it applies to.
+The exact source of every component is the crates.io release named beside it.
+{{#each licenses}}
+
+================================================================================
+{{{name}}} ({{id}})
+================================================================================
+
+Applies to:
+{{#each used_by}}
+  {{crate.name}} {{crate.version}}  https://crates.io/crates/{{crate.name}}/{{crate.version}}
+{{/each}}
+{{#if (eq id "MPL-2.0")}}
+
+Source code (MPL-2.0, section 3.2): the components listed above are included
+unmodified. Their source code is available at the crates.io address beside each
+name, at exactly the version stated.
+{{/if}}
+
+{{{text}}}
+{{/each}}

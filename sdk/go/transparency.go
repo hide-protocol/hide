@@ -2,13 +2,12 @@ package hide
 
 /*
 #include <stdlib.h>
-#include "hide.h"
+#include "hide_core.h"
 */
 import "C"
 
 import (
 	"runtime"
-	"strings"
 	"unsafe"
 )
 
@@ -197,12 +196,12 @@ func VerifyConsistency(oldSize, newSize uint64, path, oldRoot, newRoot []byte) e
 // returns ErrAuthentication; nothing is returned from a note that did not
 // verify.
 func VerifyCheckpoint(note []byte, origin string, logPublicKey []byte) (uint64, []byte, error) {
-	// C.CString would silently truncate at an embedded NUL and check a
-	// different origin from the one the caller named.
-	if strings.IndexByte(origin, 0) >= 0 {
-		return 0, nil, ErrInvalidArgument
+	// An origin cut at an embedded NUL would check a different log from the
+	// one the caller named; cString refuses it.
+	cOrigin, err := cString(origin, "origin")
+	if err != nil {
+		return 0, nil, err
 	}
-	cOrigin := C.CString(origin)
 	defer C.free(unsafe.Pointer(cOrigin))
 	var size C.uint64_t
 	var root C.HideBuffer = C.hide_buffer_empty()

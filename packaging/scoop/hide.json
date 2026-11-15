@@ -6,18 +6,19 @@
     "notes": [
         "HIDE is experimental and has not been independently audited.",
         "A successful decryption proves the data was not altered; it does NOT prove who sent it.",
-        "Every command requires --experimental. The wire format may change while the version is 0.x."
+        "Every command requires --experimental. The wire format is frozen since 0.9.0 and changes before 1.0 only if a security flaw forces it.",
+        "The binaries are not code-signed. Verify a download against the release's SHA256SUMS and with: gh attestation verify <file> --repo hide-protocol/hide"
     ],
     "architecture": {
         "64bit": {
-            "url": "https://github.com/hide-protocol/hide/releases/download/v0.5.0/hide-v0.5.0-x86_64-pc-windows-msvc.zip",
+            "url": "https://github.com/hide-protocol/hide/releases/download/v$version/hide-v$version-x86_64-pc-windows-msvc.zip",
             "hash": "PLACEHOLDER_WINDOWS_X86_64",
-            "extract_dir": "hide-v0.5.0-x86_64-pc-windows-msvc"
+            "extract_dir": "hide-v$version-x86_64-pc-windows-msvc"
         },
         "arm64": {
-            "url": "https://github.com/hide-protocol/hide/releases/download/v0.5.0/hide-v0.5.0-aarch64-pc-windows-msvc.zip",
+            "url": "https://github.com/hide-protocol/hide/releases/download/v$version/hide-v$version-aarch64-pc-windows-msvc.zip",
             "hash": "PLACEHOLDER_WINDOWS_ARM64",
-            "extract_dir": "hide-v0.5.0-aarch64-pc-windows-msvc"
+            "extract_dir": "hide-v$version-aarch64-pc-windows-msvc"
         }
     },
     "bin": "hide.exe",

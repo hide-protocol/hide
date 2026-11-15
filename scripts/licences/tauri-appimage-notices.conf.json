@@ -1,0 +1,11 @@
+{
+  "bundle": {
+    "linux": {
+      "appimage": {
+        "files": {
+          "/usr/share/doc/hide-desktop/third-party": "target/hide-release/appimage-third-party"
+        }
+      }
+    }
+  }
+}

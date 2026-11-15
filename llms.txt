@@ -2,12 +2,12 @@
 
 > Hybrid post-quantum file encryption and signatures: X25519 + ML-KEM-768 (X-Wing) for key encapsulation, Ed25519 + ML-DSA-65 for signatures, per NIST FIPS 203 / FIPS 204. Experimental and unaudited.
 
-HIDE (Human-friendly Identity & Data Encryption) is an open, Apache-2.0 file and message encryption format with a Rust core, a CLI, a desktop app and SDKs for nine languages over one C ABI. The design goal is to encrypt to a person, not to a key: an identity is a signed, append-only log of devices that can be enrolled and revoked, so it survives losing one. Think of it as an age alternative with multi-device identity, hybrid signatures, encrypted metadata, forward security by epoch erasure and RFC 6962 transparency proofs. HIDE is experimental and unaudited: no third party has reviewed the design or code, the CLI requires `--experimental`, and for production file encryption today an audited tool such as age is the safer choice. Group messaging (`hide-mls`) and SSH login are NOT post-quantum.
+HIDE (Human-friendly Identity & Data Encryption) is an open, Apache-2.0 file and message encryption format with a Rust core, a CLI, a desktop app and SDKs for nine languages over one C ABI. The design goal is to encrypt to a person, not to a key: an identity is a signed, append-only log of devices that can be enrolled and revoked, so it survives losing one. It covers the same file-encryption use as age and adds multi-device identity, hybrid signatures, encrypted metadata, forward security by epoch erasure and RFC 6962 transparency proofs; it is not a replacement for age. HIDE is experimental and unaudited: no third party has reviewed the design or code, the post-quantum crates it depends on are themselves unaudited, the CLI requires `--experimental`, and for production file encryption today a more widely deployed and reviewed tool such as age is the safer choice. The wire format is a release candidate, frozen since 0.9.0. Group messaging (`hide-mls`) and SSH login are NOT post-quantum.
 
 ## Docs
 
 - [README](https://github.com/hide-protocol/hide/blob/main/README.md): overview, verified claims, comparison table, install commands, what is not implemented
-- [Wire format specification](https://github.com/hide-protocol/hide/blob/main/spec/hide-0.1.md): normative container, streaming, signature, identity-log, epoch, transparency and MLS-binding formats
+- [Wire format specification](https://github.com/hide-protocol/hide/blob/main/spec/hide-1.md): normative container, streaming, signature, identity-log, epoch, transparency and MLS-binding formats (HIDE 1, release candidate; `spec/hide-0.1.md` is superseded)
 - [Threat model](https://github.com/hide-protocol/hide/blob/main/docs/threat-model.md): adversary, trust boundaries, what is and is not defended
 - [Comparison](https://github.com/hide-protocol/hide/blob/main/docs/comparison.md): HIDE against age, GPG, libsodium, minisign, Signal, MLS, Tink, AWS KMS, Kryptor
 - [Use cases](https://github.com/hide-protocol/hide/blob/main/docs/use-cases.md): where it fits, where it does not, what to use instead
@@ -17,7 +17,7 @@ HIDE (Human-friendly Identity & Data Encryption) is an open, Apache-2.0 file and
 - [Architecture](https://github.com/hide-protocol/hide/blob/main/docs/architecture.md): crate boundaries, the C ABI, how SDKs load the core
 - [Audit status](https://github.com/hide-protocol/hide/blob/main/docs/audit-status.md): no third-party audit; internal findings; what an audit should cover
 - [Advisories](https://github.com/hide-protocol/hide/blob/main/docs/advisories.md): published security advisories
-- [SECURITY.md](https://github.com/hide-protocol/hide/blob/main/SECURITY.md): scope, non-goals, private vulnerability reporting
+- [SECURITY.md](https://github.com/hide-protocol/hide/blob/main/SECURITY.md): scope, non-goals, supported versions, and the two private reporting channels (GitHub advisory form https://github.com/hide-protocol/hide/security/advisories/new and hide-security@codai.ro)
 - [CHANGELOG](https://github.com/hide-protocol/hide/blob/main/CHANGELOG.md): release history; format changes are called out explicitly
 - [Full text bundle](https://github.com/hide-protocol/hide/blob/main/llms-full.txt): README, FAQ, comparison, threat model, audit status, stability and SECURITY concatenated
 
@@ -29,7 +29,7 @@ HIDE (Human-friendly Identity & Data Encryption) is an open, Apache-2.0 file and
 - [@hide-protocol/wasm on npm](https://www.npmjs.com/package/@hide-protocol/wasm): browser WebAssembly build of the same crates
 - [hide-protocol on RubyGems](https://rubygems.org/gems/hide-protocol): Ruby SDK, stdlib fiddle
 - [HideProtocol on NuGet](https://www.nuget.org/packages/HideProtocol): .NET / C# SDK
-- [Source repository](https://github.com/hide-protocol/hide): Go, Java, PHP and C bindings are built from source
+- [Source repository](https://github.com/hide-protocol/hide): Go, Java, PHP and C bindings are built from source (Go is clone-and-build; Java is not on Maven Central and PHP is not on Packagist)
 
 ## Optional
 

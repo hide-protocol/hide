@@ -2,14 +2,14 @@ package hide
 
 /*
 #include <stdlib.h>
-#include "hide.h"
+#include "hide_core.h"
 */
 import "C"
 
 import (
 	"errors"
-	"fmt"
 	"runtime"
+	"sync"
 	"unsafe"
 )
 
@@ -47,9 +47,12 @@ func wrapIdentity(handle *C.HideSigningIdentity) *SigningIdentity {
 // back up. A forgotten passphrase cannot be recovered.
 func GenerateIdentity(passphrase string) ([]byte, error) {
 	if len(passphrase) < MinPassphraseLen {
-		return nil, fmt.Errorf("hide: the passphrase must be at least %d characters", MinPassphraseLen)
+		return nil, errInvalid("the passphrase must be at least %d characters", MinPassphraseLen)
 	}
-	cPassphrase := C.CString(passphrase)
+	cPassphrase, err := cString(passphrase, "passphrase")
+	if err != nil {
+		return nil, err
+	}
 	defer C.free(unsafe.Pointer(cPassphrase))
 
 	var out C.HideBuffer = C.hide_buffer_empty()
@@ -64,11 +67,11 @@ func GenerateIdentity(passphrase string) ([]byte, error) {
 // A key file written before signatures existed carries no signing seed and
 // fails with ErrNotAKey rather than being silently downgraded.
 func LoadSigningIdentity(data []byte, passphrase string) (*SigningIdentity, error) {
-	var cPassphrase *C.char
-	if passphrase != "" {
-		cPassphrase = C.CString(passphrase)
-		defer C.free(unsafe.Pointer(cPassphrase))
+	cPassphrase, err := optionalCString(passphrase, "passphrase")
+	if err != nil {
+		return nil, err
 	}
+	defer C.free(unsafe.Pointer(cPassphrase))
 	var handle *C.HideSigningIdentity
 	code := C.hide_signing_identity_open(
 		bytePointer(data), C.size_t(len(data)), cPassphrase, &handle,
@@ -87,7 +90,11 @@ func (i *SigningIdentity) PublicKey() ([]byte, error) {
 		return nil, ErrClosed
 	}
 	var out C.HideBuffer = C.hide_buffer_empty()
-	if err := status(C.hide_signing_identity_public(i.handle, &out)); err != nil {
+	code := C.hide_signing_identity_public(i.handle, &out)
+	// Without this, i is dead once its handle has been read, and the finalizer
+	// may free the identity while the core is still using it.
+	runtime.KeepAlive(i)
+	if err := status(code); err != nil {
 		return nil, err
 	}
 	return take(&out), nil
@@ -110,6 +117,7 @@ func (i *SigningIdentity) Sign(context, message []byte) ([]byte, error) {
 	)
 	runtime.KeepAlive(context)
 	runtime.KeepAlive(message)
+	runtime.KeepAlive(i)
 	if err := status(code); err != nil {
 		return nil, err
 	}
@@ -126,6 +134,7 @@ func (i *SigningIdentity) Answer(challenge []byte) ([]byte, error) {
 		i.handle, bytePointer(challenge), C.size_t(len(challenge)), &out,
 	)
 	runtime.KeepAlive(challenge)
+	runtime.KeepAlive(i)
 	if err := status(code); err != nil {
 		return nil, err
 	}
@@ -175,7 +184,10 @@ func Verify(publicKey, context, message, signature []byte) error {
 // particular, and can be replayed. A challenge binds a random nonce, an
 // audience and an expiry, so an answer is good once, here, now.
 func NewChallenge(audience string, now, validFor uint64) ([]byte, error) {
-	cAudience := C.CString(audience)
+	cAudience, err := cString(audience, "audience")
+	if err != nil {
+		return nil, err
+	}
 	defer C.free(unsafe.Pointer(cAudience))
 
 	var out C.HideBuffer = C.hide_buffer_empty()
@@ -191,7 +203,13 @@ func NewChallenge(audience string, now, validFor uint64) ([]byte, error) {
 // Replay can only be detected by the verifier: a replayed answer is a genuine
 // signature and nothing about it is invalid on its own. This must therefore
 // outlive a single request.
+//
+// A SpentNonces is safe for concurrent use: Accept and Close serialise on an
+// internal mutex, so one record can be shared by every request handler. The
+// record itself is in-process memory; it is not shared across processes or
+// restarts.
 type SpentNonces struct {
+	mu     sync.Mutex
 	handle *C.HideSpentNonces
 }
 
@@ -211,6 +229,8 @@ func NewSpentNonces() (*SpentNonces, error) {
 // It returns ErrChallengeReplayed the second time, ErrChallengeExpired after
 // the window, and ErrAuthentication if the answer does not verify.
 func (s *SpentNonces) Accept(challenge, signature, publicKey []byte, now uint64) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	if s.handle == nil {
 		return ErrClosed
 	}
@@ -224,11 +244,14 @@ func (s *SpentNonces) Accept(challenge, signature, publicKey []byte, now uint64)
 	runtime.KeepAlive(challenge)
 	runtime.KeepAlive(signature)
 	runtime.KeepAlive(publicKey)
+	runtime.KeepAlive(s)
 	return status(code)
 }
 
 // Close releases the record. Safe to call twice.
 func (s *SpentNonces) Close() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	if s.handle != nil {
 		C.hide_spent_nonces_free(s.handle)
 		s.handle = nil

@@ -3,8 +3,9 @@
   Sets the release version everywhere it is written down.
 
 .DESCRIPTION
-  The version lives in 22 files across seven ecosystems, and every release so
-  far has updated them by hand. That is a silent failure waiting to happen: a
+    The version is written down in the places listed in $targets below, across
+    seven ecosystems, and early releases updated them by hand. That is a silent
+    failure waiting to happen: a
   missed manifest publishes a package whose contents claim one version and
   whose metadata claims another, and nothing in CI would notice.
 
@@ -54,6 +55,9 @@ $targets = @(
     @{ Path = 'packaging/scoop/hide.json'; Pattern = '"version": "([^"]+)"' }
     @{ Path = 'packaging/homebrew/hide.rb'; Pattern = 'version "([^"]+)"' }
     @{ Path = 'site/index.html'; Pattern = '"softwareVersion": "([^"]+)"' }
+    # The visible footer. It said 0.6.2 for three releases because only the
+    # JSON-LD above was managed.
+    @{ Path = 'site/index.html'; Pattern = '<span id="version">([^<]+)</span>' }
 )
 
 # The version internal dependencies must point at. In -Check mode this is
@@ -174,7 +178,7 @@ if ($PSCmdlet.ParameterSetName -eq 'Check') {
         }
         exit 1
     }
-    Write-Host "all $($targets.Count) files agree on $($found.Keys)"
+    Write-Host "all $($targets.Count) version fields agree on $($found.Keys)"
 } else {
-    Write-Host "`nset to $Version in $($targets.Count) files. Cargo.lock still needs `cargo check`."
+    Write-Host "`nset to $Version in $($targets.Count) version fields. Cargo.lock still needs `cargo check`."
 }

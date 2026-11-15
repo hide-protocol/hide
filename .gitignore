@@ -2,7 +2,9 @@ target/
 target-portable/
 fuzz/artifacts/
 fuzz/corpus/
-fuzz/Cargo.lock
+# fuzz/Cargo.lock is committed on purpose: without it the fuzzers built a
+# different dependency graph than the one that ships, so a finding (or a clean
+# night) could belong to a crate version nobody runs.
 node_modules/
 .copilot-tmp/
 *.test-secret

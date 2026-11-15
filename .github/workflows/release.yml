@@ -1,5 +1,9 @@
 name: Release
 
+# A v* tag can be neither moved nor deleted (repository ruleset), and a tag
+# runs this file as it was at the tag. A run that fails after the tag exists
+# therefore cannot be repaired: it costs a version number. Rehearse first with
+# "Run workflow" on the release commit: that runs every job except `publish`.
 on:
   push:
     tags: ["v*"]
@@ -15,9 +19,101 @@ concurrency:
 env:
   CARGO_TERM_COLOR: always
   CARGO_INCREMENTAL: 0
+  # Pinned: the notices are a legal artifact, and a newer cargo-about must not
+  # change what they say between two releases without a commit that says so.
+  CARGO_ABOUT_VERSION: "0.9.3"
 
 jobs:
+  # Licence notices for every binary this workflow ships, generated once.
+  # cargo-about reads the lockfiles: it compiles nothing and does not need the
+  # target's toolchain, so one Linux job covers all ten binaries and the build
+  # jobs below only copy a file. It also holds the checks that must pass before
+  # anything is built: the licence text itself, and that crates carry it.
+  notices:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
+        with:
+          # Keeps the compiled cargo-about in ~/.cargo/bin between runs.
+          key: notices
+      - uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1 # v4
+        with:
+          version: 10
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
+        with:
+          node-version: 22
+          cache: pnpm
+          cache-dependency-path: apps/hide-desktop/pnpm-lock.yaml
+
+      # Until 0.9.1 this file was a 17-line pointer to apache.org, and that
+      # stub is what every archive shipped as "the licence". The hash is of
+      # https://www.apache.org/licenses/LICENSE-2.0.txt, byte for byte.
+      - name: LICENSE must be the complete, unmodified Apache-2.0 text
+        run: |
+          set -euo pipefail
+          echo "cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30  LICENSE" \
+            | sha256sum --check
+
+      # `license-file = "../../LICENSE"` makes cargo copy the root file into
+      # each .crate. Checked here, on the release commit, because the crates
+      # are published later from this same tag and a .crate cannot be replaced.
+      # Runs before anything writes into the tree: cargo refuses a dirty one.
+      - name: Every published crate must carry LICENSE and a README
+        run: |
+          set -euo pipefail
+          crates="$(cargo metadata --no-deps --format-version 1 --locked \
+            | jq -r '.packages[] | select(.publish == null) | .name')"
+          [ -n "$crates" ] || { echo "::error::no publishable crates found"; exit 1; }
+          for crate in $crates; do
+            listing="$(cargo package --list --locked -p "$crate")"
+            for file in LICENSE README.md; do
+              grep -qx "$file" <<<"$listing" \
+                || { echo "::error::the $crate crate would be published without $file"; exit 1; }
+            done
+            echo "$crate: LICENSE and README.md present"
+          done
+
+      - name: Install cargo-about
+        run: cargo install cargo-about --locked --version "$CARGO_ABOUT_VERSION" --features cli
+
+      # The desktop notices include the JavaScript bundled into the user
+      # interface, read from the installed packages.
+      - name: Install the desktop frontend packages
+        working-directory: apps/hide-desktop
+        run: pnpm install --frozen-lockfile --ignore-workspace
+
+      # One file per binary, because the dependency graph differs per target.
+      # These lists mirror the two build matrices below; a target missing here
+      # fails that target's Package step, which copies its file by name.
+      - name: Generate the notices
+        run: |
+          set -euo pipefail
+          out="$RUNNER_TEMP/notices"
+          mkdir -p "$out"
+          for target in \
+            x86_64-unknown-linux-gnu aarch64-unknown-linux-gnu x86_64-unknown-linux-musl \
+            x86_64-pc-windows-msvc aarch64-pc-windows-msvc \
+            aarch64-apple-darwin x86_64-apple-darwin; do
+            bash scripts/licences/generate.sh cli "$target" "$out/cli-$target.txt"
+          done
+          for target in x86_64-unknown-linux-gnu x86_64-pc-windows-msvc aarch64-apple-darwin; do
+            bash scripts/licences/generate.sh desktop "$target" "$out/desktop-$target.txt"
+          done
+          ls -la "$out"
+
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: notices
+          path: ${{ runner.temp }}/notices/*.txt
+          if-no-files-found: error
+          retention-days: 7
+
   build:
+    needs: notices
+    timeout-minutes: 45
     strategy:
       fail-fast: false
       matrix:
@@ -41,6 +137,8 @@ jobs:
           - os: macos-15
             target: x86_64-apple-darwin
     runs-on: ${{ matrix.os }}
+    env:
+      TARGET: ${{ matrix.target }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable
@@ -57,7 +155,7 @@ jobs:
         run: |
           set -euo pipefail
           sudo apt-get update
-          case "${{ matrix.target }}" in
+          case "$TARGET" in
             aarch64-unknown-linux-gnu)
               sudo apt-get install -y --no-install-recommends \
                 gcc-aarch64-linux-gnu libc6-dev-arm64-cross
@@ -70,45 +168,74 @@ jobs:
 
       # A release binary that cannot decrypt the frozen vectors is not shippable.
       # Cross-compiled binaries cannot run here, so the check is host-native.
-      - run: cargo test -p hide-object --test vectors --release
+      - run: cargo test -p hide-object --test vectors --release --locked
         if: '!matrix.cross'
-      - run: cargo build --release --locked -p hide-cli --target ${{ matrix.target }}
+      - run: cargo build --release --locked -p hide-cli --target "$TARGET"
+        shell: bash
+
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        with:
+          name: notices
+          path: notices
 
       - name: Package
         shell: bash
+        env:
+          RUNNER_OS_NAME: ${{ runner.os }}
         run: |
           set -euo pipefail
-          name="hide-${GITHUB_REF_NAME}-${{ matrix.target }}"
+          name="hide-${GITHUB_REF_NAME}-${TARGET}"
           mkdir -p "dist/$name"
-          if [ -f "target/${{ matrix.target }}/release/hide.exe" ]; then
-            cp "target/${{ matrix.target }}/release/hide.exe" "dist/$name/"
+          if [ -f "target/$TARGET/release/hide.exe" ]; then
+            cp "target/$TARGET/release/hide.exe" "dist/$name/"
           else
-            cp "target/${{ matrix.target }}/release/hide" "dist/$name/"
+            cp "target/$TARGET/release/hide" "dist/$name/"
           fi
           cp README.md LICENSE SECURITY.md "dist/$name/"
           cp spec/hide-1.md spec/hide-0.1.md "dist/$name/"
+
+          # The binary statically links third-party crates; their licence
+          # texts have to be in the same archive. The file was generated for
+          # exactly this target, and its second line says so: a notices file
+          # for another platform must not be shipped by mistake.
+          cp "notices/cli-$TARGET.txt" "dist/$name/THIRD-PARTY-LICENSES.txt"
+          sed -n 2p "dist/$name/THIRD-PARTY-LICENSES.txt" | grep -q "target $TARGET\$" \
+            || { echo "::error::the notices file is not for $TARGET"; exit 1; }
+          # The musl build also embeds the C library itself. Its notice is the
+          # copyright file of the musl package installed above.
+          if [ "$TARGET" = x86_64-unknown-linux-musl ]; then
+            cp /usr/share/doc/musl/copyright "dist/$name/MUSL-COPYRIGHT.txt"
+          fi
+
           cd dist
-          if [ "${{ runner.os }}" = "Windows" ]; then
+          if [ "$RUNNER_OS_NAME" = "Windows" ]; then
             7z a -tzip "$name.zip" "$name" >/dev/null
+            7z l "$name.zip" | grep -q "THIRD-PARTY-LICENSES.txt" \
+              || { echo "::error::$name.zip has no THIRD-PARTY-LICENSES.txt"; exit 1; }
             certutil -hashfile "$name.zip" SHA256 | sed -n 2p | tr -d ' \r' > "$name.zip.sha256"
           else
             tar -czf "$name.tar.gz" "$name"
+            tar -tzf "$name.tar.gz" | grep -qx "$name/THIRD-PARTY-LICENSES.txt" \
+              || { echo "::error::$name.tar.gz has no THIRD-PARTY-LICENSES.txt"; exit 1; }
             shasum -a 256 "$name.tar.gz" | cut -d' ' -f1 > "$name.tar.gz.sha256"
           fi
 
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
-          name: ${{ matrix.target }}
+          name: cli-${{ matrix.target }}
           path: |
             dist/*.tar.gz
             dist/*.zip
             dist/*.sha256
+          if-no-files-found: error
           retention-days: 7
 
   # The desktop application and the portable build. Kept in a separate job so a
   # failure here never blocks the CLI, and so the Node toolchain is installed
   # only where it is actually needed.
   desktop:
+    needs: notices
+    timeout-minutes: 90
     strategy:
       fail-fast: false
       matrix:
@@ -120,6 +247,8 @@ jobs:
           - os: macos-15
             target: aarch64-apple-darwin
     runs-on: ${{ matrix.os }}
+    env:
+      TARGET: ${{ matrix.target }}
     defaults:
       run:
         working-directory: apps/hide-desktop
@@ -150,6 +279,7 @@ jobs:
       - name: Install Linux webview dependencies
         if: runner.os == 'Linux'
         run: |
+          set -euo pipefail
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
             libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf
@@ -164,19 +294,157 @@ jobs:
       - name: Verify the two surfaces interoperate
         if: runner.os == 'Linux'
         run: |
-          cargo build --release -p hide-cli
-          cargo test --release --manifest-path apps/hide-desktop/src-tauri/Cargo.toml
+          set -euo pipefail
+          cargo build --release --locked -p hide-cli
+          cargo test --release --locked --manifest-path apps/hide-desktop/src-tauri/Cargo.toml
         working-directory: .
 
+      # The notices for this target, generated by the `notices` job. Staged
+      # under target/ (ignored by git) at the path the Tauri config overlay
+      # scripts/licences/tauri-notices.conf.json names as a bundle resource.
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        with:
+          name: notices
+          path: apps/hide-desktop/src-tauri/target/hide-release/notices
+      - name: Stage the third-party notices
+        shell: bash
+        run: |
+          set -euo pipefail
+          stage="src-tauri/target/hide-release"
+          cp "$stage/notices/desktop-$TARGET.txt" "$stage/THIRD-PARTY-LICENSES.txt"
+          sed -n 2p "$stage/THIRD-PARTY-LICENSES.txt" | grep -q "target $TARGET\$" \
+            || { echo "::error::the notices file is not for $TARGET"; exit 1; }
+
+      # The overlay adds LICENSE and THIRD-PARTY-LICENSES.txt to the bundle's
+      # resources, so every installer puts them on disk beside the program:
+      # the install directory on Windows, Contents/Resources in the .app,
+      # usr/lib/HIDE in the .deb and the AppImage. tauri.conf.json is left
+      # alone so that a plain local `pnpm tauri build` needs no generated file.
+      #
+      # `-- --locked` goes to cargo: the installer must be built from the
+      # committed src-tauri/Cargo.lock, not from whatever resolves today.
+      #
+      # macOS asks for `app` as well as `dmg`. The bundler deletes the .app
+      # when only the disk image is requested, and the .app (which the image
+      # is made from) is where the next step can see what was packed.
       - name: Build the installer
-        run: pnpm tauri build
+        shell: bash
+        run: |
+          set -euo pipefail
+          case "$RUNNER_OS" in
+            Linux) bundles=deb,appimage ;;
+            Windows) bundles=nsis ;;
+            macOS) bundles=app,dmg ;;
+            *) echo "::error::no bundle list for $RUNNER_OS"; exit 1 ;;
+          esac
+          pnpm tauri build --bundles "$bundles" \
+            --config ../../scripts/licences/tauri-notices.conf.json \
+            -- --locked
+
+      # The AppImage is the one artifact that redistributes system libraries:
+      # linuxdeploy copies the whole shared-library closure (WebKitGTK, GTK,
+      # GLib, GnuTLS and about 160 more files, many under the LGPL) into it.
+      # Which files those are is known only after linuxdeploy has run, so this
+      # takes two passes. The first build above leaves the populated AppDir on
+      # disk; the script maps every bundled binary in it to its Ubuntu package
+      # and collects that package's copyright file, the licence texts those
+      # files refer to, and the source-package versions. `tauri bundle` then
+      # rebuilds only the AppImage with that directory added through the
+      # bundler's own `appimage.files` setting. Repacking the finished image by
+      # hand would need appimagetool, which the bundler does not expose.
+      - name: Add the system-library notices to the AppImage
+        if: runner.os == 'Linux'
+        run: |
+          set -euo pipefail
+          appdir="$(find src-tauri/target/release/bundle/appimage -maxdepth 1 -type d -name '*.AppDir')"
+          [ -n "$appdir" ] && [ -d "$appdir" ] \
+            || { echo "::error::the bundler left no AppDir to inspect"; exit 1; }
+          bash ../../scripts/licences/appimage-system-libs.sh \
+            "$appdir" hide-desktop src-tauri/target/hide-release/appimage-third-party
+          pnpm tauri bundle --bundles appimage \
+            --config ../../scripts/licences/tauri-notices.conf.json \
+            --config ../../scripts/licences/tauri-appimage-notices.conf.json
+
+      # A notice that was configured but did not make it into the package is
+      # the failure this release exists to fix, and nobody opens an installer
+      # to look. So open each one here and fail if the files are not inside.
+      - name: The installers must contain the licence notices
+        shell: bash
+        run: |
+          set -euo pipefail
+          bundle="src-tauri/target/release/bundle"
+          notices="THIRD-PARTY-LICENSES.txt"
+          one() {
+            # Exactly one file must match: none means the bundler produced
+            # nothing, several means a stale one would be shipped.
+            local found
+            found="$(find "$1" -maxdepth 1 -type f -name "$2")"
+            [ -n "$found" ] && [ "$(printf '%s\n' "$found" | wc -l)" -eq 1 ] \
+              || { echo "::error::expected exactly one $2 in $1, found: ${found:-none}" >&2; exit 1; }
+            printf '%s' "$found"
+          }
+          case "$RUNNER_OS" in
+            Windows)
+              installer="$(one "$bundle/nsis" '*-setup.exe')"
+              # 7z prints CRLF on Windows, which would defeat the $ anchors.
+              listing="$(7z l "$installer" | tr -d '\r')"
+              for file in "$notices" LICENSE; do
+                grep -Eq "[ \\\\]$file\$" <<<"$listing" \
+                  || { echo "::error::$installer does not install $file"; exit 1; }
+              done
+              ;;
+            macOS)
+              one "$bundle/dmg" '*.dmg' >/dev/null
+              app="$(find "$bundle/macos" -maxdepth 1 -type d -name '*.app')"
+              for file in "$notices" LICENSE; do
+                [ -s "$app/Contents/Resources/$file" ] \
+                  || { echo "::error::the .app the disk image was made from has no Contents/Resources/$file"; exit 1; }
+              done
+              ;;
+            Linux)
+              deb="$(one "$bundle/deb" '*.deb')"
+              listing="$(dpkg-deb -c "$deb")"
+              for file in "$notices" LICENSE; do
+                grep -Eq "/usr/lib/[^/]+/$file\$" <<<"$listing" \
+                  || { echo "::error::$deb does not install $file"; exit 1; }
+              done
+
+              appimage="$PWD/$(one "$bundle/appimage" '*.AppImage')"
+              work="$RUNNER_TEMP/appimage-check"
+              rm -rf "$work" && mkdir -p "$work"
+              # --appimage-extract unpacks without FUSE, which runners lack.
+              ( cd "$work" && "$appimage" --appimage-extract >/dev/null )
+              root="$work/squashfs-root"
+              for file in "$notices" LICENSE; do
+                [ -n "$(find "$root/usr/lib" -maxdepth 2 -type f -name "$file")" ] \
+                  || { echo "::error::the AppImage has no $file"; exit 1; }
+              done
+              docs="$root/usr/share/doc/hide-desktop/third-party"
+              for file in README.txt PACKAGES.txt BUNDLED-FILES.txt \
+                common-licenses/LGPL-2.1 libwebkit2gtk-4.1-0.copyright; do
+                [ -s "$docs/$file" ] \
+                  || { echo "::error::the AppImage has no usr/share/doc/hide-desktop/third-party/$file"; exit 1; }
+              done
+              # The second pass ran linuxdeploy again. The notices describe the
+              # first pass, so prove the image that ships bundles exactly the
+              # files, from exactly the package versions, that they list.
+              bash ../../scripts/licences/appimage-system-libs.sh "$root" hide-desktop "$work/recheck"
+              diff -u "$docs/BUNDLED-FILES.txt" "$work/recheck/BUNDLED-FILES.txt"
+              diff -u "$docs/PACKAGES.txt" "$work/recheck/PACKAGES.txt"
+              ;;
+            *) echo "::error::no installer check for $RUNNER_OS"; exit 1 ;;
+          esac
+          echo "the $RUNNER_OS installers carry $notices"
 
       # --features portable makes cargo consider every artifact from the
       # unfeatured installer build stale, and vice versa, so sharing one target
       # directory means each release recompiles the desktop app twice from
       # cold. Separate directories keep both warm in the cache.
+      # bash, not the Windows default: PowerShell swallows a bare `--` when the
+      # command it runs is a script shim, and cargo would never see --locked.
       - name: Build the portable executable
-        run: pnpm build:portable
+        shell: bash
+        run: pnpm build:portable -- --locked
         env:
           CARGO_TARGET_DIR: ${{ github.workspace }}/apps/hide-desktop/src-tauri/target-portable
 
@@ -188,13 +456,14 @@ jobs:
           out="../../dist"
           mkdir -p "$out"
 
-          # Installers, whatever the platform produced.
+          # Installers, whatever the platform produced. The step above has
+          # already proved each expected one exists exactly once.
           find "$release/bundle" -type f \
             \( -name '*.exe' -o -name '*.dmg' -o -name '*.deb' -o -name '*.AppImage' \) \
-            -exec cp {} "$out/" \; 2>/dev/null || true
+            -exec cp {} "$out/" \;
 
           # The portable build is a single self-contained executable.
-          portable="hide-portable-${GITHUB_REF_NAME}-${{ matrix.target }}"
+          portable="hide-portable-${GITHUB_REF_NAME}-${TARGET}"
           portable_release="src-tauri/target-portable/release"
           mkdir -p "$out/$portable"
           if [ -f "$portable_release/hide-desktop.exe" ]; then
@@ -203,12 +472,20 @@ jobs:
             cp "$portable_release/hide-desktop" "$out/$portable/HIDE-Portable"
           fi
           cp ../../README.md ../../LICENSE ../../SECURITY.md "$out/$portable/"
+          # Same binary graph as the installer, so the same notices. The
+          # portable build links the system web view and bundles no system
+          # library, on Linux included.
+          cp src-tauri/target/hide-release/THIRD-PARTY-LICENSES.txt "$out/$portable/"
 
           cd "$out"
-          if [ "${{ runner.os }}" = "Windows" ]; then
+          if [ "$RUNNER_OS" = "Windows" ]; then
             7z a -tzip "$portable.zip" "$portable" >/dev/null
+            7z l "$portable.zip" | grep -q "THIRD-PARTY-LICENSES.txt" \
+              || { echo "::error::$portable.zip has no THIRD-PARTY-LICENSES.txt"; exit 1; }
           else
             tar -czf "$portable.tar.gz" "$portable"
+            tar -tzf "$portable.tar.gz" | grep -qx "$portable/THIRD-PARTY-LICENSES.txt" \
+              || { echo "::error::$portable.tar.gz has no THIRD-PARTY-LICENSES.txt"; exit 1; }
           fi
           rm -rf "$portable"
 
@@ -229,6 +506,7 @@ jobs:
           path: |
             dist/*
             !dist/*/
+          if-no-files-found: error
           retention-days: 7
 
   publish:
@@ -238,6 +516,7 @@ jobs:
     # after whatever branch it ran on.
     if: startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-24.04
+    timeout-minutes: 20
     # Only this job writes: the release itself (contents), and a keyless
     # Sigstore provenance attestation (id-token for the short-lived OIDC
     # certificate, attestations to store it). No secret exists or is needed.
@@ -247,8 +526,16 @@ jobs:
       attestations: write
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      # By name, not "everything": the run also holds the `notices` artifact,
+      # which is an input to the builds and not something to publish.
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
         with:
+          pattern: cli-*
+          path: dist
+          merge-multiple: true
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        with:
+          pattern: desktop-*
           path: dist
           merge-multiple: true
 
@@ -256,10 +543,57 @@ jobs:
         run: |
           set -euo pipefail
           cd dist
+          rm -f SHA256SUMS
           for file in *.sha256; do
             printf '%s  %s\n' "$(cat "$file")" "${file%.sha256}" >> SHA256SUMS
           done
           cat SHA256SUMS
+          # The per-file hashes were computed on the machines that built the
+          # files. Recompute here: a file damaged in transfer must not be
+          # published under a checksum that vouches for it.
+          sha256sum --check --strict SHA256SUMS
+
+      # A v* tag cannot be moved or reused, so a release that is missing a file
+      # can only be fixed by spending another version. The set is therefore
+      # checked by name before anything irreversible (attestation, release).
+      # 7 command-line archives + 3 portable archives + 4 installers
+      # + SHA256SUMS = 15 assets.
+      - name: The release must be exactly the 15 expected assets
+        run: |
+          set -euo pipefail
+          version="${GITHUB_REF_NAME#v}"
+          tag="$GITHUB_REF_NAME"
+          {
+            for target in \
+              x86_64-unknown-linux-gnu aarch64-unknown-linux-gnu x86_64-unknown-linux-musl \
+              aarch64-apple-darwin x86_64-apple-darwin; do
+              echo "hide-$tag-$target.tar.gz"
+            done
+            echo "hide-$tag-x86_64-pc-windows-msvc.zip"
+            echo "hide-$tag-aarch64-pc-windows-msvc.zip"
+            echo "hide-portable-$tag-x86_64-unknown-linux-gnu.tar.gz"
+            echo "hide-portable-$tag-aarch64-apple-darwin.tar.gz"
+            echo "hide-portable-$tag-x86_64-pc-windows-msvc.zip"
+            echo "HIDE_${version}_x64-setup.exe"
+            echo "HIDE_${version}_aarch64.dmg"
+            echo "HIDE_${version}_amd64.deb"
+            echo "HIDE_${version}_amd64.AppImage"
+            echo "SHA256SUMS"
+          } | LC_ALL=C sort > "$RUNNER_TEMP/expected"
+          # The same globs the attestation and release steps below use.
+          (
+            cd dist
+            shopt -s nullglob
+            printf '%s\n' *.tar.gz *.zip *.exe *.dmg *.deb *.AppImage SHA256SUMS
+          ) | LC_ALL=C sort > "$RUNNER_TEMP/actual"
+          if ! diff -u "$RUNNER_TEMP/expected" "$RUNNER_TEMP/actual"; then
+            echo "::error::the files to publish are not the expected set (see the diff above)"
+            exit 1
+          fi
+          [ "$(wc -l < "$RUNNER_TEMP/actual")" -eq 15 ]
+          # Every published file except SHA256SUMS itself must be listed in it.
+          [ "$(wc -l < dist/SHA256SUMS)" -eq 14 ]
+          echo "15 assets, as expected"
 
       # Package-manager manifests are generated from the checksums that were
       # just computed, so a manifest can never quote a stale hash.
@@ -270,10 +604,21 @@ jobs:
           bash packaging/generate.sh "$version" dist
           ls -la dist/packaging
 
+      # generate.sh already refuses to finish with a manifest that fails this.
+      # It is repeated as its own step so the release log shows, pair by pair,
+      # that every URL names this release and every hash is the SHA256SUMS
+      # entry of the asset the URL names. Up to 0.9.1 the Scoop manifest paired
+      # new hashes with an old release's URLs and nothing noticed.
+      - name: The manifests must point at this release's assets
+        run: |
+          set -euo pipefail
+          bash packaging/verify.sh "${GITHUB_REF_NAME#v}" dist
+
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: packaging-manifests
           path: dist/packaging/**
+          if-no-files-found: error
           retention-days: 30
 
       # Provenance for exactly the files the release publishes, SHA256SUMS
@@ -295,16 +640,18 @@ jobs:
       - name: Verify the attestations
         env:
           GH_TOKEN: ${{ github.token }}
+          REPOSITORY: ${{ github.repository }}
         run: |
           set -euo pipefail
           shopt -s nullglob
           count=0
           for file in dist/*.tar.gz dist/*.zip dist/*.exe dist/*.dmg dist/*.deb dist/*.AppImage dist/SHA256SUMS; do
-            gh attestation verify "$file" --repo "${{ github.repository }}"
+            gh attestation verify "$file" --repo "$REPOSITORY"
             count=$((count + 1))
           done
           echo "verified $count attestations"
-          [ "$count" -gt 0 ]
+          # One per published file: the 15 assets checked by name above.
+          [ "$count" -eq 15 ]
 
       - uses: softprops/action-gh-release@efb35369e0ad2afab669f228072c1b0d510eae64 # v3
         with:
@@ -316,34 +663,65 @@ jobs:
             dist/*.deb
             dist/*.AppImage
             dist/SHA256SUMS
+          fail_on_unmatched_files: true
           prerelease: true
           generate_release_notes: true
+          # Every sentence here is shown to people deciding whether to run an
+          # unsigned binary, on every release. Keep it to what is true of any
+          # release from this file; version-specific notes go in CHANGELOG.md.
           body: |
-            **Experimental and unaudited. Do not protect real data with this release.**
-
-            HIDE implements the file-format engine: HPKE X-Wing (X25519 +
-            ML-KEM-768) key wrapping, and authenticated 64 KiB streaming with
-            constant memory.
+            **Experimental and unaudited. Do not protect data you cannot afford
+            to lose or expose.** No third party has reviewed the protocol or
+            this code.
 
             ### What to download
 
-            - **Desktop application** — `HIDE_*_x64-setup.exe` (Windows),
-              `*.dmg` (macOS), `*.deb` / `*.AppImage` (Linux). Installs a
-              graphical application for keys, files and messages.
-            - **Portable** — `hide-portable-*`. A single executable that needs
-              no installation and keeps its keys in a `hide-keys` folder beside
-              itself. Suitable for a USB stick.
-            - **Command line** — `hide-*`. The `hide` tool.
+            - **Desktop application**: `HIDE_*_x64-setup.exe` (Windows x86-64),
+              `HIDE_*.dmg` (macOS, Apple silicon), `HIDE_*.deb` and
+              `HIDE_*.AppImage` (Linux x86-64).
+            - **Portable**: `hide-portable-*`. One executable, no installation;
+              keys are kept in a `hide-keys` folder beside it.
+            - **Command line**: `hide-*`. The `hide` tool for Linux (x86-64,
+              ARM64, and a static musl build), Windows (x86-64, ARM64) and
+              macOS (Apple silicon, Intel).
 
-            There is no identity system, no key transparency, no sender
-            authentication, no forward secrecy and no hardware-backed key
-            storage. Secret keys are sealed with a passphrase by default, but
-            `--insecure-plaintext` writes one unencrypted. See SECURITY.md.
+            ### These files are not code-signed
 
-            The wire format may change while the version is 0.x.
+            No file here has a Windows Authenticode signature or an Apple
+            Developer ID signature, and the macOS build is not notarised.
+            Windows SmartScreen and macOS Gatekeeper will therefore warn about
+            the download or refuse to open it at first. That warning says only
+            that the file is unsigned. Verify the file yourself instead:
 
-            Verify a download against `SHA256SUMS` before running it.
-            Every asset also carries a GitHub build-provenance attestation:
-            `gh attestation verify <file> --repo ${{ github.repository }}`
-            proves it was built by this repository's release workflow at
-            this tag's commit. It does not prove the code is correct.
+            1. Compare it with `SHA256SUMS`
+               (`sha256sum --check --ignore-missing SHA256SUMS`, or
+               `Get-FileHash <file>` on Windows).
+            2. Check its build provenance:
+               `gh attestation verify <file> --repo hide-protocol/hide`.
+               This proves the file was built by this repository's release
+               workflow from this tag's commit. It does not prove the code is
+               correct.
+
+            ### What you get, and what you do not
+
+            - The wire format is frozen since 0.9.0. Before 1.0 it changes only
+              if a security flaw forces it, and such a change is recorded in
+              the changelog.
+            - A signed container authenticates a key, not a person. There is no
+              directory: compare a signer's key with one you already trust. An
+              unsigned container proves only that the data was not altered.
+            - Forward security exists only by erasing epoch keys, and only as
+              far as the storage underneath really forgets them.
+            - There is no hardware-backed key storage. Secret keys are sealed
+              with a passphrase by default; `--insecure-plaintext` writes one
+              unencrypted.
+
+            Every archive and installer contains `LICENSE` and
+            `THIRD-PARTY-LICENSES.txt`, the licences of the open-source
+            components compiled into it. The AppImage also bundles system
+            libraries; their licences and where to get their source are inside
+            it, under `usr/share/doc/hide-desktop/third-party/`.
+
+            What changed: [CHANGELOG.md](https://github.com/hide-protocol/hide/blob/${{ github.ref_name }}/CHANGELOG.md).
+            Limitations, threat model and how to report a vulnerability:
+            [SECURITY.md](https://github.com/hide-protocol/hide/blob/${{ github.ref_name }}/SECURITY.md).

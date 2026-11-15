@@ -1,6 +1,23 @@
 import assert from "node:assert/strict";
+import { spawnSync } from "node:child_process";
+import {
+  copyFileSync,
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  realpathSync,
+  rmSync,
+  symlinkSync,
+  writeFileSync,
+} from "node:fs";
+import { createRequire } from "node:module";
+import { tmpdir } from "node:os";
+import { basename, delimiter, dirname, isAbsolute, join } from "node:path";
 import { test } from "node:test";
+import { fileURLToPath, pathToFileURL } from "node:url";
 
+import { BINDING_VERSION, checkVersion, libraryPath } from "./binding.js";
 import {
   AuthenticationError,
   ChallengeExpiredError,
@@ -32,6 +49,7 @@ import {
   verifyIdentity,
   verifyIdentityPinned,
   verifyInclusion,
+  version,
 } from "./index.js";
 import {
   bindingEpoch,
@@ -536,4 +554,423 @@ test("a checkpoint is refused when altered, misattributed or mis-keyed", () => {
   assertForgery(() =>
     verifyCheckpoint(checkpoint3, "log.example/hide", checkpointWitnessKey),
   );
+});
+
+// --- text that becomes a C string -------------------------------------------
+
+// A passphrase that is long enough on its own, then a NUL and more: a C string
+// read stops at the NUL, so the core would see only the first part.
+const SPLIT = "longenough\0rest";
+const NUL = /NUL/;
+
+test("a passphrase with an embedded NUL is refused, not truncated", () => {
+  const secret = SecretKey.generate();
+  try {
+    assert.throws(() => secret.protect(SPLIT), RangeError);
+    assert.throws(() => secret.protect(SPLIT), NUL);
+    const sealed = secret.protect("longenough");
+    // Opening must refuse too: accepting it here would mean the text before
+    // the NUL is what unlocks the key.
+    assert.throws(() => SecretKey.load(sealed, SPLIT), RangeError);
+  } finally {
+    secret.close();
+  }
+
+  assert.throws(() => SigningIdentity.generate(SPLIT), RangeError);
+  const sealedIdentity = SigningIdentity.generate("longenough");
+  assert.throws(() => SigningIdentity.load(sealedIdentity, SPLIT), RangeError);
+  // The same file still opens under the passphrase it was sealed with.
+  SigningIdentity.load(sealedIdentity, "longenough").close();
+});
+
+test("every other text argument refuses an embedded NUL", () => {
+  const secret = SecretKey.generate();
+  try {
+    const publicKey = secret.publicKey();
+    const payload = Buffer.from("x");
+    assert.throws(
+      () => encrypt(payload, [publicKey], { filename: "report.txt\0.exe" }),
+      /filename must not contain a NUL/,
+    );
+    assert.throws(
+      () => encrypt(payload, [publicKey], { mediaType: "text/plain\0x" }),
+      /mediaType must not contain a NUL/,
+    );
+    assert.throws(
+      () => dearmorPublicKey(`${armorPublicKey(publicKey)}\0trailing`),
+      RangeError,
+    );
+  } finally {
+    secret.close();
+  }
+  assert.throws(() => newChallenge("app.example\0.evil.example", 1000, 60), RangeError);
+  assert.throws(
+    () => verifyCheckpoint(checkpoint3, "log.example\0/hide", checkpointLogKey),
+    RangeError,
+  );
+});
+
+test("a filename that is not one portable file name is refused", () => {
+  const secret = SecretKey.generate();
+  try {
+    const publicKey = secret.publicKey();
+    const payload = Buffer.from("x");
+    for (const filename of [
+      "a/b",
+      "a\\b",
+      "..",
+      "CON",
+      "com1.txt",
+      "trailing.",
+      "trailing ",
+      "tab\there",
+      "what?.txt",
+      "x".repeat(256),
+    ]) {
+      assert.throws(() => encrypt(payload, [publicKey], { filename }), filename);
+    }
+    for (const filename of ["report.txt", "CONSOLE.txt", "x".repeat(255)]) {
+      assert.equal(decrypt(encrypt(payload, [publicKey], { filename }), secret).filename, filename);
+    }
+  } finally {
+    secret.close();
+  }
+});
+
+test("text arguments must be strings", () => {
+  const secret = SecretKey.generate();
+  try {
+    const notText = Buffer.from("a buffer passphrase") as unknown as string;
+    assert.throws(() => secret.protect(notText), TypeError);
+    assert.throws(() => newChallenge(notText, 1000, 60), TypeError);
+  } finally {
+    secret.close();
+  }
+});
+
+// --- one owner per native pointer --------------------------------------------
+
+type Constructor = new (...args: unknown[]) => unknown;
+
+test("a handle cannot be built around an existing native pointer", () => {
+  // TypeScript's `private constructor` is erased at run time. Before the
+  // guard, plain JavaScript could wrap one pointer twice and free it twice.
+  const secret = SecretKey.generate();
+  const signer = identity();
+  try {
+    assert.throws(() => new (SecretKey as unknown as Constructor)(secret.handle), TypeError);
+    assert.throws(
+      () => new (SecretKey as unknown as Constructor)(Symbol("hide.internal"), secret.handle),
+      TypeError,
+    );
+    assert.throws(() => new (SigningIdentity as unknown as Constructor)(secret.handle), TypeError);
+    assert.throws(() => Reflect.construct(SecretKey, []), /SecretKey\.generate\(\)/);
+    // The original is untouched by the refused attempts.
+    assert.equal(secret.publicKey().length, PUBLIC_KEY_LEN);
+    assert.equal(signer.publicKey().length, VERIFYING_KEY_LEN);
+  } finally {
+    secret.close();
+    signer.close();
+  }
+});
+
+test("a handle does not survive cloning, so it cannot reach another thread", () => {
+  // Every call into the core is synchronous on the calling thread, which is
+  // why SpentNonces needs no lock here. The structured clone algorithm is what
+  // postMessage uses to send a value to a worker: it carries no native pointer.
+  const secret = SecretKey.generate();
+  const spent = new SpentNonces();
+  try {
+    for (const handle of [secret, spent]) {
+      const clone = structuredClone(handle) as unknown as Record<string, unknown>;
+      assert.ok(!(clone instanceof SecretKey) && !(clone instanceof SpentNonces));
+      assert.deepEqual(Reflect.ownKeys(clone), []);
+      assert.equal(typeof clone.close, "undefined");
+    }
+    assert.deepEqual({ ...secret }, {});
+  } finally {
+    spent.close();
+    secret.close();
+  }
+});
+
+// --- how the native library is found -----------------------------------------
+
+const bindingUrl = new URL("./binding.js", import.meta.url).href;
+const packageRoot = dirname(dirname(fileURLToPath(import.meta.url)));
+const libraryFile = basename(libraryPath);
+const NO_OVERRIDE = { HIDE_LIBRARY: undefined, HIDE_ALLOW_LIBRARY_OVERRIDE: undefined };
+
+function probeSource(binding: string): string {
+  return `
+    try {
+      const binding = await import(${JSON.stringify(binding)});
+      console.log("LOADED " + binding.libraryPath);
+    } catch (error) {
+      console.log("ERROR " + error.message);
+    }
+  `;
+}
+
+/**
+ * Imports the binding in a fresh process and returns what it printed. The
+ * library is chosen once, at import, so only a new process can show how a
+ * different environment is treated.
+ */
+function probe(
+  changes: Record<string, string | undefined>,
+  cwd?: string,
+  binding: string = bindingUrl,
+): string {
+  const env: NodeJS.ProcessEnv = { ...process.env };
+  for (const [name, value] of Object.entries(changes)) {
+    // Windows variable names are case-insensitive, and `Path` beside `PATH`
+    // would leave it to chance which one the child sees.
+    for (const existing of Object.keys(env)) {
+      if (existing.toUpperCase() === name.toUpperCase()) delete env[existing];
+    }
+    if (value !== undefined) env[name] = value;
+  }
+  const done = spawnSync(
+    process.execPath,
+    ["--input-type=module", "-e", probeSource(binding)],
+    { env, cwd, encoding: "utf8", timeout: 120_000 },
+  );
+  assert.equal(done.status, 0, done.stderr);
+  return done.stdout.trim();
+}
+
+// Put in front of what is already there: the interpreter itself may need the
+// existing value to start.
+function inFront(directory: string, name: string): string {
+  const existing = Object.entries(process.env).find(
+    ([key]) => key.toUpperCase() === name.toUpperCase(),
+  )?.[1];
+  return existing ? [directory, existing].join(delimiter) : directory;
+}
+
+// The two names a platform package can have here; which one applies depends on
+// the C library, and the tests should not repeat that detection.
+const platformPackages = ["", "-musl"].map(
+  (suffix) => `${process.platform}-${process.arch}${suffix}`,
+);
+
+function plantPlatformPackages(modules: string): string[] {
+  return platformPackages.map((name) => {
+    const directory = join(modules, "@hide-protocol", name);
+    mkdirSync(directory, { recursive: true });
+    copyFileSync(libraryPath, join(directory, libraryFile));
+    writeFileSync(
+      join(directory, "package.json"),
+      JSON.stringify({ name: `@hide-protocol/${name}`, version: BINDING_VERSION }),
+    );
+    return join(directory, libraryFile);
+  });
+}
+
+function koffiRoot(): string {
+  let directory = dirname(createRequire(import.meta.url).resolve("koffi"));
+  while (!existsSync(join(directory, "package.json"))) directory = dirname(directory);
+  return directory;
+}
+
+/**
+ * Lays this package out the way a package manager installs it, with its
+ * platform package beside it, and returns the URL of the installed binding.
+ */
+function install(
+  root: string,
+  layout: "npm" | "pnpm",
+  version: string = BINDING_VERSION,
+): { binding: string; libraries: string[] } {
+  const modules =
+    layout === "npm"
+      ? join(root, "node_modules")
+      : join(root, "node_modules", ".pnpm", `hide-protocol@${version}`, "node_modules");
+  const installed = join(modules, "hide-protocol");
+  mkdirSync(join(installed, "dist"), { recursive: true });
+  copyFileSync(join(packageRoot, "dist", "binding.js"), join(installed, "dist", "binding.js"));
+  const manifest = JSON.parse(readFileSync(join(packageRoot, "package.json"), "utf8")) as {
+    version: string;
+  };
+  manifest.version = version;
+  writeFileSync(join(installed, "package.json"), JSON.stringify(manifest));
+  symlinkSync(koffiRoot(), join(modules, "koffi"), "junction");
+  return {
+    binding: pathToFileURL(join(installed, "dist", "binding.js")).href,
+    libraries: plantPlatformPackages(modules),
+  };
+}
+
+function temporaryDirectory(prefix: string): string {
+  // Resolved, because a child reports paths with symbolic links followed.
+  return realpathSync(mkdtempSync(join(tmpdir(), prefix)));
+}
+
+// With no override, either a copy shipped with the package loaded, or nothing
+// did and the error says what to install.
+function assertPackagedOrNotFound(output: string): void {
+  if (output.startsWith("LOADED ")) {
+    assert.ok(isAbsolute(output.slice("LOADED ".length)), output);
+  } else {
+    assert.match(output, /^ERROR .*was not found/);
+    assert.ok(output.includes(`${process.platform} ${process.arch}`), output);
+  }
+}
+
+test("the library is loaded by absolute path", () => {
+  assert.ok(isAbsolute(libraryPath), libraryPath);
+  assert.ok(existsSync(libraryPath), libraryPath);
+});
+
+for (const layout of ["npm", "pnpm"] as const) {
+  test(`the platform package is found in an ${layout} install with nothing set`, () => {
+    const root = temporaryDirectory("hide-install-");
+    try {
+      const { binding, libraries } = install(root, layout);
+      const output = probe(NO_OVERRIDE, root, binding);
+      assert.ok(
+        libraries.some((library) => output === `LOADED ${library}`),
+        `${output} is none of ${libraries.join(", ")}`,
+      );
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+}
+
+test("a core from another release is refused when the package loads", () => {
+  // The installed binding says 0.0.1; the core beside it is the one under test.
+  const root = temporaryDirectory("hide-install-");
+  try {
+    const { binding } = install(root, "npm", "0.0.1");
+    const output = probe(NO_OVERRIDE, root, binding);
+    assert.match(output, /^ERROR the HIDE native library is version /);
+    assert.ok(output.includes("this binding is 0.0.1"), output);
+    assert.ok(output.includes("install matching versions"), output);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("a library planted where a loader or resolver searches is never loaded", () => {
+  // A copy of the real core, so loading it would succeed if anything searched
+  // for it: the working directory, PATH, the search paths the Unix loaders
+  // honour, and NODE_PATH, which require.resolve consults for a package name.
+  const planted = temporaryDirectory("hide-planted-");
+  try {
+    copyFileSync(libraryPath, join(planted, libraryFile));
+    plantPlatformPackages(planted);
+
+    const output = probe(
+      {
+        ...NO_OVERRIDE,
+        NODE_PATH: planted,
+        PATH: inFront(planted, "PATH"),
+        LD_LIBRARY_PATH: inFront(planted, "LD_LIBRARY_PATH"),
+        DYLD_LIBRARY_PATH: inFront(planted, "DYLD_LIBRARY_PATH"),
+        DYLD_FALLBACK_LIBRARY_PATH: inFront(planted, "DYLD_FALLBACK_LIBRARY_PATH"),
+      },
+      planted,
+    );
+    assert.ok(!output.includes(basename(planted)), output);
+    assertPackagedOrNotFound(output);
+  } finally {
+    rmSync(planted, { recursive: true, force: true });
+  }
+});
+
+const absentLibrary = join(tmpdir(), "no-such-directory", "hide_ffi_override");
+
+test("HIDE_LIBRARY alone is ignored", () => {
+  // One settable variable must not be enough to replace the core. The path
+  // does not exist, so honouring it could only show up as a failure naming it.
+  for (const optIn of [undefined, "0", "true", "yes", " 1"]) {
+    const output = probe({
+      HIDE_LIBRARY: absentLibrary,
+      HIDE_ALLOW_LIBRARY_OVERRIDE: optIn,
+    });
+    assert.ok(!output.includes("no-such-directory"), `${String(optIn)}: ${output}`);
+    assertPackagedOrNotFound(output);
+  }
+});
+
+test("HIDE_LIBRARY with the opt-in is what gets loaded", () => {
+  const refused = probe({
+    HIDE_LIBRARY: absentLibrary,
+    HIDE_ALLOW_LIBRARY_OVERRIDE: "1",
+  });
+  // It is tried, and a failure says so rather than falling back to another copy.
+  assert.match(refused, /^ERROR /);
+  assert.ok(refused.includes("no-such-directory"), refused);
+  assert.ok(refused.includes("could not be loaded"), refused);
+
+  const loaded = probe({ HIDE_LIBRARY: libraryPath, HIDE_ALLOW_LIBRARY_OVERRIDE: "1" });
+  assert.equal(loaded, `LOADED ${libraryPath}`);
+});
+
+// --- the core and the binding are the same release ---------------------------
+
+test("the loaded core is this binding's version", () => {
+  assert.deepEqual(version.split(".").slice(0, 3), BINDING_VERSION.split(".").slice(0, 3));
+  checkVersion(version);
+});
+
+test("a core of another version is refused", () => {
+  for (const [core, binding] of [
+    ["0.9.1", "0.9.1"],
+    ["1.2.3", "1.2.3"],
+    ["0.10.0-rc.1", "0.10.0"],
+    ["0.10.0", "0.10.0+build.7"],
+  ] as const) {
+    checkVersion(core, binding);
+  }
+  for (const [core, binding] of [
+    ["0.9.0", "0.9.1"], // a stale core beside a newer binding
+    ["0.9.2", "0.9.1"], // and the reverse
+    ["0.10.1", "0.9.1"],
+    ["1.9.1", "0.9.1"],
+    ["0.9.10", "0.9.1"], // compared as numbers, not as a text prefix
+    ["0.91.0", "0.9.10"],
+  ] as const) {
+    assert.throws(
+      () => checkVersion(core, binding),
+      /install matching versions/,
+      `${core} vs ${binding}`,
+    );
+  }
+  for (const core of ["", "0.9", "v0.9.1", "latest"]) {
+    assert.throws(() => checkVersion(core, "0.9.1"), /major\.minor\.patch/, core);
+  }
+});
+
+// --- packaging ---------------------------------------------------------------
+
+test("the published tarball carries the built package and none of its tests", () => {
+  // --ignore-scripts: prepack would rebuild dist underneath the running suite.
+  const done = spawnSync("npm pack --dry-run --json --ignore-scripts", {
+    cwd: packageRoot,
+    shell: true,
+    encoding: "utf8",
+    timeout: 120_000,
+  });
+  assert.equal(done.status, 0, done.error?.message ?? done.stderr);
+  // npm up to 11 prints an array of packages, npm 12 an object keyed by name.
+  type Report = { files: { path: string }[] };
+  const parsed = JSON.parse(done.stdout) as Report[] | Record<string, Report>;
+  const [report] = Array.isArray(parsed) ? parsed : Object.values(parsed);
+  assert.ok(report, done.stdout);
+  const files = report.files.map((file) => file.path.replaceAll("\\", "/"));
+
+  for (const required of [
+    "package.json",
+    "README.md",
+    "dist/index.js",
+    "dist/index.d.ts",
+    "dist/binding.js",
+  ]) {
+    assert.ok(files.includes(required), `${required} is missing from ${files.join(", ")}`);
+  }
+  const strays = files.filter((file) => /\.test\.|(^|\/)fixtures\./.test(file));
+  assert.deepEqual(strays, []);
 });

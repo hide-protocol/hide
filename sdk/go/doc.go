@@ -7,9 +7,34 @@
 //
 // This package contains no cryptography. It statically links the same C core
 // (crates/hide-ffi) that the CLI and every other HIDE SDK use, so there is one
-// implementation rather than one per language. The archive is not committed:
-// build it with `cargo build --release -p hide-ffi` and copy
-// crates/hide-ffi/include/hide.h into include/ and libhide_ffi.a into lib/.
+// implementation rather than one per language.
+//
+// # Building
+//
+// `go get` alone does NOT produce a package that compiles. The C header and
+// the static archive are build outputs of the Rust core and are not committed,
+// so clone the repository and build the core first:
+//
+//	git clone https://github.com/hide-protocol/hide && cd hide
+//	cargo build --release -p hide-ffi
+//	mkdir -p sdk/go/include sdk/go/lib
+//	cp crates/hide-ffi/include/hide.h sdk/go/include/
+//	cp target/release/libhide_ffi.a sdk/go/lib/
+//
+// On Windows the archive must be built for the GNU ABI (add
+// `--target x86_64-pc-windows-gnu` and copy from
+// target/x86_64-pc-windows-gnu/release/), because MinGW gcc cannot link an
+// MSVC-built static library. Then use a `replace` directive pointing at
+// sdk/go in that checkout. CGO_ENABLED=1 and a C toolchain are required. The
+// package refuses to start if the linked core is not exactly BindingVersion.
+//
+// # Text arguments and concurrency
+//
+// Passphrases, file names, media types, audiences, armored keys and origins
+// cross the C boundary NUL-terminated; a string containing a NUL byte returns
+// ErrInvalidArgument rather than being silently cut. SpentNonces is safe for
+// concurrent use. SecretKey and SigningIdentity may be used from several
+// goroutines, but Close must not race with a call in flight.
 //
 // # Encrypting and decrypting
 //

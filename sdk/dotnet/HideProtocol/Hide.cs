@@ -91,7 +91,7 @@ public static unsafe class Hide
     public static Decrypted Decrypt(ReadOnlySpan<byte> container, SecretKey secret)
     {
         ArgumentNullException.ThrowIfNull(secret);
-        IntPtr handle = secret.Alive();
+        SecretKeyHandle handle = secret.Alive();
 
         HideBuffer output = Native.hide_buffer_empty();
         HideBuffer filename = Native.hide_buffer_empty();

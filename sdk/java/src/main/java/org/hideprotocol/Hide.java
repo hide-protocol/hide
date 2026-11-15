@@ -80,12 +80,8 @@ public final class Hide {
             MemorySegment out = Native.emptyBuffer(arena);
             // invokeExact matches on static types, so a ternary that widens to
             // Object silently fails to link. Bind each argument first.
-            MemorySegment name = filename == null
-                ? MemorySegment.NULL
-                : arena.allocateFrom(filename);
-            MemorySegment type = mediaType == null
-                ? MemorySegment.NULL
-                : arena.allocateFrom(mediaType);
+            MemorySegment name = Native.optionalCString(arena, filename, "filename");
+            MemorySegment type = Native.optionalCString(arena, mediaType, "media type");
             int code = (int) Native.ENCRYPT.invokeExact(
                     arena.allocateFrom(ValueLayout.JAVA_BYTE, plaintext),
                     (long) plaintext.length,
@@ -144,7 +140,8 @@ public final class Hide {
     public static byte[] dearmorPublicKey(String text) {
         try (Arena arena = Arena.ofConfined()) {
             MemorySegment out = Native.emptyBuffer(arena);
-            check((int) Native.PUBLIC_KEY_DEARMOR.invokeExact(arena.allocateFrom(text), out));
+            MemorySegment armored = Native.cString(arena, text, "armored key");
+            check((int) Native.PUBLIC_KEY_DEARMOR.invokeExact(armored, out));
             return Native.take(out);
         } catch (Throwable error) {
             throw wrap(error);
@@ -201,7 +198,7 @@ public final class Hide {
     public static byte[] newChallenge(String audience, long now, long validFor) {
         try (Arena arena = Arena.ofConfined()) {
             MemorySegment out = Native.emptyBuffer(arena);
-            MemorySegment name = arena.allocateFrom(audience);
+            MemorySegment name = Native.cString(arena, audience, "audience");
             check((int) Native.CHALLENGE_NEW.invokeExact(name, now, validFor, out));
             return Native.take(out);
         } catch (Throwable error) {
@@ -417,14 +414,11 @@ public final class Hide {
      * {@link IllegalArgumentException} rather than being silently truncated.
      */
     public static Checkpoint verifyCheckpoint(byte[] note, String origin, byte[] logPublicKey) {
-        if (origin.indexOf('\0') >= 0) {
-            throw new IllegalArgumentException("the origin must not contain a NUL character");
-        }
         try (Arena arena = Arena.ofConfined()) {
             MemorySegment size = arena.allocate(ValueLayout.JAVA_LONG);
             MemorySegment root = Native.emptyBuffer(arena);
             MemorySegment noteBytes = arena.allocateFrom(ValueLayout.JAVA_BYTE, note);
-            MemorySegment name = arena.allocateFrom(origin);
+            MemorySegment name = Native.cString(arena, origin, "origin");
             MemorySegment keyBytes = arena.allocateFrom(ValueLayout.JAVA_BYTE, logPublicKey);
             check((int) Native.CHECKPOINT_VERIFY.invokeExact(
                     noteBytes, (long) note.length, name,

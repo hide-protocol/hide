@@ -17,13 +17,20 @@ updates:
     groups:
       actions:
         patterns: ["*"]
-  # One entry for all three lockfiles; the desktop crate and fuzz/ are outside
-  # the cargo workspace, so the root lockfile alone never sees them.
+  # One entry for the two lockfiles that ship; the desktop crate is outside the
+  # cargo workspace, so the root lockfile alone never sees it.
+  # /fuzz is deliberately NOT listed. Its only registry dependency is
+  # libfuzzer-sys; everything else is a path dependency on the root crates, so
+  # its PRs edited the ROOT Cargo.toml without moving the root Cargo.lock,
+  # duplicated the PRs opened for `/`, and proposed versions the root had
+  # refused for MSRV (fuzz/ declares no rust-version, so the MSRV job never
+  # judged them). fuzz/Cargo.lock is committed and refreshed by hand with the
+  # root lock; scripts/check-lock-drift.mjs (CI `lint`) fails when the two
+  # disagree on a wire-relevant crate.
   - package-ecosystem: cargo
     directories:
       - /
       - /apps/hide-desktop/src-tauri
-      - /fuzz
     schedule:
       interval: weekly
     open-pull-requests-limit: 5

@@ -322,13 +322,16 @@ fn decode_extensions(
 }
 
 fn decode_signature(decoder: &mut Decoder<'_>) -> Result<SignatureStanza, FormatError> {
-    if decoder.array()? != Some(3) || decoder.u8()? != 1 {
+    // The tag is read as u64 so a tag above 255 is an unsupported signature
+    // type rather than a malformed header. Spec 6.1 requires the two classes to
+    // be distinguishable, and the Node reader classifies both as unsupported.
+    if decoder.array()? != Some(3) || decoder.u64()? != 1 {
         return Err(FormatError::UnsupportedFeature);
     }
     let verifying_key = decoder.bytes()?;
     let signature = decoder.bytes()?;
     if verifying_key.len() != VERIFYING_KEY_LEN || signature.len() != SIGNATURE_LEN {
-        return Err(FormatError::MalformedHeader);
+        return Err(FormatError::UnsupportedFeature);
     }
     Ok(SignatureStanza {
         verifying_key: verifying_key.to_vec(),
@@ -453,8 +456,10 @@ impl Metadata {
             }
             previous = field;
             if field == 3 {
-                metadata.signature =
-                    Some(decode_signature(&mut decoder).map_err(|_| FormatError::InvalidMetadata)?);
+                // Keep the class the signature decoder chose: an unknown tag is
+                // an unsupported feature, which spec 6.1 requires to be told
+                // apart from a malformed metadata map.
+                metadata.signature = Some(decode_signature(&mut decoder)?);
                 continue;
             }
             let text = decoder.str()?;

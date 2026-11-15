@@ -8,10 +8,17 @@
  * ```ts
  * import { SecretKey, encrypt, decrypt } from "hide-protocol";
  *
- * using secret = SecretKey.generate();
- * const box = encrypt(Buffer.from("hello"), [secret.publicKey()]);
- * console.log(decrypt(box, secret).data.toString());
+ * const secret = SecretKey.generate();
+ * try {
+ *   const box = encrypt(Buffer.from("hello"), [secret.publicKey()]);
+ *   console.log(decrypt(box, secret).data.toString());
+ * } finally {
+ *   secret.close();
+ * }
  * ```
+ *
+ * From Node.js 24 a handle can instead be declared with `using`; on Node.js 22
+ * that is a syntax error.
  */
 
 import {
@@ -118,8 +125,40 @@ function takeText(buffer: NativeBuffer): string | undefined {
 }
 
 /**
+ * Checks text bound for a `const char*` parameter. C strings end at the first
+ * NUL, so `"longenough\0rest"` would reach the core as `"longenough"` and a
+ * key would be sealed under a passphrase the caller never chose. Every text
+ * argument goes through here.
+ */
+function cstring(value: string, what: string): string {
+  if (typeof value !== "string") {
+    throw new TypeError(`${what} must be a string`);
+  }
+  if (value.includes("\0")) {
+    throw new RangeError(`${what} must not contain a NUL character`);
+  }
+  return value;
+}
+
+function optionalCstring(value: string | null | undefined, what: string): string | null {
+  return value === undefined || value === null ? null : cstring(value, what);
+}
+
+// TypeScript's `private constructor` is erased at run time, so plain
+// JavaScript could wrap one native pointer in a second object and free it
+// twice. Only code holding this token can construct a handle.
+const INTERNAL = Symbol("hide.internal");
+
+function internalOnly(token: symbol, hint: string): void {
+  if (token !== INTERNAL) {
+    throw new TypeError(`this class cannot be constructed directly; use ${hint}`);
+  }
+}
+
+/**
  * A secret key. The bytes stay inside the native library and are never exposed
- * to JavaScript. Release it with `close()`, `using`, or let the finalizer run.
+ * to JavaScript. Release it with `close()`, `using` (Node.js 24+), or let the
+ * finalizer run.
  */
 export class SecretKey {
   #handle: unknown;
@@ -127,7 +166,8 @@ export class SecretKey {
     fns.secretKeyFree(handle);
   });
 
-  private constructor(handle: unknown) {
+  private constructor(token: symbol, handle: unknown) {
+    internalOnly(token, "SecretKey.generate() or SecretKey.load()");
     this.#handle = handle;
     SecretKey.#registry.register(this, handle, this);
   }
@@ -137,14 +177,21 @@ export class SecretKey {
     const publicKey = emptyBuffer();
     check(fns.keypairGenerate(secret, publicKey));
     fns.bufferFree(publicKey);
-    return new SecretKey(secret[0]);
+    return new SecretKey(INTERNAL, secret[0]);
   }
 
   /** Loads a key file. A protected key without its passphrase fails. */
   static load(data: Uint8Array, passphrase?: string): SecretKey {
     const secret = [null];
-    check(fns.secretKeyOpen(data, data.length, passphrase ?? null, secret));
-    return new SecretKey(secret[0]);
+    check(
+      fns.secretKeyOpen(
+        data,
+        data.length,
+        optionalCstring(passphrase, "passphrase"),
+        secret,
+      ),
+    );
+    return new SecretKey(INTERNAL, secret[0]);
   }
 
   publicKey(): Buffer {
@@ -164,7 +211,7 @@ export class SecretKey {
       );
     }
     const out = emptyBuffer();
-    check(fns.secretKeyProtect(this.#alive(), passphrase, out));
+    check(fns.secretKeyProtect(this.#alive(), cstring(passphrase, "passphrase"), out));
     return take(out);
   }
 
@@ -234,8 +281,8 @@ export function encrypt(
       plaintext.length,
       joined,
       recipients.length,
-      options.filename ?? null,
-      options.mediaType ?? null,
+      optionalCstring(options.filename, "filename"),
+      optionalCstring(options.mediaType, "mediaType"),
       out,
     ),
   );
@@ -271,7 +318,7 @@ export function armorPublicKey(publicKey: Uint8Array): string {
 
 export function dearmorPublicKey(text: string): Buffer {
   const out = emptyBuffer();
-  check(fns.publicKeyDearmor(text, out));
+  check(fns.publicKeyDearmor(cstring(text, "text"), out));
   return take(out);
 }
 
@@ -284,7 +331,8 @@ export function inspectKey(data: Uint8Array): "raw" | "protected" {
 
 /**
  * A signing key. The seed stays inside the native library and is never exposed
- * to JavaScript. Release it with `close()`, `using`, or let the finalizer run.
+ * to JavaScript. Release it with `close()`, `using` (Node.js 24+), or let the
+ * finalizer run.
  *
  * A key file written before signatures existed carries no signing seed and
  * throws `NotAKeyError` rather than being silently downgraded.
@@ -295,7 +343,8 @@ export class SigningIdentity {
     fns.signingIdentityFree(handle);
   });
 
-  private constructor(handle: unknown) {
+  private constructor(token: symbol, handle: unknown) {
+    internalOnly(token, "SigningIdentity.load()");
     this.#handle = handle;
     SigningIdentity.#registry.register(this, handle, this);
   }
@@ -312,16 +361,21 @@ export class SigningIdentity {
       );
     }
     const out = emptyBuffer();
-    check(fns.identityGenerate(passphrase, out));
+    check(fns.identityGenerate(cstring(passphrase, "passphrase"), out));
     return take(out);
   }
 
   static load(data: Uint8Array, passphrase?: string): SigningIdentity {
     const identity = [null];
     check(
-      fns.signingIdentityOpen(data, data.length, passphrase ?? null, identity),
+      fns.signingIdentityOpen(
+        data,
+        data.length,
+        optionalCstring(passphrase, "passphrase"),
+        identity,
+      ),
     );
-    return new SigningIdentity(identity[0]);
+    return new SigningIdentity(INTERNAL, identity[0]);
   }
 
   /** The shareable verifying key, for others to check signatures with. */
@@ -426,7 +480,7 @@ export function newChallenge(
   validFor: number | bigint,
 ): Buffer {
   const out = emptyBuffer();
-  check(fns.challengeNew(audience, now, validFor, out));
+  check(fns.challengeNew(cstring(audience, "audience"), now, validFor, out));
   return take(out);
 }
 
@@ -434,6 +488,11 @@ export function newChallenge(
  * The verifier's record of answered challenges. A replayed answer is a genuine
  * signature and nothing about it is invalid on its own, so only the verifier
  * can detect it: this must outlive a single request.
+ *
+ * Every call into the core is synchronous on the calling thread, so within
+ * one JavaScript thread two `accept` calls can never overlap and no lock is
+ * needed. A record cannot be passed to a worker: each worker thread loads its
+ * own copy of this module and must keep its own record.
  */
 export class SpentNonces {
   #handle: unknown;
@@ -682,16 +741,13 @@ export function verifyCheckpoint(
   origin: string,
   logPublic: Uint8Array,
 ): { size: bigint; root: Buffer } {
-  if (origin.includes("\0")) {
-    throw new RangeError("origin must not contain a NUL character");
-  }
   const size: [number | bigint] = [0];
   const out = emptyBuffer();
   check(
     fns.checkpointVerify(
       note,
       note.length,
-      origin,
+      cstring(origin, "origin"),
       logPublic,
       logPublic.length,
       size,

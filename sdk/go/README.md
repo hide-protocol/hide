@@ -7,16 +7,17 @@ and every other HIDE SDK use. This package contains no cryptography of its own.
 
 ## Install
 
-```sh
-go get github.com/hide-protocol/hide/sdk/go
-```
+**`go get github.com/hide-protocol/hide/sdk/go` alone does not give you a
+package that compiles.** The core is **statically linked**: the cgo directives
+in `hide.go` expect `include/hide.h` and `lib/libhide_ffi.a` beside the
+package, and neither is committed (they are build outputs of the Rust core, and
+the module cache is read-only). Clone the repository and build the core first.
+You need Go 1.24+, `CGO_ENABLED=1`, a C toolchain and a Rust toolchain.
 
-Go 1.24+, `CGO_ENABLED=1` and a C toolchain. The core is **statically linked**:
-the cgo directives in `hide.go` expect `include/hide.h` and
-`lib/libhide_ffi.a` beside the package, and neither is committed. Build them
-from the repository:
+Linux and macOS:
 
 ```sh
+git clone https://github.com/hide-protocol/hide && cd hide
 cargo build --release -p hide-ffi
 mkdir -p sdk/go/include sdk/go/lib
 cp crates/hide-ffi/include/hide.h sdk/go/include/
@@ -24,9 +25,40 @@ cp target/release/libhide_ffi.a sdk/go/lib/
 cd sdk/go && CGO_ENABLED=1 go test ./...
 ```
 
-On Windows the archive must be GNU-ABI, because MinGW gcc cannot link an
-MSVC-built staticlib: `cargo build --release -p hide-ffi --target
-x86_64-pc-windows-gnu` and copy from `target/x86_64-pc-windows-gnu/release/`.
+Windows (PowerShell). The archive must be GNU-ABI, because MinGW gcc cannot
+link an MSVC-built static library, so build for the `x86_64-pc-windows-gnu`
+target with a MinGW-w64 `gcc` on `PATH`:
+
+```powershell
+git clone https://github.com/hide-protocol/hide; cd hide
+rustup target add x86_64-pc-windows-gnu
+cargo build --release -p hide-ffi --target x86_64-pc-windows-gnu
+New-Item -ItemType Directory -Force sdk\go\include, sdk\go\lib | Out-Null
+Copy-Item crates\hide-ffi\include\hide.h sdk\go\include\
+Copy-Item target\x86_64-pc-windows-gnu\release\libhide_ffi.a sdk\go\lib\
+cd sdk\go; $env:CGO_ENABLED = '1'; go test ./...
+```
+
+Then point your own module at the checkout:
+
+```sh
+go mod edit -replace github.com/hide-protocol/hide/sdk/go=/path/to/hide/sdk/go
+go get github.com/hide-protocol/hide/sdk/go
+```
+
+What a missing piece looks like:
+
+- no header: the build stops with `sdk/go/include/hide.h is missing. ...` and
+  these instructions;
+- `CGO_ENABLED=0`: `undefined:
+  hide_needs_CGO_ENABLED_1_and_a_C_toolchain__see_sdk_go_README_md`;
+- an operating system other than Linux, macOS or Windows: `undefined:
+  hide_links_only_on_linux_darwin_and_windows__see_sdk_go_README_md`;
+- an archive left over from another release: the package panics at start-up
+  with `this binding is version X but the linked native core reports "Y"`.
+  `hide.BindingVersion` must equal `hide.Version()` exactly
+  (major.minor.patch), because a stale core links cleanly and silently lacks
+  whatever the newer release enforces. Rebuild and copy the archive again.
 
 ## Quick start
 
@@ -84,7 +116,17 @@ Errors are sentinel values for `errors.Is`: `ErrAuthentication` (altered, or not
 a container), `ErrMalformed` (did not decode at all — wraps
 `ErrAuthentication`), `ErrInvalidArgument`, `ErrWrongPassphrase`,
 `ErrNoMatchingRecipient`, `ErrNotAKey`, `ErrClosed`, `ErrChallengeExpired`,
-`ErrChallengeReplayed`.
+`ErrChallengeReplayed`. Arguments this package rejects before calling the core
+(recipient count, key length, a short passphrase, a nil key, a NUL in text)
+are `ErrInvalidArgument` too.
+
+**Text arguments must not contain a NUL byte.** Passphrases, `Options.Filename`,
+`Options.MediaType`, the challenge audience, armored key text and the
+checkpoint origin cross the C boundary NUL-terminated, so a string carrying a
+NUL would be silently cut at it: a key would be sealed under the part of the
+passphrase before the NUL. Such a string returns `ErrInvalidArgument` instead.
+Binary arguments (`[]byte`: plaintext, context, message, keys) may contain any
+byte.
 
 ## Signing and verification
 
@@ -143,13 +185,29 @@ verify) and never a bare `false`. The one boolean is `IdentityTrustsDevice`,
 and it is paired with an error: the log is verified first, so `false, nil`
 means "not a member", never "did not verify".
 
+## Concurrency
+
+Every package-level function is safe to call from any number of goroutines.
+
+`*SpentNonces` is safe for concurrent use: `Accept` and `Close` serialise on an
+internal mutex, so one record can be shared by every request handler, and an
+answer presented by many goroutines at once is accepted by exactly one of them.
+The record is in-process memory: it is not shared between processes and does
+not survive a restart, so replay protection across several server instances
+needs the accepted nonces in shared storage as well.
+
+`*SecretKey` and `*SigningIdentity` may be *used* from several goroutines at
+once (the core only reads them), but `Close` must not race with a call in
+flight on the same handle: close a handle only when nothing else is using it.
+
 ## Native library
 
-Unlike the dynamic SDKs there is no runtime lookup and no `HIDE_LIBRARY`
-override: `libhide_ffi.a` is linked into your binary at build time from
-`sdk/go/lib/`, so the core cannot be swapped after compilation. Linux links
-`-lm -ldl -lpthread`, macOS `-framework Security`, Windows `-lbcrypt
--ladvapi32 -luserenv -lntdll -lws2_32`.
+Unlike the dynamic SDKs there is no runtime lookup, nothing is loaded from
+disk when your program runs, and there is no `HIDE_LIBRARY` override:
+`libhide_ffi.a` is linked into your binary at build time from `sdk/go/lib/`, so
+the core cannot be swapped after compilation and there is no search path to
+plant a library on. Linux links `-lm -ldl -lpthread`, macOS `-framework
+Security`, Windows `-lbcrypt -ladvapi32 -luserenv -lntdll -lws2_32`.
 
 ## Key material
 
@@ -157,8 +215,8 @@ override: `libhide_ffi.a` is linked into your binary at build time from
 the native library and this package exposes no accessor for them; `String()`
 shows only whether the handle is open. Call `Close()` when finished (`defer`
 is the idiom); a finalizer is registered as a backstop, but relying on it keeps
-key material in memory for an unbounded time. A closed handle returns
-`ErrClosed`.
+key material in memory for an unbounded time. The finalizer cannot run while a
+call on the handle is still in progress. A closed handle returns `ErrClosed`.
 
 ## Limits
 

@@ -285,6 +285,10 @@ fn grease() -> hide_object::VectorShape {
             key: 0xFAFA,
             value: b"grease".to_vec(),
         }],
+        metadata_extensions: vec![hide_object::Extension {
+            key: 0x4A4A,
+            value: b"metadata grease".to_vec(),
+        }],
         leading_stanzas: vec![hide_object::Stanza::Unknown(hide_object::UnknownStanza {
             tag: 0x7A7A,
             fields: vec![vec![0x7A; 33], Vec::new()],
@@ -297,11 +301,7 @@ fn shaped(
     shape: &hide_object::VectorShape,
     recipient: &RecipientSecret,
 ) -> Result<Vec<u8>, ObjectError> {
-    let mut metadata = metadata();
-    metadata.extensions = vec![hide_object::Extension {
-        key: 0x4A4A,
-        value: b"metadata grease".to_vec(),
-    }];
+    let metadata = metadata();
     let mut container = Vec::new();
     hide_object::encrypt_shaped_for_vector(
         &mut b"hello".as_slice(),
@@ -336,6 +336,38 @@ fn grease_is_skipped_and_still_signed() -> Result<(), ObjectError> {
             assert_eq!(verified.signer.is_some(), signer.is_some());
         }
     }
+    Ok(())
+}
+
+/// A 1.0 writer MUST NOT emit metadata extension keys (spec 4), and the public
+/// API takes the caller's `Metadata`, so a caller that pre-set an extension, or
+/// a signature, must be refused rather than obeyed.
+#[test]
+fn a_writer_refuses_caller_metadata_extensions() -> Result<(), ObjectError> {
+    let recipient = RecipientSecret::generate()?;
+    let public = recipient.public_key()?;
+
+    let with_extension = Metadata {
+        extensions: vec![hide_object::Extension {
+            key: 0x4A4A,
+            value: b"not yours to add".to_vec(),
+        }],
+        ..metadata()
+    };
+    let error = hide_object::encrypt(
+        &mut b"hello".as_slice(),
+        &mut Vec::new(),
+        &[public],
+        &with_extension,
+    )
+    .unwrap_err();
+    assert!(
+        matches!(
+            error,
+            ObjectError::Format(hide_format::FormatError::InvalidMetadata)
+        ),
+        "{error:?}"
+    );
     Ok(())
 }
 

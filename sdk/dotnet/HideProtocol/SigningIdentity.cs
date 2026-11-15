@@ -6,9 +6,9 @@ namespace HideProtocol;
 /// </summary>
 public sealed unsafe class SigningIdentity : IDisposable
 {
-    private IntPtr _handle;
+    private readonly SigningIdentityHandle _handle;
 
-    private SigningIdentity(IntPtr handle) => _handle = handle;
+    private SigningIdentity(IntPtr handle) => _handle = new SigningIdentityHandle(handle);
 
     /// <summary>
     /// Creates an identity, returning the sealed key file to store. One seed
@@ -51,7 +51,7 @@ public sealed unsafe class SigningIdentity : IDisposable
     /// <summary>The shareable verifying key, for others to check signatures with.</summary>
     public byte[] PublicKey()
     {
-        IntPtr handle = Alive();
+        SigningIdentityHandle handle = Alive();
         HideBuffer output = Native.hide_buffer_empty();
         Interop.Check(Native.hide_signing_identity_public(handle, &output));
         return Interop.Take(ref output);
@@ -63,7 +63,7 @@ public sealed unsafe class SigningIdentity : IDisposable
     /// </summary>
     public byte[] Sign(ReadOnlySpan<byte> context, ReadOnlySpan<byte> message)
     {
-        IntPtr handle = Alive();
+        SigningIdentityHandle handle = Alive();
         HideBuffer output = Native.hide_buffer_empty();
         fixed (byte* contextPointer = context)
         fixed (byte* messagePointer = message)
@@ -83,7 +83,7 @@ public sealed unsafe class SigningIdentity : IDisposable
     /// <summary>Answers a challenge, proving possession to whoever issued it.</summary>
     public byte[] Answer(ReadOnlySpan<byte> challenge)
     {
-        IntPtr handle = Alive();
+        SigningIdentityHandle handle = Alive();
         HideBuffer output = Native.hide_buffer_empty();
         fixed (byte* pointer = challenge)
         {
@@ -94,23 +94,13 @@ public sealed unsafe class SigningIdentity : IDisposable
         return Interop.Take(ref output);
     }
 
-    private IntPtr Alive() =>
-        _handle == IntPtr.Zero ? throw new ObjectDisposedException(nameof(SigningIdentity)) : _handle;
+    private SigningIdentityHandle Alive() =>
+        _handle.IsClosed ? throw new ObjectDisposedException(nameof(SigningIdentity)) : _handle;
 
-    public void Dispose()
-    {
-        if (_handle != IntPtr.Zero)
-        {
-            Native.hide_signing_identity_free(_handle);
-            _handle = IntPtr.Zero;
-        }
-
-        GC.SuppressFinalize(this);
-    }
-
-    ~SigningIdentity() => Dispose();
+    /// <summary>Releases the identity and zeroizes its seed. Safe to call twice.</summary>
+    public void Dispose() => _handle.Dispose();
 
     // Never render key material, not even a fingerprint of it.
     public override string ToString() =>
-        $"HideProtocol.SigningIdentity ({(_handle == IntPtr.Zero ? "disposed" : "open")})";
+        $"HideProtocol.SigningIdentity ({(_handle.IsClosed ? "disposed" : "open")})";
 }

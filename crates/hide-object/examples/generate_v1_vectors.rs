@@ -80,6 +80,13 @@ fn grease_shape(minor: u8) -> VectorShape {
             key: GREASE_HEADER_KEY,
             value: b"HIDE GREASE header extension".to_vec(),
         }],
+        // The metadata extension is writer-controlled and MUST NOT be emitted by
+        // a 1.0 writer (spec 4), so it lives here rather than in the caller's
+        // Metadata; the public API has no way to set it.
+        metadata_extensions: vec![Extension {
+            key: GREASE_METADATA_KEY,
+            value: b"HIDE GREASE metadata extension".to_vec(),
+        }],
         leading_stanzas: vec![Stanza::Unknown(UnknownStanza {
             tag: GREASE_STANZA_TAG,
             fields: vec![vec![0x7A; 32], b"future recipient type".to_vec()],
@@ -87,19 +94,12 @@ fn grease_shape(minor: u8) -> VectorShape {
     }
 }
 
-fn metadata(name: &str, grease: bool) -> Metadata {
+fn metadata(name: &str) -> Metadata {
     Metadata {
         filename: Some(format!("{name}.txt")),
         media_type: Some("text/plain".into()),
         signature: None,
-        extensions: if grease {
-            vec![Extension {
-                key: GREASE_METADATA_KEY,
-                value: b"HIDE GREASE metadata extension".to_vec(),
-            }]
-        } else {
-            Vec::new()
-        },
+        extensions: Vec::new(),
     }
 }
 
@@ -144,7 +144,7 @@ fn main() -> Outcome {
     let v1_signed = seal(
         &public,
         text,
-        &metadata("v1-signed", false),
+        &metadata("v1-signed"),
         Some((&signer, SignaturePlacement::Public)),
         &plain,
     )?;
@@ -153,7 +153,7 @@ fn main() -> Outcome {
     let v1_conf = seal(
         &public,
         text,
-        &metadata("v1-signed-confidential", false),
+        &metadata("v1-signed-confidential"),
         Some((&signer, SignaturePlacement::Confidential)),
         &plain,
     )?;
@@ -164,7 +164,7 @@ fn main() -> Outcome {
     let grease = seal(
         &public,
         grease_text,
-        &metadata("grease", true),
+        &metadata("grease"),
         None,
         &grease_shape(1),
     )?;
@@ -173,7 +173,7 @@ fn main() -> Outcome {
     let grease_signed = seal(
         &public,
         grease_text,
-        &metadata("grease-signed", true),
+        &metadata("grease-signed"),
         Some((&signer, SignaturePlacement::Public)),
         &grease_shape(1),
     )?;
@@ -183,7 +183,7 @@ fn main() -> Outcome {
     let grease_minor = seal(
         &public,
         minor_text,
-        &metadata("grease-minor", false),
+        &metadata("grease-minor"),
         None,
         &VectorShape {
             minor: 7,
@@ -197,7 +197,7 @@ fn main() -> Outcome {
     // Each is produced with everything a recipient controls (header MAC,
     // metadata seal, payload) recomputed, so the refusal is for the stated
     // reason and not an incidental MAC failure.
-    let unsigned = seal(&public, text, &metadata("r", false), None, &plain)?;
+    let unsigned = seal(&public, text, &metadata("r"), None, &plain)?;
     let mut index = String::from(
         "# name\treason\n# Every file here MUST fail to decrypt with recipient.test-secret.\n",
     );
@@ -403,7 +403,7 @@ fn main() -> Outcome {
     )?;
 
     // Metadata cases: sealed with the real metadata key.
-    let base = metadata("r", false).encode()?;
+    let base = metadata("r").encode()?;
     for (name, raw, reason) in [
         (
             "critical-metadata-key",

@@ -12,20 +12,24 @@ Not on Maven Central yet. Build from source:
 
 ```sh
 cargo build --release -p hide-ffi          # produces the native core
-cd sdk/java && mvn install                 # installs org.hide-protocol:hide:0.8.0
+cd sdk/java && mvn install                 # installs org.hide-protocol:hide at the version in pom.xml
 ```
+
+The version is the `<version>` of [`pom.xml`](pom.xml), which is the HIDE
+release the checkout is at; use that value in your own build:
 
 ```xml
 <dependency>
   <groupId>org.hide-protocol</groupId>
   <artifactId>hide</artifactId>
-  <version>0.8.0</version>
+  <version><!-- the <version> in sdk/java/pom.xml --></version>
 </dependency>
 ```
 
-The jar does **not** bundle the native library. Point the binding at your
-build with either the environment pair or the system-property pair — both
-halves are required (see [Native library](#native-library)):
+The jar does **not** bundle the native library, and the binding must be told
+where it is: either copy it into the directory that holds the jar, or point at
+your build with the environment pair or the system-property pair — both halves
+are required (see [Native library](#native-library)):
 
 ```sh
 export HIDE_LIBRARY="$PWD/target/release/libhide_ffi.so"    # hide_ffi.dll / libhide_ffi.dylib
@@ -33,6 +37,11 @@ export HIDE_ALLOW_LIBRARY_OVERRIDE=1
 # or
 java -Dhide.library=/path/to/libhide_ffi.so -Dhide.allowLibraryOverride=true ...
 ```
+
+The library must be the same release as the binding: at load the binding
+compares `hide_version()` with its own version (exact major.minor.patch) and
+throws `UnsatisfiedLinkError` on a mismatch, because a stale core would load
+and silently lack whatever the newer release enforces.
 
 Run with `--enable-native-access=ALL-UNNAMED` (or grant it to the module) to
 silence the FFM restricted-method warning.
@@ -81,6 +90,14 @@ Errors: every failure is a `HideException` (unchecked) — nested subclasses
 `NoMatchingRecipient`, `NotAKey`, `ChallengeExpired`, `ChallengeReplayed`.
 Arguments this binding rejects before calling the core throw
 `IllegalArgumentException`.
+
+**Text arguments must not contain a NUL character.** Passphrases, the
+filename, the media type, the challenge audience, armored key text and the
+checkpoint origin cross the C boundary NUL-terminated, so a `String` carrying
+`'\0'` would be silently cut at it: a key would be sealed under the part of the
+passphrase before the NUL. Such a string throws `IllegalArgumentException`
+instead. `byte[]` arguments (plaintext, context, message, keys) may contain any
+byte.
 
 ## Signing and verification
 
@@ -137,18 +154,39 @@ member", never "did not verify".
 
 ## Native library
 
-The core is located in this order:
+The core is always loaded from an **absolute path**, found in this order:
 
-1. `-Dhide.library=<path>`, then `HIDE_LIBRARY`, if the file exists **and**
+1. `-Dhide.library=<path>`, then `HIDE_LIBRARY`, if it names a file **and**
    either `-Dhide.allowLibraryOverride=true` or `HIDE_ALLOW_LIBRARY_OVERRIDE=1`
-   is also set;
-2. the system loader, by name (`hide_ffi.dll`, `libhide_ffi.dylib`,
-   `libhide_ffi.so`) — put it on `java.library.path` / `PATH` /
-   `LD_LIBRARY_PATH`, or beside the executable.
+   is also set. Without the opt-in both are ignored, whatever they name;
+2. `hide_ffi.dll` / `libhide_ffi.dylib` / `libhide_ffi.so` in the directory
+   that holds the jar (or, when the classes run unpacked, in the class
+   directory itself).
+
+If neither finds it, loading fails with an `UnsatisfiedLinkError` that says
+what was tried. The library is **never** looked up by name through the system
+loader: `java.library.path`, `PATH`, `LD_LIBRARY_PATH` / `DYLD_LIBRARY_PATH`
+and the working directory are not searched, because whoever controls one of
+those would otherwise choose the cryptographic core.
 
 The jar does not carry a copy. The override is for development only: it
 replaces the entire cryptographic core, so a single settable property or
 environment variable must not be enough to redirect it.
+
+## Threads
+
+Every static method of `Hide` is safe to call from any number of threads.
+
+`SpentNonces` is safe for concurrent use: `accept` and `close` are
+`synchronized`, so one record can be shared by every request thread, and an
+answer presented by many threads at once is accepted by exactly one of them.
+The record is in-process memory: it is not shared between JVMs and does not
+survive a restart, so replay protection across several server instances needs
+the accepted nonces in shared storage as well.
+
+`SecretKey` and `SigningIdentity` may be *used* from several threads at once
+(the core only reads them), but `close()` must not race with a call in flight
+on the same object: close a handle only when nothing else is using it.
 
 ## Key material
 

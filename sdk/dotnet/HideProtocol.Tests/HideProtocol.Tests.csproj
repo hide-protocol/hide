@@ -6,6 +6,9 @@
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
     <IsPackable>false</IsPackable>
+        <!-- Probe.cs is the entry point: the loading tests start this assembly as
+          a child process, so the test SDK must not generate its own Main. -->
+        <GenerateProgramFile>false</GenerateProgramFile>
   </PropertyGroup>
 
   <ItemGroup>

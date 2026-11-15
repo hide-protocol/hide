@@ -12,32 +12,55 @@ on:
   workflow_dispatch:
     inputs:
       minutes:
-        description: "Minutes to fuzz each target"
+        description: "Minutes to fuzz each target (1-270)"
         default: "240"
+      rerun_of:
+        description: "Internal: id of a finished-with-losses run to retry. Set by the report job; leave empty."
+        default: ""
 
+# Nothing by default; each job below asks for exactly what it uses. The fuzz
+# jobs build and run attacker-shaped inputs, so they get no write scope at all.
 permissions:
   contents: read
-  issues: write
 
 jobs:
+  # The matrix below is a literal list so the job names are readable in the
+  # file and in the UI. This is what keeps the list honest: a target added to
+  # fuzz/fuzz_targets/ and forgotten here fails this job (and `lint` in CI).
+  # Deliberately not a dependency of `fuzz`: a bookkeeping error must not cost
+  # a night of fuzzing for the targets that are listed.
+  targets:
+    if: ${{ !inputs.rerun_of }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: ./.github/actions/fuzz-targets
+
   fuzz:
+    if: ${{ !inputs.rerun_of }}
     runs-on: ubuntu-24.04
     timeout-minutes: 300
     strategy:
       fail-fast: false
       matrix:
         target:
-          - format_header
-          - object_open
-          - keyring_open
-          - identity_log
-          - epoch_chain
-          - transparency_proofs
           - challenge_decode
-          - mls_message
-          - epoch_store
           - checkpoint_note
+          - epoch_chain
+          - epoch_store
+          - format_header
           - identity_bindings
+          - identity_log
+          - keyring_open
+          - mls_message
+          - object_open
+          - transparency_proofs
+    env:
+      # Through the environment, never pasted into a script: a value that
+      # reaches `run:` by interpolation is code, not data.
+      TARGET: ${{ matrix.target }}
+      MINUTES: ${{ inputs.minutes }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable
@@ -50,22 +73,33 @@ jobs:
         with:
           tool: cargo-fuzz
 
+      # cargo-fuzz has no --locked. Without this, a stale or missing lockfile
+      # makes the fuzzers resolve their own dependency graph, and four hours
+      # go into crate versions that are not the ones that ship.
+      - name: fuzz/Cargo.lock is committed and current
+        run: |
+          set -euo pipefail
+          git ls-files --error-unmatch fuzz/Cargo.lock
+          cargo +nightly metadata --locked --manifest-path fuzz/Cargo.toml --format-version 1 > /dev/null
+
       # The corpus is the accumulated value of every previous night. A cache
       # key that always misses on lookup and falls back to the newest prefix
       # match is how one gets "restore latest, save new" from actions/cache.
+      # The attempt is part of the key because a retried job shares the run id
+      # and a cache entry cannot be overwritten.
       - name: Restore last night's corpus
         uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: fuzz/corpus/${{ matrix.target }}
-          key: fuzz-corpus-${{ matrix.target }}-${{ github.run_id }}
+          key: fuzz-corpus-${{ matrix.target }}-${{ github.run_id }}-${{ github.run_attempt }}
           restore-keys: fuzz-corpus-${{ matrix.target }}-
 
       - name: Seed the corpus with the frozen vectors
         run: |
           set -euo pipefail
-          d="fuzz/corpus/${{ matrix.target }}"
+          d="fuzz/corpus/$TARGET"
           mkdir -p "$d"
-          case "${{ matrix.target }}" in
+          case "$TARGET" in
             format_header|object_open) cp conformance/vectors/*.hide conformance/vectors/rejections/*.hide "$d/" ;;
             keyring_open) cp conformance/vectors/*.test-secret conformance/vectors/*.test-seed "$d/" ;;
             identity_log) cp conformance/vectors/subsystems/identity-*.bin "$d/" ;;
@@ -76,73 +110,296 @@ jobs:
             # No frozen vectors: challenges carry a fresh nonce and MLS messages a
             # fresh group state, so neither is a stable artifact. Empty start.
             challenge_decode|mls_message|epoch_store) ;;
+            *) echo "::notice::no frozen vectors are mapped to $TARGET; it starts from last night's corpus only" ;;
           esac
-          echo "corpus entries: $(ls "$d" | wc -l)"
+          echo "corpus entries: $(find "$d" -type f | wc -l)"
 
+      # The step name is read by the report job; rename both together.
       - name: Fuzz
         working-directory: fuzz
         # -timeout=60: the verifier that hung for 1201 s should have been a
         # finding at 60. Anything a verifier does on one input is milliseconds.
         run: |
           set -euo pipefail
-          minutes="${{ github.event.inputs.minutes || '240' }}"
-          cargo +nightly fuzz run --target x86_64-unknown-linux-gnu "${{ matrix.target }}" -- \
+          # A bad number is clamped, not fatal: failing here would be reported
+          # as a lost night, which it is not. 270 leaves the 300-minute job
+          # room to build, minimise and save.
+          minutes="${MINUTES:-240}"
+          case "$minutes" in
+            '' | *[!0-9]*) echo "::warning::minutes='$minutes' is not a whole number; using 240"; minutes=240 ;;
+          esac
+          minutes=$(( 10#$minutes ))
+          if [ "$minutes" -lt 1 ]; then echo "::warning::minutes raised to 1"; minutes=1; fi
+          if [ "$minutes" -gt 270 ]; then echo "::warning::minutes capped at 270"; minutes=270; fi
+          cargo +nightly fuzz run --target x86_64-unknown-linux-gnu "$TARGET" -- \
             -max_total_time=$(( minutes * 60 )) -timeout=60 -rss_limit_mb=2048 \
             -print_final_stats=1
 
+      # Merged into a NEW directory that replaces the corpus only when the
+      # merge succeeded and produced something. The old step moved the corpus
+      # aside first, so a failed merge left an empty directory, the next step
+      # saved it, and the following night restored nothing.
       - name: Minimise the corpus before saving it
+        id: minimise
         if: always()
         working-directory: fuzz
         run: |
-          set -euo pipefail
-          d="corpus/${{ matrix.target }}"
-          mv "$d" "$d.full"
-          mkdir -p "$d"
-          cargo +nightly fuzz run --target x86_64-unknown-linux-gnu "${{ matrix.target }}" \
-            "$d" "$d.full" -- -merge=1 -timeout=60 -rss_limit_mb=2048
-          echo "minimised: $(ls "$d.full" | wc -l) -> $(ls "$d" | wc -l)"
+          set -uo pipefail
+          d="corpus/$TARGET"
+          if [ ! -d "$d" ] || [ -z "$(ls -A "$d")" ]; then
+            echo "::warning::there is no corpus for $TARGET to save"
+            exit 0
+          fi
+          # From here on there is something worth keeping, minimised or not.
+          echo "save=true" >> "$GITHUB_OUTPUT"
+          before=$(find "$d" -type f | wc -l)
+          rm -rf "$d.min"
+          mkdir -p "$d.min"
+          if cargo +nightly fuzz run --target x86_64-unknown-linux-gnu "$TARGET" "$d.min" "$d" -- \
+               -merge=1 -timeout=60 -rss_limit_mb=2048 \
+             && [ -n "$(ls -A "$d.min")" ]; then
+            rm -rf "$d"
+            mv "$d.min" "$d"
+            echo "minimised: $before -> $(find "$d" -type f | wc -l)"
+          else
+            rm -rf "$d.min"
+            echo "::warning::the corpus merge failed for $TARGET; keeping all $before entries unminimised"
+          fi
 
       - name: Save the corpus for tomorrow
-        if: always()
+        if: ${{ always() && steps.minimise.outputs.save == 'true' }}
         uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: fuzz/corpus/${{ matrix.target }}
-          key: fuzz-corpus-${{ matrix.target }}-${{ github.run_id }}
+          key: fuzz-corpus-${{ matrix.target }}-${{ github.run_id }}-${{ github.run_attempt }}
 
+      # The artifact is what the report job takes as proof of a finding: it
+      # exists only when libFuzzer wrote a crash, timeout or oom input.
       - name: Keep the reproducer
         if: failure()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: fuzz-artifacts-${{ matrix.target }}
-          path: fuzz/artifacts/${{ matrix.target }}
+          # Only the inputs libFuzzer writes when it stops on a failure. A
+          # slow-unit-* file is a note, not a finding, and must not turn a
+          # failed cache save into a security issue.
+          path: |
+            fuzz/artifacts/${{ matrix.target }}/crash-*
+            fuzz/artifacts/${{ matrix.target }}/timeout-*
+            fuzz/artifacts/${{ matrix.target }}/oom-*
+            fuzz/artifacts/${{ matrix.target }}/leak-*
           if-no-files-found: ignore
+          overwrite: true
 
-      - name: Open an issue
-        if: failure()
-        env:
-          GH_TOKEN: ${{ github.token }}
-          TARGET: ${{ matrix.target }}
-          RUN: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+  # Issues used to be opened by a step inside each fuzz job. Two nights
+  # (runs 37287290058 and 39563211727) ended with "The hosted runner lost
+  # communication with the server": zero steps ran, so no artifact, no issue,
+  # nothing but a red mark. And any failure at all, a compile error included,
+  # was filed as a security finding. This job runs after the matrix whatever
+  # happened to it and reads what the API recorded:
+  #   reproducer artifact present -> a finding  (labels fuzz + security)
+  #   failed without one          -> infrastructure (label fuzz-infra), and
+  #                                  the lost jobs are retried once.
+  # `always()` on the job, because the default would skip it whenever a fuzz
+  # job failed, which is the only time it has something to say. Its steps keep
+  # the default condition: that is false only when the whole run was cancelled
+  # by hand, and a deliberate cancel should file nothing. A lost runner or a
+  # job that hit its own time limit does not cancel the run.
+  report:
+    needs: [targets, fuzz]
+    if: ${{ always() && !inputs.rerun_of }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      actions: write # dispatch the retry below
+      issues: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+      RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+      ATTEMPT: ${{ github.run_attempt }}
+      TARGETS_RESULT: ${{ needs.targets.result }}
+    steps:
+      - name: Classify every fuzz job
+        id: classify
         run: |
           set -euo pipefail
-          title="fuzz: $TARGET found a crash or hang"
-          existing=$(gh issue list --state open --label fuzz --search "\"$title\" in:title" --json number --jq '.[0].number // empty')
-          {
-            echo "The nightly fuzzer failed on \`$TARGET\`."
-            echo
-            echo "Run: $RUN"
-            echo "Reproducer: artifact \`fuzz-artifacts-$TARGET\` on that run."
-            echo
-            echo "Reproduce locally:"
-            echo '```'
-            echo "cd fuzz"
-            echo "cargo +nightly fuzz run --target x86_64-unknown-linux-gnu $TARGET artifacts/$TARGET/<file>"
-            echo '```'
-            echo
-            echo "Treat as a security finding until shown otherwise: every fuzz target here parses bytes from a party the verifier does not trust."
-          } > body.md
-          if [ -n "$existing" ]; then
-            gh issue comment "$existing" --body "Reproduced again: $RUN"
-          else
-            gh issue create --title "$title" --label fuzz --label security --body-file body.md
+          # filter=latest: after a retry, the newest execution of each job.
+          gh api --paginate "repos/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID/jobs?filter=latest&per_page=100" --jq '.jobs[]' \
+            | jq -s 'map(select(.name | test("^fuzz \\(.+\\)$"))
+                | { target: (.name | capture("^fuzz \\((?<t>.+)\\)$").t),
+                    conclusion: (.conclusion // "none"),
+                    steps: ([.steps[]? | select(.status == "completed")] | length),
+                    fuzz: (([.steps[]? | select(.name == "Fuzz")][0].conclusion) // "missing"),
+                    failed: (([.steps[]? | select(.conclusion == "failure")][0].name) // "none") })' > jobs.json
+          gh api --paginate "repos/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID/artifacts?per_page=100" --jq '.artifacts[].name' > artifacts.txt
+          jq -r '.[] | "\(.target): \(.conclusion), \(.steps) steps completed, Fuzz=\(.fuzz)"' jobs.json
+
+          : > findings.txt
+          : > infra.txt
+          retry=false
+          while IFS='|' read -r target conclusion steps fuzz failed; do
+            case "$conclusion" in success | skipped) continue ;; esac
+            if grep -qxF "fuzz-artifacts-$target" artifacts.txt; then
+              echo "$target" >> findings.txt
+              continue
+            fi
+            if [ "$steps" -eq 0 ]; then
+              why="the runner was lost before any step completed"
+            elif [ "$fuzz" = failure ]; then
+              why="the Fuzz step failed and left no reproducer (it did not build, or the process was killed)"
+            elif [ "$fuzz" = success ]; then
+              why="fuzzing finished, then the step '$failed' failed"
+            elif [ "$conclusion" = cancelled ]; then
+              why="it was cancelled before fuzzing finished (the job's time limit, or by hand)"
+            else
+              why="it ended as '$conclusion' before fuzzing finished (failed step: $failed)"
+            fi
+            echo "- \`$target\`: $why" >> infra.txt
+            # Retried: a job GitHub reports as failed that never finished
+            # fuzzing (lost runner, killed process). Not retried: fuzzing that
+            # already ran its hours and then failed to upload or save, and a
+            # job that ran into its own time limit (reported as cancelled),
+            # which would only do so again five hours later.
+            if [ "$conclusion" = failure ] && [ "$fuzz" != success ]; then retry=true; fi
+          done < <(jq -r '.[] | [.target, .conclusion, (.steps | tostring), .fuzz, .failed] | join("|")' jobs.json)
+          if [ "$TARGETS_RESULT" = failure ]; then
+            echo "- the \`targets\` job failed: fuzz/fuzz_targets/ and the matrix in fuzz-nightly.yml differ, so at least one target is not being fuzzed" >> infra.txt
           fi
+
+          # One retry, and only on a night without findings: `--failed` would
+          # also re-run the jobs that found something, for hours, to learn
+          # what the reproducer already says.
+          if [ "$ATTEMPT" != 1 ] || [ -s findings.txt ]; then retry=false; fi
+          {
+            echo "findings=$([ -s findings.txt ] && echo true || echo false)"
+            echo "infra=$([ -s infra.txt ] && echo true || echo false)"
+            echo "retry=$retry"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Open or update an issue for each finding
+        if: steps.classify.outputs.findings == 'true'
+        run: |
+          set -euo pipefail
+          while read -r target; do
+            [ -n "$target" ] || continue
+            title="fuzz: $target found a crash or hang"
+            # Exact title match on the list, not the search index: search lags
+            # by minutes and matches loosely.
+            existing=$(gh issue list --state open --label fuzz --limit 200 --json number,title \
+              | jq -r --arg t "$title" '[.[] | select(.title == $t)][0].number // empty')
+            if [ -n "$existing" ]; then
+              gh issue comment "$existing" --body "Reproduced again: $RUN_URL (artifact \`fuzz-artifacts-$target\`)"
+              continue
+            fi
+            {
+              echo "The nightly fuzzer failed on \`$target\` and left a reproducer."
+              echo
+              echo "Run: $RUN_URL"
+              echo "Reproducer: artifact \`fuzz-artifacts-$target\` on that run."
+              echo
+              echo "Reproduce locally:"
+              echo '```'
+              echo "gh run download $GITHUB_RUN_ID --pattern fuzz-artifacts-$target --dir fuzz/artifacts/$target"
+              echo "cd fuzz"
+              echo "cargo +nightly fuzz run --target x86_64-unknown-linux-gnu $target artifacts/$target/<file>"
+              echo '```'
+              echo
+              echo "Treat as a security finding until shown otherwise: every fuzz target here parses bytes from a party the verifier does not trust."
+            } > body.md
+            gh issue create --title "$title" --label fuzz --label security --body-file body.md
+          done < findings.txt
+
+      # A run cannot re-run itself: while this job is still executing the API
+      # answers "This workflow is already running". So this dispatches the
+      # same workflow with `rerun_of`, and its `rerun` job waits for this run
+      # to finish and then re-runs the failed jobs. The retry is attempt 2 of
+      # THIS run, which is what stops it from retrying again.
+      - name: Retry the lost jobs once
+        id: retry
+        if: steps.classify.outputs.retry == 'true'
+        continue-on-error: true
+        run: gh workflow run fuzz-nightly.yml --ref "$GITHUB_REF_NAME" -f "rerun_of=$GITHUB_RUN_ID"
+
+      # Not a finding and not labelled as one: there is no input that
+      # reproduces a lost runner. One rolling issue, so a bad week is a thread
+      # and not a pile. Skipped when a retry was started; if the retry fails
+      # too, attempt 2 lands here.
+      - name: Record an infrastructure failure
+        if: steps.classify.outputs.infra == 'true' && steps.retry.outcome != 'success'
+        run: |
+          set -euo pipefail
+          gh label create fuzz-infra --color 8B949E \
+            --description "Fuzzing infrastructure failed; not a finding" 2> /dev/null || true
+          title="fuzz-nightly: jobs failed without a reproducer"
+          {
+            echo "Nightly fuzzing did not complete for these jobs, and none of them left a reproducer (attempt $ATTEMPT):"
+            echo
+            cat infra.txt
+            echo
+            echo "Run: $RUN_URL"
+            echo
+            echo "This is not a finding. For a lost runner or a job that never reached fuzzing, the corpus of that target was not extended this night."
+          } > body.md
+          existing=$(gh issue list --state open --label fuzz-infra --limit 200 --json number,title \
+            | jq -r --arg t "$title" '[.[] | select(.title == $t)][0].number // empty')
+          if [ -n "$existing" ]; then
+            gh issue comment "$existing" --body-file body.md
+          else
+            gh issue create --title "$title" --label fuzz-infra --body-file body.md
+          fi
+
+      - name: Summary
+        if: ${{ !cancelled() }}
+        env:
+          RETRY: ${{ steps.retry.outcome }}
+        run: |
+          {
+            echo "## fuzz-nightly (attempt $ATTEMPT)"
+            echo
+            echo "### Findings (reproducer kept, issue labelled fuzz + security)"
+            if [ -s findings.txt ]; then awk '{ print "- " $0 }' findings.txt; else echo "none"; fi
+            echo
+            echo "### Failed without a reproducer (label fuzz-infra)"
+            if [ -s infra.txt ]; then cat infra.txt; else echo "none"; fi
+            echo
+            echo "Retry of lost jobs: ${RETRY:-not needed}"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  # Second half of the retry: runs only in the dispatch the report job makes.
+  rerun:
+    if: ${{ inputs.rerun_of }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    permissions:
+      contents: read
+      actions: write # re-run the failed jobs of another run
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+      RUN: ${{ inputs.rerun_of }}
+    steps:
+      - name: Wait for the run to finish, then re-run what failed
+        run: |
+          set -euo pipefail
+          case "$RUN" in
+            '' | *[!0-9]*) echo "::error::rerun_of must be a run id"; exit 1 ;;
+          esac
+          # The dispatching job is the last one of its run, so this is seconds.
+          for _ in $(seq 1 60); do
+            gh api "repos/$GITHUB_REPOSITORY/actions/runs/$RUN" > run.json
+            [ "$(jq -r .status run.json)" = completed ] && break
+            sleep 15
+          done
+          jq -r '"run \(.id): \(.status)/\(.conclusion // "none"), attempt \(.run_attempt), \(.path)"' run.json
+          # This input can also be typed by hand. Refuse anything that is not
+          # the first, failed attempt of this very workflow, so it can neither
+          # loop nor be pointed at a release.
+          ok=$(jq -r '(.status == "completed") and (.conclusion == "failure") and (.run_attempt == 1)
+                      and (.path == ".github/workflows/fuzz-nightly.yml")' run.json)
+          if [ "$ok" != true ]; then
+            echo "::error::run $RUN is not a finished, failed, first attempt of fuzz-nightly; not re-running it"
+            exit 1
+          fi
+          gh run rerun "$RUN" --failed

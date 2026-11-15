@@ -44,4 +44,8 @@ package() {
   install -Dm0644 LICENSE "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
   install -Dm0644 README.md "$pkgdir/usr/share/doc/$pkgname/README.md"
   install -Dm0644 SECURITY.md "$pkgdir/usr/share/doc/$pkgname/SECURITY.md"
+  # The release archives carry a generated THIRD-PARTY-LICENSES.txt for the
+  # prebuilt binary. This package builds from source and cargo-about is not
+  # an Arch makedepend, so that file is not produced here; the licence text
+  # of every compiled crate is in the vendored sources fetched by prepare().
 }

@@ -42,6 +42,13 @@
     <None Include="..\README.md" Pack="true" PackagePath="\" />
   </ItemGroup>
 
+  <!-- The licence text itself travels in the package, beside the SPDX
+       expression above: NuGet allows only one of PackageLicenseExpression and
+       PackageLicenseFile as metadata, so the file is packed as plain content. -->
+  <ItemGroup>
+    <None Include="..\..\..\LICENSE" Pack="true" PackagePath="\" Visible="false" />
+  </ItemGroup>
+
   <!-- One package carries every RID; the runtime picks the matching folder and
        Native.cs falls back to probing it. The workflow stages the binaries
        here, so a plain local pack still produces a usable source package. -->

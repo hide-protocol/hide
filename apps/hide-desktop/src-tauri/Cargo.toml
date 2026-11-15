@@ -2,7 +2,7 @@
 name = "hide-desktop"
 version = "0.9.1"
 edition = "2024"
-rust-version = "1.85"
+rust-version = "1.88"
 license = "Apache-2.0"
 publish = false
 description = "Desktop interface for the experimental HIDE encryption protocol"

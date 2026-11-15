@@ -21,20 +21,29 @@ Gem::Specification.new do |spec|
     "rubygems_mfa_required" => "true"
   }
 
-  # fiddle is stdlib, so there is no native build step and no runtime gem
-  # dependency; the publish workflow copies the compiled core in and sets
-  # HIDE_GEM_PLATFORM, so `gem install` fetches only this machine's binary.
-  # Without it the gem still builds, as a source gem needing HIDE_LIBRARY.
+  # The publish workflow copies the compiled core in and sets
+  # HIDE_GEM_PLATFORM, so `gem install` fetches only this machine's binary and
+  # there is no native build step. Without it the gem still builds, as a
+  # source gem needing HIDE_LIBRARY.
   platform = ENV["HIDE_GEM_PLATFORM"]
   spec.platform = platform unless platform.nil? || platform.empty?
 
   spec.required_ruby_version = ">= 3.0"
 
+  # The gemspec itself is shipped: the binding reads its own version from it
+  # at load time, to refuse a native library from a different release.
   spec.files =
     Dir["lib/**/*.rb"] +
     Dir["lib/hide_protocol/*.{so,dylib,dll}"] +
-    Dir["{README.md,LICENSE}"]
+    Dir["{README.md,LICENSE,hide-protocol.gemspec}"]
   spec.require_paths = ["lib"]
+
+  # fiddle is a default gem up to Ruby 3.4 and a bundled gem from Ruby 4.0,
+  # where a Bundler-managed application can only require what its bundle
+  # declares.
+  # 1.0.6 is the version Ruby 3.0.0 ships, and has everything the binding
+  # uses, so no supported Ruby has to compile a newer fiddle to satisfy this.
+  spec.add_dependency "fiddle", ">= 1.0.6"
 
   spec.add_development_dependency "minitest", "~> 5.0"
 end

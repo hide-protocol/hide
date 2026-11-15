@@ -25,6 +25,7 @@ jobs:
   # three times; a failure here cancels the matrix and saves runner minutes.
   lint:
     runs-on: ubuntu-24.04
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable
@@ -32,15 +33,29 @@ jobs:
           components: clippy, rustfmt
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
       - run: cargo fmt --all --check
-      - run: cargo clippy --workspace --all-targets --all-features -- -D warnings
+      # --locked everywhere in this file: without it cargo silently re-resolves
+      # a Cargo.toml that moved without its Cargo.lock, CI goes green on a
+      # graph nobody committed, and the first `--locked` build to notice is
+      # the release, on tag day.
+      - run: cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
       # The version lives in 22 files across seven ecosystems. A missed manifest
       # publishes a package whose metadata and contents disagree, and nothing
       # else in CI would notice.
       - run: pwsh -File scripts/set-version.ps1 -Check
         shell: bash
+      # Three lockfiles (root, desktop, fuzz) each pin the crypto crates. If
+      # they disagree, the desktop app or the fuzzers run a different protocol
+      # implementation than the one that ships.
+      - run: node scripts/check-lock-drift.mjs
+      # A fuzz target that exists on disk but not in the nightly matrix is
+      # never fuzzed for more than 45 seconds, and nothing says so. Checked
+      # here so it fails on the pull request that adds the target, not on some
+      # later night.
+      - uses: ./.github/actions/fuzz-targets
 
   test:
     needs: lint
+    timeout-minutes: 30
     strategy:
       fail-fast: false
       matrix:
@@ -50,7 +65,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
-      - run: cargo test --workspace --all-features
+      - run: cargo test --workspace --all-features --locked
 
   # The desktop app is outside the cargo workspace, so it needs its own job.
   # Linux only: this checks the shared logic and the CLI/desktop interop, and
@@ -58,6 +73,7 @@ jobs:
   desktop:
     needs: lint
     runs-on: ubuntu-24.04
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable
@@ -67,6 +83,25 @@ jobs:
         with:
           workspaces: apps/hide-desktop/src-tauri
           key: desktop
+      - uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1 # v4
+        with:
+          version: 10
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
+        with:
+          node-version: 22
+          cache: pnpm
+          cache-dependency-path: apps/hide-desktop/pnpm-lock.yaml
+
+      # The frontend was only ever compiled by release.yml, so a TypeScript
+      # error first showed up on tag day. `pnpm build` is tsc --noEmit plus the
+      # vite bundle: the same command the installer build runs. First, because
+      # it fails in seconds and the Rust half takes minutes.
+      - name: Frontend type-check and bundle
+        working-directory: apps/hide-desktop
+        run: |
+          pnpm install --frozen-lockfile --ignore-workspace
+          pnpm build
+
       - name: Install Linux webview dependencies
         run: |
           sudo apt-get update
@@ -74,17 +109,20 @@ jobs:
             libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf
       - run: cargo fmt --check
         working-directory: apps/hide-desktop/src-tauri
-      - run: cargo clippy --all-targets --all-features -- -D warnings
+      - run: cargo clippy --all-targets --all-features --locked -- -D warnings
         working-directory: apps/hide-desktop/src-tauri
 
       # The interop test skips itself when the CLI is absent, which would make
       # it silently decorative. Build the CLI first, then assert it ran.
-      - run: cargo build -p hide-cli
+      - run: cargo build --locked -p hide-cli
       - name: Desktop tests, including CLI interoperability
+        # 2>&1: the skip notice is an eprintln!, and with --nocapture it goes
+        # to stderr. Piping stdout alone meant the grep below could never
+        # match, so the guard against a silent skip was itself silent.
         run: |
           set -euo pipefail
           cargo test --manifest-path apps/hide-desktop/src-tauri/Cargo.toml \
-            --all-features -- --nocapture | tee desktop-tests.log
+            --all-features --locked -- --nocapture 2>&1 | tee desktop-tests.log
           if grep -q 'skipping: the hide CLI has not been built' desktop-tests.log; then
             echo "::error::the interoperability test skipped itself" >&2
             exit 1
@@ -92,15 +130,24 @@ jobs:
 
   # The SDKs are the surface most likely to drift from the ABI without anyone
   # noticing, because they live outside the cargo workspace.
+  # Everything here runs against the RELEASE core. That is the profile the
+  # published libraries are built with, and two promises exist only there:
+  # panics unwind into HIDE_ERR_PANIC, and the staticlib links into C. A debug
+  # build made both checks skip themselves without failing.
   sdks:
     needs: lint
     runs-on: ubuntu-24.04
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable
         with:
           targets: wasm32-unknown-unknown
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
+        with:
+          # Its own cache: this job no longer builds the debug profile, and
+          # restoring the old debug cache would cost time and prove nothing.
+          key: release
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
         with:
           node-version: 22
@@ -126,12 +173,38 @@ jobs:
         with:
           dotnet-version: "8.0"
 
+      # The wasm-bindgen CLI must be exactly the version of the crate: the CLI
+      # reads a schema the macro wrote and refuses any other. Reading it from
+      # Cargo.lock means a bump of the crate cannot leave this file behind.
+      - name: Read the pinned wasm-bindgen version
+        id: wasm_bindgen
+        run: |
+          set -euo pipefail
+          version=$(awk '/^name = "wasm-bindgen"$/ { getline; gsub(/^version = "|"$/, ""); print; exit }' Cargo.lock)
+          [ -n "$version" ] || { echo "::error::wasm-bindgen is not in Cargo.lock"; exit 1; }
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+      # Prebuilt, like cargo-audit below: `cargo install wasm-bindgen-cli`
+      # compiled it from source. The archive also carries
+      # wasm-bindgen-test-runner, which the WebAssembly tests need.
+      - uses: taiki-e/install-action@3f74d7c16a4242f1c95561e98edc25d36adb4375 # v2
+        with:
+          tool: wasm-bindgen@${{ steps.wasm_bindgen.outputs.version }}
+      - name: The installed wasm-bindgen is the pinned one
+        env:
+          WANT: ${{ steps.wasm_bindgen.outputs.version }}
+        run: |
+          set -euo pipefail
+          have=$(wasm-bindgen --version)
+          echo "$have (Cargo.lock: $WANT)"
+          [ "$have" = "wasm-bindgen $WANT" ] || { echo "::error::wasm-bindgen CLI is '$have', Cargo.lock pins $WANT"; exit 1; }
+          command -v wasm-bindgen-test-runner
+
       - name: Build the core and the CLI
-        run: cargo build -p hide-ffi -p hide-cli
+        run: cargo build --release --locked -p hide-ffi -p hide-cli
 
       - name: Python
         env:
-          HIDE_LIBRARY: ${{ github.workspace }}/target/debug/libhide_ffi.so
+          HIDE_LIBRARY: ${{ github.workspace }}/target/release/libhide_ffi.so
           HIDE_ALLOW_LIBRARY_OVERRIDE: "1"
           PYTHONPATH: ${{ github.workspace }}/sdk/python/src
         run: |
@@ -140,7 +213,7 @@ jobs:
 
       - name: Node
         env:
-          HIDE_LIBRARY: ${{ github.workspace }}/target/debug/libhide_ffi.so
+          HIDE_LIBRARY: ${{ github.workspace }}/target/release/libhide_ffi.so
           HIDE_ALLOW_LIBRARY_OVERRIDE: "1"
         working-directory: sdk/node
         run: |
@@ -157,42 +230,48 @@ jobs:
           set -euo pipefail
           mkdir -p sdk/go/include sdk/go/lib
           cp crates/hide-ffi/include/hide.h sdk/go/include/
-          cp target/debug/libhide_ffi.a sdk/go/lib/
+          cp target/release/libhide_ffi.a sdk/go/lib/
           cd sdk/go && CGO_ENABLED=1 go test ./...
 
       - name: Java
         run: |
           set -euo pipefail
           mkdir -p target/java-classes
-          javac -d target/java-classes $(find sdk/java/src -name '*.java')
+          find sdk/java/src -name '*.java' -print0 | xargs -0 javac -d target/java-classes
           java --enable-native-access=ALL-UNNAMED \
-               -Dhide.library="$PWD/target/debug/libhide_ffi.so" \
+               -Dhide.library="$PWD/target/release/libhide_ffi.so" \
                -Dhide.allowLibraryOverride=true \
                -cp target/java-classes org.hideprotocol.HideTest
 
       - name: Ruby
         env:
-          HIDE_LIBRARY: ${{ github.workspace }}/target/debug/libhide_ffi.so
+          HIDE_LIBRARY: ${{ github.workspace }}/target/release/libhide_ffi.so
           HIDE_ALLOW_LIBRARY_OVERRIDE: "1"
         working-directory: sdk/ruby
         run: ruby -Ilib -Itest test/test_hide.rb
 
       - name: PHP
         env:
-          HIDE_LIBRARY: ${{ github.workspace }}/target/debug/libhide_ffi.so
+          HIDE_LIBRARY: ${{ github.workspace }}/target/release/libhide_ffi.so
           HIDE_ALLOW_LIBRARY_OVERRIDE: "1"
         working-directory: sdk/php
         run: php -d ffi.enable=1 tests/run.php
 
       - name: .NET
         env:
-          HIDE_LIBRARY: ${{ github.workspace }}/target/debug/libhide_ffi.so
+          HIDE_LIBRARY: ${{ github.workspace }}/target/release/libhide_ffi.so
           HIDE_ALLOW_LIBRARY_OVERRIDE: "1"
         working-directory: sdk/dotnet
         run: dotnet test --verbosity quiet
 
+      # --release: the panic test asserts that a panic becomes an error code,
+      # which is a property of the profile (unwind, not abort), and the C
+      # program links the staticlib that actually ships. 2>&1 for the same
+      # reason as in the desktop job: the skip notice is written to stderr.
       - name: C ABI
-        run: cargo test -p hide-ffi --test c_abi -- --nocapture | tee c-abi.log
+        run: |
+          set -euo pipefail
+          cargo test --release --locked -p hide-ffi --test c_abi -- --nocapture 2>&1 | tee c-abi.log
 
       - name: The C ABI test must not have skipped itself
         run: |
@@ -201,16 +280,42 @@ jobs:
             exit 1
           fi
 
+      # The #[wasm_bindgen_test] functions are the only tests of the WASM
+      # binding's identity, epoch, transparency and reserved-context checks. A
+      # host `cargo test` compiles them to nothing and prints "0 tests", so
+      # before this step no workflow ran them. Node is the runner's default.
+      - name: WebAssembly unit tests
+        env:
+          CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUNNER: wasm-bindgen-test-runner
+        run: |
+          set -euo pipefail
+          cargo test -p hide-wasm --target wasm32-unknown-unknown --locked 2>&1 | tee wasm-tests.log
+          declared=$(grep -rhoE '#\[wasm_bindgen_test\]' crates/hide-wasm/src | wc -l)
+          # Colour codes would split "ok. N passed"; strip them before counting.
+          # `|| true`: no result line at all must reach the message below, not
+          # die here on grep's exit status.
+          passed=$(sed 's/\x1b\[[0-9;]*m//g' wasm-tests.log \
+            | { grep -Eo 'test result: ok\. [0-9]+ passed' || true; } \
+            | awk '{ n += $4 } END { print n + 0 }')
+          echo "wasm tests: $passed passed, $declared declared"
+          # 15 is the floor on the day this gate was added: deleting tests must
+          # be as visible as a runner that silently executes none.
+          if [ "$passed" -lt 15 ] || [ "$passed" -lt "$declared" ]; then
+            echo "::error::only $passed WebAssembly tests ran ($declared declared, at least 15 required)" >&2
+            exit 1
+          fi
+
       # Every surface must agree on the format, or one of them has drifted.
       - name: Cross-surface interoperability
         # CI has every runtime, so name them: without this a missing runtime
-        # would quietly shrink the matrix instead of failing.
+        # would quietly shrink the matrix instead of failing. Only
+        # target/release exists in this job, so the library verify.mjs finds
+        # is the release one and its release-only HIDE_ERR_PANIC check runs.
         env:
           HIDE_CROSS_REQUIRE: ruby,php,dotnet
         run: |
           set -euo pipefail
-          cargo install wasm-bindgen-cli --version 0.2.128 --locked
-          cargo build --release -p hide-wasm --target wasm32-unknown-unknown
+          cargo build --release --locked -p hide-wasm --target wasm32-unknown-unknown
           wasm-bindgen target/wasm32-unknown-unknown/release/hide_wasm.wasm \
             --out-dir conformance/cross-surface/wasm --target web
           dotnet build -c Release conformance/cross-surface/adapters/dotnet
@@ -220,6 +325,7 @@ jobs:
   interoperability:
     needs: lint
     runs-on: ubuntu-24.04
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable
@@ -227,18 +333,20 @@ jobs:
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
         with:
           node-version: 22
-      - run: cargo test -p hide-object --test vectors
+      - run: cargo test --locked -p hide-object --test vectors
       # Exits non-zero when any HIDE/1.0 vector (grease, v1-signed, manifest)
       # no longer matches what the current code produces.
-      - run: cargo run -p hide-object --features test-vectors --example generate_v1_vectors -- --check
+      - run: cargo run --locked -p hide-object --features test-vectors --example generate_v1_vectors -- --check
       - run: npm install --no-package-lock --no-audit --no-fund
         working-directory: conformance/node
       - run: node verify.mjs
         working-directory: conformance/node
       # Same mutants into both readers; any accept/reject disagreement fails.
       # The seed changes per run, so CI keeps exploring; a finding is kept.
-      - run: cargo build -p hide-object --features test-vectors --example differential_oracle
-      - run: node conformance/differential/run.mjs --iterations 1500 --seed ${{ github.run_number }}
+      - run: cargo build --locked -p hide-object --features test-vectors --example differential_oracle
+      - run: node conformance/differential/run.mjs --iterations 1500 --seed "$SEED"
+        env:
+          SEED: ${{ github.run_number }}
       - name: Keep any differential finding
         if: failure()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
@@ -247,19 +355,55 @@ jobs:
           path: conformance/differential/findings/
           if-no-files-found: ignore
 
+  # rust-toolchain.toml pins `stable` for the repository, and a toolchain file
+  # beats the default the install action sets. So `cargo check` here ran on
+  # stable for as long as that file existed, and once "verified" a crate that
+  # needed a newer compiler than the declared MSRV. RUSTUP_TOOLCHAIN outranks
+  # the toolchain file for everything in this job (the cache action included),
+  # and the cargo calls name the toolchain as well, so nothing is left to the
+  # override order.
   minimum-supported-rust:
     needs: lint
     runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    env:
+      MSRV: 1.88.0
+      RUSTUP_TOOLCHAIN: 1.88.0
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
-      - uses: dtolnay/rust-toolchain@3230091d7ef9483f601620abacc570c22cf44d22 # 1.85.0
+      # The SHA is the head of the action's `1.88.0` branch, which hard-codes
+      # the toolchain (it has no `toolchain` input). Dependabot once proposed
+      # the `stable` branch SHA for this line; the next step is what would
+      # catch that, because it asks the compiler rather than the YAML.
+      - uses: dtolnay/rust-toolchain@360a4e93673de6630fac2478bc9e35244b01a759 # 1.88.0
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
         with:
-          key: msrv
-      - run: cargo check --workspace --all-features
+          key: msrv-1.88.0
+      - name: The compiler in use is the declared MSRV
+        run: |
+          set -euo pipefail
+          # Three ways to reach a compiler; all must be the MSRV. The bare
+          # ones are what an action or a build script would get.
+          for tool in "cargo +$MSRV" cargo rustc; do
+            have=$($tool --version)
+            echo "$tool --version: $have"
+            case "$have" in
+              "cargo $MSRV "* | "rustc $MSRV "*) ;;
+              *) echo "::error::expected $MSRV from '$tool', got: $have" >&2; exit 1 ;;
+            esac
+          done
+          # The number checked here and the number promised in Cargo.toml must
+          # be the same one, or this job verifies a claim nobody makes.
+          declared=$(awk -F'"' '/^rust-version = / { print $2; exit }' Cargo.toml)
+          case "$MSRV" in
+            "$declared" | "$declared".*) ;;
+            *) echo "::error::Cargo.toml declares rust-version $declared, this job checks $MSRV" >&2; exit 1 ;;
+          esac
+      - run: cargo "+$MSRV" check --workspace --all-features --locked
 
   supply-chain:
     runs-on: ubuntu-24.04
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       # rustsec/audit-check compiles cargo-audit from source on every run,
@@ -271,13 +415,32 @@ jobs:
       # deny.toml adds what audit does not: licence allow-list, banned crates
       # (a second crypto stack), unknown registries, and duplicate versions
       # with every known duplicate attributed so a new one is visible.
-      - run: cargo deny check
+      - run: cargo deny --locked check
+      # The desktop crate has its own Cargo.lock (495 crates against the
+      # root's 218: tauri, wry, webkit, hyper) and nothing audited it. Run from
+      # its directory so cargo-audit reads that lockfile and that directory's
+      # .cargo/audit.toml, where every ignored advisory carries its reason.
+      - name: Audit the desktop lockfile
+        if: ${{ !cancelled() }}
+        working-directory: apps/hide-desktop/src-tauri
+        run: cargo audit --deny warnings
+      # Advisories are left to cargo-audit above: cargo-deny would need a
+      # second ignore list saying the same thing. The root policy applies as
+      # it is to the rest: no openssl/ring, licences, registries.
+      - name: Policy for the desktop dependency tree
+        if: ${{ !cancelled() }}
+        run: >
+          cargo deny --locked
+          --manifest-path apps/hide-desktop/src-tauri/Cargo.toml
+          --config deny.toml
+          check bans licenses sources
 
   # Coverage-guided fuzzing of every parser that sees attacker bytes. Short on
   # every push so a regression that panics on malformed input is caught the
   # same day; the corpus under fuzz/corpus is what makes even 30 s meaningful.
   fuzz:
     runs-on: ubuntu-24.04
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable
@@ -289,10 +452,20 @@ jobs:
       - uses: taiki-e/install-action@3f74d7c16a4242f1c95561e98edc25d36adb4375 # v2
         with:
           tool: cargo-fuzz
+      # cargo-fuzz has no --locked. `cargo metadata --locked` resolves the same
+      # manifest and fails at once when fuzz/Cargo.lock is missing or behind
+      # the crates it depends on, instead of fuzzing a graph nobody committed.
+      - name: fuzz/Cargo.lock is committed and current
+        run: |
+          set -euo pipefail
+          git ls-files --error-unmatch fuzz/Cargo.lock
+          cargo +nightly metadata --locked --manifest-path fuzz/Cargo.toml --format-version 1 > /dev/null
       - name: Seed each corpus with the frozen vectors
         run: |
           set -euo pipefail
-          mkdir -p fuzz/corpus/{format_header,object_open,keyring_open,identity_log,epoch_chain,transparency_proofs,challenge_decode,mls_message,epoch_store,checkpoint_note,identity_bindings}
+          for file in fuzz/fuzz_targets/*.rs; do
+            mkdir -p "fuzz/corpus/$(basename "$file" .rs)"
+          done
           cp conformance/vectors/*.hide fuzz/corpus/format_header/
           cp conformance/vectors/*.hide fuzz/corpus/object_open/
           # Each rejection sits one field away from an accepted container, which
@@ -313,14 +486,27 @@ jobs:
         # rust-toolchain.toml pins stable for the repo; cargo-fuzz needs
         # nightly, so it is named explicitly. The target is named too: the
         # runner's default resolved to musl, and AddressSanitizer cannot link
-        # against a static libc.
+        # against a static libc. The list is the directory, so a new target
+        # cannot be added without being fuzzed here.
         run: |
           set -euo pipefail
-          for target in format_header object_open keyring_open identity_log epoch_chain transparency_proofs challenge_decode mls_message epoch_store checkpoint_note identity_bindings; do
+          for file in fuzz_targets/*.rs; do
+            target=$(basename "$file" .rs)
             echo "::group::$target"
             cargo +nightly fuzz run --target x86_64-unknown-linux-gnu "$target" -- -max_total_time=45 -timeout=60 -rss_limit_mb=2048
             echo "::endgroup::"
           done
+      # Second half of the --locked substitute: if the build had to touch the
+      # lockfile after all, what was fuzzed is not what is committed.
+      - name: The fuzz build left fuzz/Cargo.lock untouched
+        run: |
+          set -euo pipefail
+          changed=$(git status --porcelain -- fuzz/Cargo.lock)
+          if [ -n "$changed" ]; then
+            echo "::error::the fuzz build rewrote fuzz/Cargo.lock: $changed" >&2
+            git --no-pager diff --stat -- fuzz/Cargo.lock
+            exit 1
+          fi
       - name: Keep any crash as an artifact
         if: failure()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7

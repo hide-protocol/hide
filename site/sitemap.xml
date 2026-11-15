@@ -8,4 +8,8 @@
     <loc>https://hide-protocol.github.io/hide/llms.txt</loc>
     <changefreq>weekly</changefreq>
   </url>
+  <url>
+    <loc>https://hide-protocol.github.io/hide/llms-full.txt</loc>
+    <changefreq>weekly</changefreq>
+  </url>
 </urlset>

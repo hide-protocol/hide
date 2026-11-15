@@ -58,10 +58,17 @@ final class Hide
         }
 
         $ffi = Binding::ffi();
+        // Text first: a refused string must not strand the unmanaged copy of
+        // the plaintext made below.
+        $name = Binding::cString($filename, 'filename');
+        try {
+            $media = Binding::cString($mediaType, 'media type');
+        } catch (\Throwable $error) {
+            Binding::release($name);
+            throw $error;
+        }
         $plain = Binding::bytes($plaintext);
         $keys = Binding::bytes($joined);
-        $name = Binding::cString($filename, 'filename');
-        $media = Binding::cString($mediaType, 'media type');
         $out = Binding::emptyBuffer();
 
         try {
@@ -542,8 +549,9 @@ final class Hide
     public static function verifyCheckpoint(string $note, string $origin, string $logPublic): array
     {
         $ffi = Binding::ffi();
-        $bytes = Binding::bytes($note);
+        // Text first: a refused origin must not strand the unmanaged copies below.
         $originText = Binding::cString($origin, 'origin');
+        $bytes = Binding::bytes($note);
         $key = Binding::bytes($logPublic);
         $size = $ffi->new('uint64_t');
         $out = Binding::emptyBuffer();

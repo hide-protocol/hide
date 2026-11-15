@@ -1,0 +1,35 @@
+# Read by `cargo audit` when run from this directory (CI `supply-chain` and the
+# weekly supply-chain workflow do `cargo audit --deny warnings` here, so it
+# scans THIS Cargo.lock, not the root one). The root crates have their own
+# .cargo/audit.toml; this file lists only what the Tauri tree adds.
+#
+# Rule for this list: an advisory is ignored only when no lockfile update can
+# remove it. Anything `cargo update -p X` fixes is fixed, never listed
+# (`cargo update --dry-run -p glib -p glib-macros -p gtk -p urlpattern` moves
+# nothing: tauri 2.11 pins these lines). Dependency paths below come from
+# `cargo tree -i <crate> --manifest-path apps/hide-desktop/src-tauri/Cargo.toml --target all`.
+[advisories]
+ignore = [
+  # glib 0.18.5 <- atk/gtk/gdk/gio/pango/webkit2gtk 0.18 <- tauri 2.11 / wry /
+  # tao / muda. Linux only. The unsound item is glib::VariantStrIter, and no
+  # crate in this lockfile other than glib itself names it (searched the
+  # source of every locked package, 2026-11-11), nor does the desktop crate.
+  # Waits on Tauri leaving the gtk-rs 0.18 (GTK3) line; nothing newer is
+  # reachable by a lockfile update.
+  "RUSTSEC-2024-0429",
+  # proc-macro-error 1.0.4 <- glib-macros 0.18 / gtk3-macros 0.18 <- same GTK
+  # tree as above. A proc-macro crate: it runs in the compiler at build time
+  # and ships no code. Unmaintained; leaves with the gtk-rs 0.18 line.
+  "RUSTSEC-2024-0370",
+  # unic-ucd-ident / unic-char-property / unic-char-range / unic-common /
+  # unic-ucd-version 0.9.0 <- urlpattern 0.3.0 <- tauri-utils 2.9.3. Used to
+  # parse the `remote.urls` patterns of our own capability files (none declare
+  # remote URLs); the input is the repository's JSON, never a user's. The whole
+  # rust-unic family is unmaintained ("no safe upgrade"); it leaves when
+  # tauri-utils moves off urlpattern 0.3.
+  "RUSTSEC-2025-0100",
+  "RUSTSEC-2025-0081",
+  "RUSTSEC-2025-0075",
+  "RUSTSEC-2025-0080",
+  "RUSTSEC-2025-0098",
+]

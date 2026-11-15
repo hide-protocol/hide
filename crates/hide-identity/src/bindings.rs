@@ -122,6 +122,49 @@ impl RecoveryBinding {
         }
         self.verify(entries)
     }
+
+    /// The call a relying party makes when it may hold more than one binding for
+    /// the same identity. A founder key compromised later can sign a *second*
+    /// binding naming its own recovery key, so an attacker can present both; the
+    /// spec (§16.1) requires the verifier to refuse rather than pick one.
+    ///
+    /// Every binding is checked under the entry-0 key. Two that verify and name
+    /// different recovery keys are a conflict; none is `BadBinding`.
+    pub fn verify_pinned_all(
+        bindings: &[Self],
+        entries: Vec<Entry>,
+        pinned_root: &[u8; 32],
+    ) -> Result<IdentityLog, IdentityError> {
+        let founder = founder_key(&entries)?;
+        if entries.first().map(|entry| entry.link) != Some(*pinned_root) {
+            return Err(IdentityError::WrongIdentity);
+        }
+        let mut chosen: Option<&Self> = None;
+        for binding in bindings {
+            if &binding.root != pinned_root {
+                return Err(IdentityError::WrongIdentity);
+            }
+            // Only a binding the founder actually signed carries authority.
+            if founder
+                .verify(
+                    RECOVERY_BINDING_CONTEXT,
+                    &recovery_message(&binding.root, &binding.recovery_key),
+                    &binding.signature,
+                )
+                .is_err()
+            {
+                continue;
+            }
+            match chosen {
+                Some(previous) if previous.recovery_key != binding.recovery_key => {
+                    return Err(IdentityError::ConflictingBindings);
+                }
+                Some(_) => {}
+                None => chosen = Some(binding),
+            }
+        }
+        chosen.ok_or(IdentityError::BadBinding)?.verify(entries)
+    }
 }
 
 /// A trusted device's statement "at identity history H, my epoch chain is C,

@@ -24,6 +24,10 @@ has uncommitted changes.
 Node is only needed for these hooks and for the independent verifier; the
 protocol itself is pure Rust.
 
+The toolchain is pinned to `stable` in `rust-toolchain.toml`; the minimum
+supported Rust version is 1.88 (`rust-version` in the root `Cargo.toml`), and CI
+checks that the workspace still builds with it.
+
 ```powershell
 cargo test --workspace --all-features
 cargo fmt --all --check
@@ -43,7 +47,9 @@ node verify.mjs
 These exist because breaking them silently is easy and the failure is invisible:
 
 - **No new cryptographic primitives**, and no hand-rolled KEM combiner. Compose
-  reviewed crates.
+  existing crates (RustCrypto, `hpke`) and pin them to an exact version. None of
+  the post-quantum crates has had an independent audit, by their own READMEs, so
+  "use a crate" is not the same as "use audited code".
 - **Secrets never derive `Debug`, `Clone` or `Serialize`**, and they zeroize on
   drop.
 - **Validate limits before allocating** from any length field in untrusted input.
@@ -66,10 +72,15 @@ them fail, that is a protocol change, and it must be deliberate:
    still implementable from the spec alone.
 4. Update `spec/hide-1.md` in the same PR.
 
-While the version is 0.x, breaking the format is allowed. After 1.0 it is not.
+The format is frozen since 0.9.0. Before 1.0 it changes only to fix a security
+flaw; a change for any other reason is not accepted. A change that does happen
+is recorded in the specification's change log (`spec/hide-1.md`, Appendix B)
+and in the CHANGELOG, and restarts the one-year clock that
+[docs/stability.md](docs/stability.md) requires before 1.0.
 
 The **rejection vectors** under `conformance/vectors/rejections/` are frozen too.
-Each is a container that MUST be refused, with the reason in `rejections.txt`;
+Each is a container or key file that MUST be refused, with the reason in
+`conformance/vectors/rejections/rejections.txt`;
 both the Rust tests and `conformance/node/verify.mjs` consume them. A new
 class of malformed input should get a vector there, regenerated with
 `cargo run -p hide-object --features test-vectors --example generate_rejections`.
@@ -94,16 +105,38 @@ duplication, trailing bytes, oversized lengths, and single-byte mutations.
 
 ### Fuzzing
 
-Six libFuzzer targets live in `fuzz/` and run in CI on every push. Locally:
+Eleven libFuzzer targets live in `fuzz/fuzz_targets/`: `format_header`,
+`object_open`, `keyring_open`, `identity_log`, `epoch_chain`,
+`transparency_proofs`, `challenge_decode`, `mls_message`, `epoch_store`,
+`checkpoint_note` and `identity_bindings`. CI runs each for 45 seconds on every
+push and for four hours every night. Every decoder of untrusted bytes needs
+one. CI and the nightly job fuzz on Linux; on Windows, run this inside WSL:
 
-```powershell
-cd fuzz
-cargo +nightly fuzz run format_header    # or object_open, keyring_open,
-                                         # identity_log, epoch_chain, transparency_proofs
+```sh
+cargo +nightly fuzz run --target x86_64-unknown-linux-gnu format_header -- \
+  -max_total_time=60 -timeout=60 -rss_limit_mb=2048
 ```
+
+The explicit `--target` matters: without it the build can resolve to musl,
+and AddressSanitizer cannot link a static libc.
 
 A crash input belongs in a regression test, and usually also in
 `conformance/vectors/rejections/`.
+
+## Reporting a vulnerability
+
+Not in a pull request or a public issue. Use the private advisory form
+(<https://github.com/hide-protocol/hide/security/advisories/new>) or mail
+<hide-security@codai.ro>; [SECURITY.md](SECURITY.md) has the details.
+
+## Licence of contributions
+
+By submitting a contribution you agree that it is licensed under Apache-2.0
+(Section 5 of the licence), and you certify the Developer Certificate of Origin
+1.1 (<https://developercertificate.org>) by adding
+`Signed-off-by: Name <email>` to each commit (`git commit -s`). Commit names and
+email addresses become a permanent, public part of the history; use your GitHub
+noreply address if you prefer.
 
 ## Commits and PRs
 

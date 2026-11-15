@@ -1,0 +1,8 @@
+{
+  "bundle": {
+    "resources": {
+      "../../../LICENSE": "LICENSE",
+      "target/hide-release/THIRD-PARTY-LICENSES.txt": "THIRD-PARTY-LICENSES.txt"
+    }
+  }
+}

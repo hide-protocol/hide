@@ -14,6 +14,7 @@ prove who created it.
 from __future__ import annotations
 
 import ctypes
+import threading
 from dataclasses import dataclass
 from typing import Sequence
 
@@ -136,7 +137,46 @@ def _take_text(buffer: _b.Buffer) -> str | None:
     return raw.decode("utf-8", "replace") if raw else None
 
 
-class SecretKey:
+def _cstring(value: str, what: str) -> bytes:
+    """Encodes text for a ``const char*`` parameter.
+
+    C strings end at the first NUL, so ``"longenough\\0rest"`` would reach the
+    core as ``"longenough"`` and a key would be sealed under a passphrase the
+    caller never chose. Every text argument goes through here.
+    """
+    if not isinstance(value, str):
+        raise TypeError(f"{what} must be a str, not {type(value).__name__}")
+    encoded = value.encode()
+    if b"\0" in encoded:
+        raise ValueError(f"{what} must not contain a NUL character")
+    return encoded
+
+
+def _optional_cstring(value: str | None, what: str) -> bytes | None:
+    return None if value is None else _cstring(value, what)
+
+
+class _Handle:
+    """Shared refusal of copying for every object that owns a native pointer.
+
+    A copy would hold the same pointer, and the first of the two to be closed
+    or collected would free it under the other: use after free, then a double
+    free. Nothing about a copy can be made safe, so every route is closed.
+    """
+
+    __slots__ = ()
+
+    def __copy__(self) -> "_Handle":
+        raise TypeError(f"{type(self).__name__} cannot be copied")
+
+    def __deepcopy__(self, memo: object) -> "_Handle":
+        raise TypeError(f"{type(self).__name__} cannot be copied")
+
+    def __reduce_ex__(self, protocol: object) -> object:
+        raise TypeError(f"{type(self).__name__} cannot be pickled")
+
+
+class SecretKey(_Handle):
     """A secret key. The bytes stay in the native library and are never exposed.
 
     Release it with ``close()`` or a ``with`` block; it is also released when
@@ -164,7 +204,7 @@ class SecretKey:
             _b.lib.hide_secret_key_open(
                 data,
                 len(data),
-                passphrase.encode() if passphrase is not None else None,
+                _optional_cstring(passphrase, "passphrase"),
                 ctypes.byref(handle),
             )
         )
@@ -189,7 +229,7 @@ class SecretKey:
         out = _b.lib.hide_buffer_empty()
         _check(
             _b.lib.hide_secret_key_protect(
-                self._handle, passphrase.encode(), ctypes.byref(out)
+                self._handle, _cstring(passphrase, "passphrase"), ctypes.byref(out)
             )
         )
         return _take(out)
@@ -252,8 +292,8 @@ def encrypt(
             len(plaintext),
             bytes(joined),
             len(recipients),
-            filename.encode() if filename else None,
-            media_type.encode() if media_type else None,
+            _optional_cstring(filename or None, "filename"),
+            _optional_cstring(media_type or None, "media_type"),
             ctypes.byref(out),
         )
     )
@@ -266,6 +306,8 @@ def decrypt(container: bytes, secret: SecretKey) -> Decrypted:
     Nothing is returned unless the whole payload authenticates. The filename is
     attacker-controlled: never use it to choose an output path.
     """
+    if not isinstance(secret, SecretKey):
+        raise TypeError(f"secret must be a SecretKey, not {type(secret).__name__}")
     secret._alive()
     out = _b.lib.hide_buffer_empty()
     filename = _b.lib.hide_buffer_empty()
@@ -298,7 +340,7 @@ def armor_public_key(public_key: bytes) -> str:
 
 def dearmor_public_key(text: str) -> bytes:
     out = _b.lib.hide_buffer_empty()
-    _check(_b.lib.hide_public_key_dearmor(text.encode(), ctypes.byref(out)))
+    _check(_b.lib.hide_public_key_dearmor(_cstring(text, "text"), ctypes.byref(out)))
     return _take(out)
 
 
@@ -313,7 +355,7 @@ SIGNATURE_LEN = _b.SIGNATURE_LEN
 VERIFYING_KEY_LEN = _b.VERIFYING_KEY_LEN
 
 
-class SigningIdentity:
+class SigningIdentity(_Handle):
     """A signing key. The seed stays in the native library and is never exposed.
 
     A key file written before signatures existed carries no signing seed and
@@ -337,7 +379,11 @@ class SigningIdentity:
                 f"the passphrase must be at least {MIN_PASSPHRASE_LEN} characters"
             )
         out = _b.lib.hide_buffer_empty()
-        _check(_b.lib.hide_identity_generate(passphrase.encode(), ctypes.byref(out)))
+        _check(
+            _b.lib.hide_identity_generate(
+                _cstring(passphrase, "passphrase"), ctypes.byref(out)
+            )
+        )
         return _take(out)
 
     @classmethod
@@ -347,7 +393,7 @@ class SigningIdentity:
             _b.lib.hide_signing_identity_open(
                 data,
                 len(data),
-                passphrase.encode() if passphrase is not None else None,
+                _optional_cstring(passphrase, "passphrase"),
                 ctypes.byref(handle),
             )
         )
@@ -441,23 +487,29 @@ def new_challenge(audience: str, now: int, valid_for: int) -> bytes:
     out = _b.lib.hide_buffer_empty()
     _check(
         _b.lib.hide_challenge_new(
-            audience.encode(), now, valid_for, ctypes.byref(out)
+            _cstring(audience, "audience"), now, valid_for, ctypes.byref(out)
         )
     )
     return _take(out)
 
 
-class SpentNonces:
+class SpentNonces(_Handle):
     """The verifier's record of answered challenges.
 
     Replay can only be detected by the verifier: a replayed answer is a
     genuine signature and nothing about it is invalid on its own. This must
     therefore outlive a single request.
+
+    One record may be shared between threads: ``accept`` holds a per-object
+    lock around the native call, which mutates the record and is not
+    synchronised on the native side. ctypes releases the GIL during the call,
+    so without the lock two threads could both accept the same answer.
     """
 
-    __slots__ = ("_handle",)
+    __slots__ = ("_handle", "_lock")
 
     def __init__(self) -> None:
+        self._lock = threading.Lock()
         self._handle = ctypes.c_void_p(_b.lib.hide_spent_nonces_new())
         if not self._handle:
             raise HideError("could not allocate the nonce record")
@@ -470,19 +522,24 @@ class SpentNonces:
         Raises :class:`ChallengeReplayed` the second time, :class:`ChallengeExpired`
         after the window, and :class:`AuthenticationError` if it does not verify.
         """
-        if not getattr(self, "_handle", None):
-            raise ValueError("this record has been closed")
-        _check(
-            _b.lib.hide_challenge_accept(
-                self._handle, challenge, len(challenge), signature, len(signature),
-                public_key, len(public_key), now,
+        with self._lock:
+            if not getattr(self, "_handle", None):
+                raise ValueError("this record has been closed")
+            _check(
+                _b.lib.hide_challenge_accept(
+                    self._handle, challenge, len(challenge), signature, len(signature),
+                    public_key, len(public_key), now,
+                )
             )
-        )
 
     def close(self) -> None:
-        if getattr(self, "_handle", None):
-            _b.lib.hide_spent_nonces_free(self._handle)
-            self._handle = None
+        lock = getattr(self, "_lock", None)
+        if lock is None:
+            return
+        with lock:
+            if getattr(self, "_handle", None):
+                _b.lib.hide_spent_nonces_free(self._handle)
+                self._handle = None
 
     def __enter__(self) -> "SpentNonces":
         return self
@@ -669,9 +726,7 @@ def verify_checkpoint(note: bytes, origin: str, log_public: bytes) -> tuple[int,
     :class:`AuthenticationError` when the note was altered, names another
     origin, or is not signed under ``log_public``.
     """
-    encoded = origin.encode()
-    if b"\0" in encoded:
-        raise ValueError("origin must not contain a NUL byte")
+    encoded = _cstring(origin, "origin")
     size = ctypes.c_uint64(0)
     root = _b.lib.hide_buffer_empty()
     _check(

@@ -14,9 +14,11 @@ dotnet add package HideProtocol
 
 One nupkg carries the compiled core for all seven runtime identifiers under
 `runtimes/<rid>/native/`: `linux-x64`, `linux-arm64`, `linux-musl-x64`,
-`win-x64`, `win-arm64`, `osx-x64`, `osx-arm64`. The runtime picks the right
-one; no toolchain is needed. On any other platform, build the core yourself and
-point the binding at it (see [Native library](#native-library)).
+`win-x64`, `win-arm64`, `osx-x64`, `osx-arm64`. The binding picks the right
+one; no toolchain is needed. On any other platform the first call throws
+`PlatformNotSupportedException` naming the runtime identifier; build the core
+yourself and point the binding at it (see [Native library](#native-library)).
+The package also carries the Apache-2.0 `LICENSE` text.
 
 ## Quick start
 
@@ -49,8 +51,14 @@ recipient public keys, each exactly `Hide.PublicKeyLength` (1216) bytes.
 `Hide.Decrypt` returns a `Decrypted` record with `Plaintext`, `FileName` and
 `MediaType`; nothing is returned unless the whole payload authenticates.
 `FileName` is attacker-controlled: never use it to choose an output path.
-Metadata passed *into* `Encrypt` may not contain a NUL byte; it is rejected
-rather than silently truncated.
+
+**Text arguments must not contain a NUL character.** Passphrases, the
+filename, the media type, the challenge audience, armored key text and the
+checkpoint origin cross the C boundary NUL-terminated, so a `string` carrying
+`'\0'` would be silently cut at it: a key would be sealed under the part of the
+passphrase before the NUL. Such a string throws `ArgumentException` instead.
+Binary arguments (`ReadOnlySpan<byte>`: plaintext, context, message, keys) may
+contain any byte.
 
 Keys on disk: `secret.Protect(passphrase)` returns a sealed key file
 (`Hide.MinPassphraseLength` is 8, and there is no escrow); `SecretKey.Open(bytes,
@@ -119,13 +127,28 @@ is verified first, so `false` means "not a member", never "did not verify".
 
 ## Native library
 
-The core is located in this order:
+The core is always loaded from an **absolute path**, found in this order:
 
 1. `HIDE_LIBRARY`, if it names a file **and** `HIDE_ALLOW_LIBRARY_OVERRIDE=1`
-   is also set;
-2. `hide_ffi.dll` / `libhide_ffi.dylib` / `libhide_ffi.so` beside the assembly
-   — the package's `runtimes/<rid>/native/` copy lands here;
-3. the platform's default probing paths.
+   is also set. Without the opt-in it is ignored, whatever it names;
+2. `hide_ffi.dll` / `libhide_ffi.dylib` / `libhide_ffi.so` beside the
+   application or beside the `HideProtocol` assembly, or in
+   `runtimes/<rid>/native/` under either — where the package's copy lands on
+   build and publish;
+3. `runtimes/<rid>/native/` of the NuGet package folder the assembly was
+   loaded from.
+
+If none of these has it, the first call throws `DllNotFoundException` saying
+what was searched. The library is **never** looked up by name through the
+system loader: the working directory, `PATH` and `LD_LIBRARY_PATH` /
+`DYLD_LIBRARY_PATH` are not searched, because whoever controls one of those
+would otherwise choose the cryptographic core. (The assembly also sets
+`DefaultDllImportSearchPaths(AssemblyDirectory | SafeDirectories)`.)
+
+The library must be the same release as the binding: at load the binding
+compares `hide_version()` with its own assembly version (exact
+major.minor.patch) and throws `HideException` on a mismatch, because a stale
+core would load and silently lack whatever the newer release enforces.
 
 `HIDE_LIBRARY` is a development override: it replaces the entire cryptographic
 core, so a single settable environment variable must not be enough to redirect
@@ -151,6 +174,24 @@ accessor for them; `ToString()` renders nothing derived from the key. Release
 with `Dispose()` or a `using` statement; a finalizer backstops it, but relying
 on it keeps key material in memory for an unbounded time. A disposed handle
 throws `ObjectDisposedException` on use.
+
+Each handle wraps a `SafeHandle`, so the native object cannot be freed — by
+the finalizer, or by `Dispose()` on another thread — while a call that uses it
+is still running; the release waits for that call to return.
+
+## Threads
+
+Every static method of `Hide` is safe to call from any number of threads.
+
+`SpentNonces` is safe for concurrent use: `Accept` serialises on an internal
+lock, so one record can be shared by every request thread (register it as a
+singleton), and an answer presented by many threads at once is accepted by
+exactly one of them. The record is in-process memory: it is not shared between
+processes and does not survive a restart, so replay protection across several
+server instances needs the accepted nonces in shared storage as well.
+
+`SecretKey` and `SigningIdentity` may be used from several threads at once;
+the core only reads them.
 
 ## Limits
 

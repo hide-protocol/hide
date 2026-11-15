@@ -4,10 +4,11 @@ use hide_crypto::{
     ChunkCipher, ContentKey, CryptoError, DerivedKey, RecipientPublic, RecipientSecret,
 };
 use hide_format::{
-    CHUNK_LEN, FormatError, MAX_RECIPIENTS, PREAMBLE_LEN, RecipientStanza, SUITE, SignatureStanza,
-    TAG_LEN,
+    CHUNK_LEN, MAX_RECIPIENTS, PREAMBLE_LEN, RecipientStanza, SUITE, SignatureStanza, TAG_LEN,
 };
-pub use hide_format::{Extension, Metadata, Preamble, ProtectedHeader, Stanza, UnknownStanza};
+pub use hide_format::{
+    Extension, FormatError, Metadata, Preamble, ProtectedHeader, Stanza, UnknownStanza,
+};
 use hide_sign::{SigningIdentity, VerifyingIdentity};
 use thiserror::Error;
 use zeroize::Zeroizing;
@@ -183,6 +184,7 @@ fn encrypt_with_material<R: Read, W: Write>(
 pub struct VectorShape {
     pub minor: u8,
     pub header_extensions: Vec<hide_format::Extension>,
+    pub metadata_extensions: Vec<hide_format::Extension>,
     pub leading_stanzas: Vec<Stanza>,
 }
 
@@ -191,6 +193,7 @@ impl Default for VectorShape {
         Self {
             minor: hide_format::CURRENT_MINOR,
             header_extensions: Vec::new(),
+            metadata_extensions: Vec::new(),
             leading_stanzas: Vec::new(),
         }
     }
@@ -291,9 +294,20 @@ fn encrypt_inner<R: Read, W: Write>(
     // Signing needs the plaintext hash, which is only known once the payload has
     // been consumed, so the container is built in memory and written at the end.
     // Bounded, because a signed encrypt is the one path that cannot stream.
+    // Metadata extension keys are writer-controlled and a 1.0 writer MUST NOT
+    // emit them (spec 4). The public API takes the caller's Metadata, so a
+    // caller that pre-set one, or a signature, is refused rather than obeyed.
+    if !metadata.extensions.is_empty() || metadata.signature.is_some() {
+        return Err(FormatError::InvalidMetadata.into());
+    }
+    // The only writer that may grease the metadata is the vector generator,
+    // through the shape; production never reaches this with a non-empty shape.
+    let mut metadata = metadata.clone();
+    metadata.extensions = shape.metadata_extensions.clone();
+
     let mut plaintext = Zeroizing::new(Vec::new());
     let (metadata, plaintext_hash, plaintext_len) = match signer {
-        None => (metadata.clone(), None, None),
+        None => (metadata, None, None),
         Some(_) => {
             input
                 .take(MAX_SIGNED_INPUT + 1)
@@ -302,7 +316,7 @@ fn encrypt_inner<R: Read, W: Write>(
                 return Err(ObjectError::ObjectTooLarge);
             }
             let hash = hide_crypto::hash(&[&plaintext]);
-            (metadata.clone(), Some(hash), Some(plaintext.len() as u64))
+            (metadata, Some(hash), Some(plaintext.len() as u64))
         }
     };
 
@@ -1052,6 +1066,33 @@ mod tests {
             assert_eq!(verified.metadata, metadata);
         }
         assert!(!ciphertext.windows(9).any(|window| window == b"hello.txt"));
+        Ok(())
+    }
+
+    /// A caller cannot pre-set a metadata signature; the writer owns that field.
+    #[test]
+    fn a_writer_refuses_a_preset_metadata_signature() -> Result<(), ObjectError> {
+        let secret = RecipientSecret::generate()?;
+        let metadata = Metadata {
+            filename: None,
+            media_type: None,
+            signature: Some(SignatureStanza {
+                verifying_key: vec![0; 1984],
+                signature: vec![0; 3373],
+            }),
+            extensions: Vec::new(),
+        };
+        let error = encrypt(
+            &mut b"x".as_slice(),
+            &mut Vec::new(),
+            &[secret.public_key()?],
+            &metadata,
+        )
+        .unwrap_err();
+        assert!(
+            matches!(error, ObjectError::Format(FormatError::InvalidMetadata)),
+            "{error:?}"
+        );
         Ok(())
     }
 

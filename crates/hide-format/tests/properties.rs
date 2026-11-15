@@ -64,10 +64,10 @@ proptest! {
         let _ = ProtectedHeader::decode(&bytes);
         let _ = decode_header(&bytes);
         let _ = Metadata::decode(&bytes);
-        if bytes.len() >= PREAMBLE_LEN {
-            if let Ok(preamble) = Preamble::decode(&bytes[..PREAMBLE_LEN]) {
-                prop_assert!(preamble.header_len() <= MAX_HEADER_LEN);
-            }
+        if bytes.len() >= PREAMBLE_LEN
+            && let Ok(preamble) = Preamble::decode(&bytes[..PREAMBLE_LEN])
+        {
+            prop_assert!(preamble.header_len() <= MAX_HEADER_LEN);
         }
     }
 

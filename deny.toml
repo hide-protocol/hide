@@ -9,12 +9,9 @@ all-features = true
 [advisories]
 version = 2
 yanked = "deny"
-# Keep in sync with .cargo/audit.toml (read by `cargo audit`).
-ignore = [
-  # crypto-bigint 0.5.5 via mls-rs-crypto-rustcrypto 0.22.1 -> p256/p384 only;
-  # the fix is semver-incompatible and hide-mls uses CURVE25519_AES128 alone.
-  { id = "RUSTSEC-2026-0387", reason = "P-256/P-384 path unused (SUITE = CURVE25519_AES128); waits on mls-rs-crypto-rustcrypto" },
-]
+# Keep in sync with .cargo/audit.toml (read by `cargo audit`): every ignore
+# needs the same written reason in both files. None today.
+ignore = []
 
 [licenses]
 version = 2
@@ -42,14 +39,18 @@ confidence-threshold = 0.8
 # Two versions of one crate double the audit surface and the binary; when it
 # happens it should be a decision, listed below, not an accident.
 multiple-versions = "warn"
-# Every duplicate today (sha2, chacha20poly1305, *-dalek, rand_core, getrandom
-# and their transitive deps) is the previous RustCrypto generation pulled in by
-# mls-rs-crypto-rustcrypto 0.22, which has not moved yet. Skipping that one
-# tree keeps the warning meaningful: anything else duplicating is new drift.
-skip-tree = [{ crate = "mls-rs-crypto-rustcrypto", depth = 20 }]
-# hpke 0.14.1 uses sha3 0.12 itself and ml-kem 0.3.2 (its dependency) still
-# uses 0.11. Upstream mismatch; goes away when ml-kem releases against 0.12.
-skip = [{ crate = "sha3@0.11.0", reason = "ml-kem 0.3.2 lags hpke on sha3" }]
+# mls-rs-crypto-rustcrypto 0.23 moved to the current RustCrypto generation, so
+# the old skip-tree for it is gone. Each duplicate left is attributed below;
+# anything else duplicating is new drift.
+skip = [
+  # hpke 0.15.1 uses sha3 0.12 itself and ml-kem 0.3.2 (its dependency) still
+  # uses 0.11. Upstream mismatch; goes away when ml-kem releases against 0.12.
+  { crate = "sha3@0.11.0", reason = "ml-kem 0.3.2 lags hpke on sha3" },
+  # proptest 1.11 (dev-dependency only, never shipped) is still on rand 0.9.
+  { crate = "rand@0.9.5", reason = "proptest 1.11, dev-only" },
+  { crate = "rand_core@0.9.5", reason = "proptest 1.11, dev-only" },
+  { crate = "getrandom@0.3.4", reason = "proptest 1.11 via rand_core 0.9, dev-only" },
+]
 # Path-only dependencies inside the workspace have no version field and would
 # count as wildcards; those are not published (hide-wasm) or are dev-only.
 wildcards = "deny"

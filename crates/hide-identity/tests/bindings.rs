@@ -303,3 +303,74 @@ fn bindings_are_framing_independent() {
         "the head is a link, not a hash of the encoding"
     );
 }
+
+/// §16.1: a founder key compromised *later* can sign a second binding naming its
+/// own recovery key. A verifier holding both must refuse rather than pick one,
+/// which is what stops an attacker from choosing the key that serves them.
+#[test]
+fn two_valid_bindings_with_different_recovery_keys_are_a_conflict() {
+    let w = world();
+    let attacker_recovery = key(4);
+    let mut message = Vec::new();
+    message.extend_from_slice(&w.log.root());
+    message.extend_from_slice(&attacker_recovery.verifying_key().to_bytes());
+    let second = RecoveryBinding {
+        root: w.log.root(),
+        recovery_key: attacker_recovery.verifying_key(),
+        signature: w.laptop.sign(RECOVERY_BINDING_CONTEXT, &message).to_vec(),
+    };
+    let entries = w.log.entries().to_vec();
+
+    // Each binding, alone, is a valid statement by the founder.
+    assert!(
+        w.binding
+            .clone()
+            .verify_pinned(entries.clone(), &w.log.root())
+            .is_ok()
+    );
+    assert!(
+        second
+            .clone()
+            .verify_pinned(entries.clone(), &w.log.root())
+            .is_ok()
+    );
+
+    // Together they are ambiguous, and the verifier must not choose.
+    assert_eq!(
+        err(RecoveryBinding::verify_pinned_all(
+            &[w.binding.clone(), second.clone()],
+            entries.clone(),
+            &w.log.root(),
+        )),
+        IdentityError::ConflictingBindings
+    );
+
+    // One binding, or the same binding twice, is not a conflict.
+    assert!(
+        RecoveryBinding::verify_pinned_all(
+            std::slice::from_ref(&w.binding),
+            entries.clone(),
+            &w.log.root(),
+        )
+        .is_ok()
+    );
+    assert!(
+        RecoveryBinding::verify_pinned_all(
+            &[w.binding.clone(), w.binding.clone()],
+            entries.clone(),
+            &w.log.root(),
+        )
+        .is_ok()
+    );
+
+    // A second binding the founder did not sign is ignored, not a conflict.
+    let forged = RecoveryBinding {
+        root: w.log.root(),
+        recovery_key: attacker_recovery.verifying_key(),
+        signature: vec![0; 3373],
+    };
+    assert!(
+        RecoveryBinding::verify_pinned_all(&[w.binding.clone(), forged], entries, &w.log.root())
+            .is_ok()
+    );
+}

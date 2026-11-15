@@ -1072,18 +1072,58 @@ fn share(public_path: &Path) -> Result<()> {
 
 fn change_passphrase(secret_path: &Path) -> Result<()> {
     let bytes = read_bounded(secret_path, MAX_KEY_FILE)?;
-    let secret = match hide_keyring::inspect(&bytes) {
+    let current = match hide_keyring::inspect(&bytes) {
         KeyFormat::Raw => {
             eprintln!("This key is currently unencrypted; setting a passphrase.");
-            RecipientSecret::from_bytes(&bytes)?
+            None
         }
-        KeyFormat::Protected => {
-            let current = prompt_passphrase("Current passphrase: ")?;
-            hide_keyring::unprotect(&bytes, &current)?
-        }
+        KeyFormat::Protected => Some(prompt_passphrase("Current passphrase: ")?),
     };
     let passphrase = prompt_new_passphrase()?;
-    let sealed = hide_keyring::protect(&secret, &passphrase)?;
+    reseal_key(
+        secret_path,
+        &bytes,
+        current.as_ref().map(|current| current.as_str()),
+        &passphrase,
+    )?;
+    eprintln!("Passphrase changed.");
+    Ok(())
+}
+
+/// Re-seals a key file with a new passphrase and replaces it in place. Split
+/// from the prompting so it can be exercised without a terminal.
+///
+/// The purpose the file already carries is kept. Re-sealing a raw master seed
+/// as an encryption-only key would silently change the key: containers sent to
+/// the published public key stop opening and signing is lost, although the seed
+/// is still inside the file (spec 9.2 requires deriving from it).
+fn reseal_key(
+    secret_path: &Path,
+    bytes: &[u8],
+    current: Option<&str>,
+    passphrase: &str,
+) -> Result<()> {
+    let (seed, purpose) = match hide_keyring::inspect(bytes) {
+        KeyFormat::Raw => {
+            if bytes.len() != 32 {
+                return Err("a raw secret key file must be exactly 32 bytes".into());
+            }
+            let mut seed = Zeroizing::new([0u8; 32]);
+            seed.copy_from_slice(bytes);
+            (seed, KeyPurpose::Identity)
+        }
+        KeyFormat::Protected => {
+            let current =
+                current.ok_or("this key is protected; a current passphrase is required")?;
+            hide_keyring::unprotect_seed(bytes, current)?
+        }
+    };
+    let sealed = match purpose {
+        KeyPurpose::Identity => hide_keyring::protect_identity(&seed, passphrase)?,
+        KeyPurpose::Encryption => {
+            hide_keyring::protect(&RecipientSecret::from_bytes(&seed[..])?, passphrase)?
+        }
+    };
 
     // Write beside the original and replace it, so a crash cannot lose the key.
     let parent = secret_path
@@ -1098,7 +1138,6 @@ fn change_passphrase(secret_path: &Path) -> Result<()> {
     staging.as_file().sync_all()?;
     staging.persist(secret_path)?;
     sync_directory(parent)?;
-    eprintln!("Passphrase changed.");
     Ok(())
 }
 
@@ -1162,7 +1201,12 @@ fn identity_create(secret: &Path, recovery: &Path, label: &str, output: &Path) -
     let founder = load_signing_identity(secret)?;
     let recovery_key = load_verifying_identity(recovery)?;
     let log = IdentityLog::create(&founder, label, &recovery_key)?;
-    write_public_file(output, &hide_identity::encode(log.entries())?)?;
+    // A fresh identity replaces the whole device history and its root, so it
+    // must not clobber an existing log by accident (README: never overwrite).
+    // Later entries (enrol, revoke) intentionally grow the log in place.
+    let mut staging = new_output(output)?;
+    staging.write_all(&hide_identity::encode(log.entries())?)?;
+    commit_output(staging, output)?;
     eprintln!(
         "Identity created with one device. Head {}.",
         short_hex(&log.head())
@@ -1613,5 +1657,118 @@ mod epoch_tests {
             std::fs::read(workspace.path("epochs.store")).unwrap(),
             before
         );
+    }
+}
+
+#[cfg(test)]
+mod key_tests {
+    use super::*;
+
+    /// The X-Wing recipient public key a key file yields, derived exactly as
+    /// `load_key` does but without a terminal prompt.
+    fn public_from_file(path: &Path, passphrase: &str) -> Vec<u8> {
+        let bytes = std::fs::read(path).expect("read key file");
+        let (seed, purpose) = match hide_keyring::inspect(&bytes) {
+            KeyFormat::Raw => {
+                let mut seed = [0u8; 32];
+                seed.copy_from_slice(&bytes);
+                (seed, KeyPurpose::Identity)
+            }
+            KeyFormat::Protected => {
+                let (seed, purpose) = hide_keyring::unprotect_seed(&bytes, passphrase).unwrap();
+                (*seed, purpose)
+            }
+        };
+        let secret = match purpose {
+            KeyPurpose::Identity => Identity::from_seed(Zeroizing::new(seed))
+                .recipient_secret()
+                .unwrap(),
+            KeyPurpose::Encryption => RecipientSecret::from_bytes(&seed).unwrap(),
+        };
+        secret.public_key().unwrap().to_bytes().to_vec()
+    }
+
+    /// A passphrase change must never alter the key the file stands for, for any
+    /// shape of file. Re-sealing a raw master seed as encryption-only used to
+    /// silently produce a different key (containers stopped opening).
+    #[test]
+    fn changing_the_passphrase_keeps_the_key_for_every_file_shape() {
+        let directory = tempfile::tempdir().unwrap();
+        let identity = Identity::generate().unwrap();
+        let seed = *identity.expose_seed_for_sealing();
+        let expected = identity
+            .recipient_secret()
+            .unwrap()
+            .public_key()
+            .unwrap()
+            .to_bytes()
+            .to_vec();
+
+        // A raw 32-byte master seed, as `keygen --insecure-plaintext` writes.
+        let raw = directory.path().join("raw.sec");
+        std::fs::write(&raw, seed).unwrap();
+        let bytes = std::fs::read(&raw).unwrap();
+        reseal_key(&raw, &bytes, None, "new passphrase").unwrap();
+        assert!(matches!(
+            hide_keyring::inspect(&std::fs::read(&raw).unwrap()),
+            KeyFormat::Protected
+        ));
+        assert_eq!(
+            public_from_file(&raw, "new passphrase"),
+            expected,
+            "a raw master seed must keep its key"
+        );
+
+        // A protected identity file, as `keygen` writes by default.
+        let protected = directory.path().join("identity.sec");
+        std::fs::write(
+            &protected,
+            hide_keyring::protect_identity(&seed, "old passphrase").unwrap(),
+        )
+        .unwrap();
+        let bytes = std::fs::read(&protected).unwrap();
+        reseal_key(&protected, &bytes, Some("old passphrase"), "new passphrase").unwrap();
+        let (_, purpose) =
+            hide_keyring::unprotect_seed(&std::fs::read(&protected).unwrap(), "new passphrase")
+                .unwrap();
+        assert_eq!(purpose, KeyPurpose::Identity, "the purpose must survive");
+        assert_eq!(
+            public_from_file(&protected, "new passphrase"),
+            expected,
+            "an identity file must keep its key"
+        );
+
+        // A protected legacy-style encryption-only file.
+        let legacy = directory.path().join("recipient.sec");
+        let recipient = RecipientSecret::from_bytes(&seed).unwrap();
+        std::fs::write(
+            &legacy,
+            hide_keyring::protect(&recipient, "old passphrase").unwrap(),
+        )
+        .unwrap();
+        let bytes = std::fs::read(&legacy).unwrap();
+        reseal_key(&legacy, &bytes, Some("old passphrase"), "new passphrase").unwrap();
+        let (_, purpose) =
+            hide_keyring::unprotect_seed(&std::fs::read(&legacy).unwrap(), "new passphrase")
+                .unwrap();
+        assert_eq!(purpose, KeyPurpose::Encryption, "the purpose must survive");
+    }
+
+    #[test]
+    fn a_wrong_current_passphrase_leaves_the_file_untouched() {
+        let directory = tempfile::tempdir().unwrap();
+        let seed = *Identity::generate().unwrap().expose_seed_for_sealing();
+        let path = directory.path().join("identity.sec");
+        std::fs::write(
+            &path,
+            hide_keyring::protect_identity(&seed, "old passphrase").unwrap(),
+        )
+        .unwrap();
+        let before = std::fs::read(&path).unwrap();
+        assert!(
+            reseal_key(&path, &before, Some("wrong passphrase"), "new passphrase").is_err(),
+            "a wrong current passphrase must be refused"
+        );
+        assert_eq!(std::fs::read(&path).unwrap(), before);
     }
 }

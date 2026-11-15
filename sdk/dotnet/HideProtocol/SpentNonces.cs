@@ -4,18 +4,27 @@ namespace HideProtocol;
 /// The verifier's record of answered challenges. Replay can only be detected by
 /// the verifier — a replayed answer is a genuine signature and nothing about it
 /// is invalid on its own — so this must outlive a single request.
+///
+/// Safe for concurrent use: <see cref="Accept"/> serialises on an internal
+/// lock, so one record can be shared by every request thread. The record is
+/// in-process memory; it is not shared across processes or restarts.
 /// </summary>
 public sealed unsafe class SpentNonces : IDisposable
 {
-    private IntPtr _handle;
+    private readonly SpentNoncesHandle _handle;
+
+    // The record is mutated by every Accept, and the core does not lock it.
+    private readonly object _gate = new();
 
     public SpentNonces()
     {
-        _handle = Native.hide_spent_nonces_new();
-        if (_handle == IntPtr.Zero)
+        IntPtr handle = Native.hide_spent_nonces_new();
+        if (handle == IntPtr.Zero)
         {
             throw new HideException("could not allocate the nonce record");
         }
+
+        _handle = new SpentNoncesHandle(handle);
     }
 
     /// <summary>
@@ -29,7 +38,7 @@ public sealed unsafe class SpentNonces : IDisposable
         ReadOnlySpan<byte> publicKey,
         ulong now)
     {
-        IntPtr handle = _handle == IntPtr.Zero
+        SpentNoncesHandle handle = _handle.IsClosed
             ? throw new ObjectDisposedException(nameof(SpentNonces))
             : _handle;
 
@@ -37,28 +46,24 @@ public sealed unsafe class SpentNonces : IDisposable
         fixed (byte* signaturePointer = signature)
         fixed (byte* publicKeyPointer = publicKey)
         {
-            Interop.Check(Native.hide_challenge_accept(
-                handle,
-                challengePointer,
-                (nuint)challenge.Length,
-                signaturePointer,
-                (nuint)signature.Length,
-                publicKeyPointer,
-                (nuint)publicKey.Length,
-                now));
+            int code;
+            lock (_gate)
+            {
+                code = Native.hide_challenge_accept(
+                    handle,
+                    challengePointer,
+                    (nuint)challenge.Length,
+                    signaturePointer,
+                    (nuint)signature.Length,
+                    publicKeyPointer,
+                    (nuint)publicKey.Length,
+                    now);
+            }
+
+            Interop.Check(code);
         }
     }
 
-    public void Dispose()
-    {
-        if (_handle != IntPtr.Zero)
-        {
-            Native.hide_spent_nonces_free(_handle);
-            _handle = IntPtr.Zero;
-        }
-
-        GC.SuppressFinalize(this);
-    }
-
-    ~SpentNonces() => Dispose();
+    /// <summary>Releases the record. Safe to call twice.</summary>
+    public void Dispose() => _handle.Dispose();
 }

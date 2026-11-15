@@ -2,16 +2,22 @@
 
 ## HIDE is experimental — do not protect real data with it
 
-The wire format is a release candidate (0.9.0), not 1.0; the implementation has
-never been audited by a third party, and the hybrid KEM follows an IETF draft
-that is not yet an RFC. Treat
-every container as a test artifact. The CLI requires `--experimental` for this
-reason.
+The wire format is a release candidate, frozen since 0.9.0 and not 1.0; the
+current release line is 0.10.x. The implementation has never been audited by a
+third party, and the hybrid KEM follows an IETF draft that is not yet an RFC.
+Treat every container as a test artifact. The CLI requires `--experimental`
+for this reason.
+
+## Supported versions
+
+Only the latest release line (0.10.x) receives security fixes. Nothing is
+backported to earlier minors.
 
 ## Cryptographic scope
 
 HIDE implements no primitives of its own and defines no novel KEM combiner. It
-composes, from established crates, all pinned to exact versions:
+composes crates from the RustCrypto and `hpke` projects, all pinned to exact
+versions:
 
 - **Key encapsulation**: HPKE base mode with X-Wing (X25519 + ML-KEM-768,
   FIPS 203), HKDF-SHA256, ChaCha20-Poly1305.
@@ -28,6 +34,14 @@ composes, from established crates, all pinned to exact versions:
 `unsafe_code = "forbid"` applies to every crate except `hide-ffi`. A flaw in an
 upstream primitive belongs upstream, though a report here is still appreciated
 so the dependency can be pinned or replaced.
+
+The crates that carry the post-quantum and HPKE code are not audited either.
+The READMEs of `ml-kem`, `ml-dsa` and `x-wing` each say the implementation "has
+never been independently audited"; the `hpke` README says that "nobody has
+performed a paid audit of this crate" and records one internal security review,
+by Cloudflare, of version 0.8; the `mls-rs` README says it "has not yet received
+a full security audit by a 3rd party". Pinning a version fixes which unaudited
+code runs; it does not make it audited.
 
 ## Threat model in one paragraph
 
@@ -47,7 +61,8 @@ Known and documented, not new findings:
 - **An identity is not a person.** The device log proves which devices an
   identity trusts over time; nothing proves the identity belongs to a given
   human. There is no directory, and no key-transparency *service* — the log
-  primitive exists, but no one operates a log and no witnessing is implemented.
+  primitive exists and witness cosignatures on checkpoints are verified
+  (`spec/hide-1.md` §16.2), but no one operates a log or a witness.
 - **Sender authentication only when signed.** A recipient of an *unsigned*
   container holds the CEK and can rewrite the recipient set and recompute a
   valid header MAC. A signature closes this; its absence does not.
@@ -64,11 +79,13 @@ Known and documented, not new findings:
   writes an unencrypted key on request.
 - **A forgotten passphrase is unrecoverable.** There is no escrow or reset.
 - **Group messaging is not post-quantum**, and `mls-rs` is as unaudited as the
-  rest. The credential binding described below is new in 0.7.0 and has been
-  parsed by no implementation outside this repository.
+  rest. The credential binding described below was introduced in 0.7.0 and has
+  been parsed by no implementation outside this repository.
 - **SSH authentication is not post-quantum.** `hide agent` offers the Ed25519
-  half only, because OpenSSH accepts no post-quantum algorithm for user
-  authentication. It avoids a plaintext key on disk; nothing more.
+  half only. OpenSSH 10.6 (2026-10-06) enables the hybrid signature algorithm
+  `ssh-mldsa44-ed25519` (https://www.openssh.org/txt/release-10.6), but HIDE
+  signs with ML-DSA-65 and its SSH key is Ed25519 alone, so HIDE's SSH support
+  stays classical. It avoids a plaintext key on disk; nothing more.
 - **An agent is a signing oracle.** Anything that can reach the endpoint can
   request a signature, which is why confirmation is the default.
 - **Replay is only detectable by the verifier.** A replayed challenge answer is
@@ -85,8 +102,8 @@ Known and documented, not new findings:
 - Identity and epoch decoders no longer reserve memory from the declared entry
   count; MLS messages and `hide unseal` input are capped at 1 MiB; a `u64`
   length or index is refused on 32-bit targets instead of being truncated.
-- Eight fuzz targets now cover every parser of untrusted bytes, each fuzzed
-  four hours every night with the corpus carried forward.
+- Eight fuzz targets (eleven since 0.9.1) cover every parser of untrusted
+  bytes, each fuzzed four hours every night with the corpus carried forward.
 
 Found after 0.8.0 shipped: the identity-log transport encoding declared six
 fields per entry and wrote seven. Rust read its own output, so no HIDE surface
@@ -125,28 +142,43 @@ are listed because their existence is the best evidence that others remain.
   `HIDE_ALLOW_LIBRARY_OVERRIDE=1` is also set.
 - **The ssh-agent read its confirmation from stdin, not the terminal**, so a
   piped process could answer for the user; and on Windows the agent's named
-  pipe was created without an ACL. Confirmation now reads the controlling tty,
-  and the pipe is restricted to the current user.
+  pipe was created without an ACL. Confirmation now reads the controlling tty.
+  On Unix the socket lives in a directory created with mode 0700. On Windows
+  the named pipe is still not restricted to the current user
+  (`apps/hide-cli/src/transport.rs`); instead `--no-confirm` is refused there,
+  so every signature must be confirmed on the terminal.
 - **Argon2id parameters have a floor.** A key file declaring weaker parameters
   than the floor is refused rather than opened.
 
 ## Reporting a vulnerability
 
-Use GitHub's **Report a vulnerability** button under the Security tab, which
-opens a private advisory. Please do not open a public issue for a suspected
-vulnerability. If you cannot use GitHub, open an issue asking for a contact and
-we will reply with one.
+Report privately through either channel:
 
-Include the affected commit, a reproduction (a container plus the steps), and
-what you believe the impact is. A failing test is the most useful form.
+1. **GitHub private vulnerability reporting**:
+   <https://github.com/hide-protocol/hide/security/advisories/new> (the
+   **Report a vulnerability** button under the Security tab). The form is
+   access-controlled, so prefer it for anything with sensitive detail.
+2. **Email**: <hide-security@codai.ro>. No PGP or HIDE key is published for it,
+   and mail is not end-to-end encrypted, so keep sensitive detail out of email
+   or send only a pointer and continue in the GitHub advisory.
 
-Expect an acknowledgement within 7 days. We aim to publish a fix or a
-mitigation within 90 days and will coordinate disclosure with you; because this
-is a pre-1.0 experiment maintained without a dedicated security team, that is
-an aim rather than a guarantee.
+Do not open a public issue for a suspected vulnerability. Public issues are for
+questions that are not sensitive. The machine-readable contact file is
+<https://hide-protocol.github.io/hide/.well-known/security.txt> (RFC 9116).
 
-No bug bounty exists; credit in the CHANGELOG and in `docs/advisories.md` is
-what we can offer.
+Include the affected version or commit, a reproduction (a container plus the
+steps), and what you believe the impact is. A failing test is the most useful
+form.
+
+HIDE has one maintainer. A report is acknowledged as soon as he reads it; there
+is no guaranteed response time. We aim to publish a fix or a mitigation within
+90 days and to coordinate disclosure with you; that is an aim, not a guarantee.
+If you have had no reply at all after 14 days, treat the report as unread and
+send it again through the other channel. Only the latest release line is fixed
+(see "Supported versions" above).
+
+No bug bounty exists. A finding is credited in the CHANGELOG and in
+`docs/advisories.md` unless you prefer otherwise.
 
 ## Safe harbor
 
@@ -155,7 +187,7 @@ authorised, and we will not pursue or support legal action over it. Do not
 access, alter or exfiltrate data belonging to anyone else, do not degrade a
 service other people rely on, and give us a reasonable window to fix what you
 find before publishing. If you are unsure whether something is in scope, ask
-first through the channel above.
+first through either channel above.
 
 ## Findings that are especially valuable
 

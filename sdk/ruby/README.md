@@ -2,9 +2,12 @@
 
 *Experimental and unaudited. HIDE is hybrid post-quantum (X25519 + ML-KEM-768, Ed25519 + ML-DSA-65). See the [security policy](https://github.com/hide-protocol/hide/blob/main/SECURITY.md).*
 
-Ruby binding, through stdlib `fiddle`, to the same Rust core (`crates/hide-ffi`)
+Ruby binding, through `fiddle`, to the same Rust core (`crates/hide-ffi`)
 that the CLI and every other HIDE SDK use. This gem contains no cryptography of
-its own, no compiled extension and no runtime gem dependency.
+its own and no compiled extension. Its one runtime dependency is `fiddle`
+(1.0.6 or newer), which every supported Ruby already ships: as a default gem
+up to Ruby 3.4, and as a bundled gem from Ruby 4.0, where Bundler only makes
+it loadable because this gem declares it.
 
 ## Install
 
@@ -46,6 +49,11 @@ positional and returns a `Hide::Decrypted` with `plaintext`, `filename` and
 filename is attacker-controlled: never use it to choose an output path. Binary
 values in and out are ASCII-8BIT Strings; metadata comes back as UTF-8.
 
+A `filename` must be one portable file name, and encryption refuses anything
+else: at most 255 bytes, not `.` or `..`, no control characters, none of
+`< > : " / \ | ? *`, no trailing dot or space, and not a Windows device name
+such as `CON` or `COM1`.
+
 Keys on disk: `secret.protect(passphrase)` returns a sealed key file
 (`Hide::MIN_PASSPHRASE_LEN` is 8, and there is no escrow);
 `Hide::SecretKey.open(bytes, passphrase)` opens one; `Hide.inspect_key(bytes)`
@@ -59,6 +67,13 @@ all), `WrongPassphraseError`, `NoMatchingRecipientError`, `NotAKeyError`,
 `TooLargeError`, `ClosedKeyError`, `ChallengeExpiredError`,
 `ChallengeReplayedError`, and `InvalidArgumentError` for arguments this binding
 rejects before calling the core.
+
+Text arguments must not contain a NUL character. Passphrases, filenames,
+media types, audiences, origins and armored keys cross into the core as C
+strings, which end at the first NUL: `"longenough\0rest"` would otherwise seal
+a key under `"longenough"`. Such text raises `Hide::InvalidArgumentError`
+instead. Text is sent as UTF-8: a String in another encoding is transcoded,
+and an ASCII-8BIT String is taken as the UTF-8 bytes it already holds.
 
 ## Signing and verification
 
@@ -86,11 +101,27 @@ end
 ```
 
 `context` separates uses of one identity so a signature made for one purpose
-cannot be replayed as another; never let a remote party choose it.
+cannot be replayed as another; never let a remote party choose it. Contexts
+beginning with `HIDE/` are reserved for the protocol: `sign` refuses them with
+`Hide::InvalidArgumentError`, while `Hide.verify` accepts any context.
 `Hide.verify` returns `nil` and raises `Hide::AuthenticationError` on failure
 rather than returning a boolean a caller could forget to check. A key file
 written before signatures existed carries no signing seed and raises
 `Hide::NotAKeyError`.
+
+## Threads
+
+- `Hide::SpentNonces` may be shared between threads. `accept` takes a
+  per-object lock around the native call, which changes the record; `fiddle`
+  releases the interpreter lock during that call, so without the lock two
+  threads could both accept the same answer. Keep one record per verifier,
+  not one per thread: a replay is only caught by the record that saw the
+  first answer. A forking server has one record per worker process, and
+  those do not see each other's answers.
+- `Hide::SecretKey` and `Hide::SigningIdentity` may be used from several
+  threads at once; the native calls only read them. Do not `close` one while
+  another thread is still inside a call on it.
+- Module-level methods hold no shared state.
 
 ## Identity logs, epoch chains, transparency proofs
 
@@ -119,13 +150,18 @@ trust out of band does.
 
 ## Native library
 
-The core is located in this order:
+The core is loaded from one of two places, always by absolute path:
 
 1. `HIDE_LIBRARY`, if it names a file **and** `HIDE_ALLOW_LIBRARY_OVERRIDE=1`
-   is also set;
-2. beside the gem, in `lib/hide_protocol/`, where the platform gem puts it;
-3. the system loader, by name (`hide_ffi.dll`, `libhide_ffi.dylib`,
-   `libhide_ffi.so`).
+  is also set. Once opted in it is the only candidate: if it cannot be
+  loaded, `require` fails rather than falling back to another copy;
+2. otherwise beside the binding, in `lib/hide_protocol/`, where the platform
+  gem puts it (`hide_ffi.dll`, `libhide_ffi.dylib` or `libhide_ffi.so`).
+
+The system loader is never asked to search by name, so a library placed in
+the working directory, on `PATH` or on `LD_LIBRARY_PATH` is not picked up. If
+neither place has the library, `require "hide_protocol"` raises
+`Hide::Binding::LibraryNotFound` naming the platform and what to install.
 
 `HIDE_LIBRARY` is a development override: it replaces the entire cryptographic
 core, so a single settable environment variable must not be enough to redirect
@@ -138,6 +174,12 @@ export HIDE_ALLOW_LIBRARY_OVERRIDE=1
 ruby -Ilib -Itest test/test_hide.rb
 ```
 
+The core and the binding must be the same release. When it is required the
+binding compares the core's `major.minor.patch` with its own, read from the
+gemspec shipped in the gem, and raises `Hide::Binding::VersionMismatch` on
+any difference: the core enforces checks this binding only documents, so an
+older core beside a newer binding would silently lose them.
+
 ## Key material
 
 `Hide::SecretKey`, `Hide::SigningIdentity` and `Hide::SpentNonces` are opaque
@@ -146,6 +188,13 @@ for them; `inspect` and `to_s` show only whether the handle is open. Release
 with `#close`, or use the block form of `.generate` / `.open`, which always
 closes — including when the block raises. A closed handle raises
 `Hide::ClosedKeyError` on use.
+
+A handle cannot be copied: `dup`, `clone` and `Marshal.dump` raise
+`TypeError`. A copy would share the native object, and closing either one
+would free it under the other. To use a key in a second place, pass the same
+object, or open the key file again. For the same reason
+`Hide::SecretKey.new` and `Hide::SigningIdentity.new` are private: keys come
+from `.generate`, `.open` and `.load` only.
 
 ## Limits
 

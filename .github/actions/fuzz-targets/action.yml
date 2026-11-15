@@ -1,0 +1,32 @@
+name: fuzz-targets
+description: >
+  Fails unless fuzz/fuzz_targets/, the [[bin]] list in fuzz/Cargo.toml and the
+  matrix in fuzz-nightly.yml name exactly the same targets.
+
+# One copy, two callers: `lint` in ci.yml (so a forgotten target fails the pull
+# request that adds it) and `targets` in fuzz-nightly.yml (so the night itself
+# says when its matrix is stale). The nightly matrix is a literal list because
+# a matrix computed at run time would hide the job names from the workflow file
+# and from anyone reading it.
+runs:
+  using: composite
+  steps:
+    - shell: bash
+      run: |
+        set -euo pipefail
+        files=$(for f in fuzz/fuzz_targets/*.rs; do basename "$f" .rs; done | sort)
+        # Reads the `target:` list by its indentation; the list must stay a
+        # plain run of `- name` lines for this to see all of it.
+        matrix=$(awk '/^        target:$/ { on = 1; next } on && /^          - / { print $2; next } on { exit }' .github/workflows/fuzz-nightly.yml | sort)
+        bins=$(awk -F'"' '/^\[\[bin\]\]/ { seen = 1 } seen && /^name = "/ { print $2 }' fuzz/Cargo.toml | sort)
+        status=0
+        if ! diff <(printf '%s\n' "$files") <(printf '%s\n' "$matrix"); then
+          echo "::error::fuzz/fuzz_targets/ and the matrix in fuzz-nightly.yml differ (< directory, > matrix)"
+          status=1
+        fi
+        if ! diff <(printf '%s\n' "$files") <(printf '%s\n' "$bins"); then
+          echo "::error::fuzz/fuzz_targets/ and the [[bin]] list in fuzz/Cargo.toml differ (< directory, > Cargo.toml)"
+          status=1
+        fi
+        echo "fuzz targets: $(printf '%s\n' "$files" | grep -c .)"
+        exit "$status"

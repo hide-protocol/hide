@@ -91,7 +91,7 @@ impl Decrypted {
 }
 
 fn parse_recipients(recipients: &[u8]) -> Result<Vec<RecipientPublic>, JsValue> {
-    if recipients.is_empty() || recipients.len() % PUBLIC_KEY_LEN != 0 {
+    if recipients.is_empty() || !recipients.len().is_multiple_of(PUBLIC_KEY_LEN) {
         return Err(error("recipients must be whole public keys"));
     }
     let count = recipients.len() / PUBLIC_KEY_LEN;
@@ -443,7 +443,7 @@ pub fn epoch_public_key(chain: &[u8], epoch: u64) -> Result<Vec<u8>, JsValue> {
 
 /// `path` is the concatenated 32-byte hashes; any other length is refused.
 fn hash_path(path: &[u8]) -> Result<Vec<[u8; 32]>, JsValue> {
-    if path.len() % 32 != 0 || path.len() > 64 * 32 {
+    if !path.len().is_multiple_of(32) || path.len() > 64 * 32 {
         return Err(error("a proof path must be whole 32-byte hashes"));
     }
     Ok(path

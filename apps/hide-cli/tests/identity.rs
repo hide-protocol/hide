@@ -125,6 +125,38 @@ fn an_identity_grows_across_processes() -> Result<(), Box<dyn Error>> {
 }
 
 #[test]
+fn creating_an_identity_does_not_overwrite_an_existing_log() -> Result<(), Box<dyn Error>> {
+    // A second `identity-create` would replace the whole device history and its
+    // root, so it must be refused rather than silently clobbering the log.
+    let directory = tempfile::tempdir()?;
+    identity(directory.path());
+    let before = fs::read(directory.path().join("id.log"))?;
+
+    let again = hide(
+        directory.path(),
+        &[
+            "--experimental",
+            "--quiet",
+            "identity-create",
+            "--secret",
+            "laptop.sec",
+            "--recovery",
+            "recovery.pub.sign",
+            "--label",
+            "laptop",
+            "--output",
+            "id.log",
+        ],
+    );
+    assert!(
+        !again.status.success(),
+        "identity-create overwrote an existing log"
+    );
+    assert_eq!(fs::read(directory.path().join("id.log"))?, before);
+    Ok(())
+}
+
+#[test]
 fn a_revoked_device_is_refused_by_the_binary() -> Result<(), Box<dyn Error>> {
     let directory = tempfile::tempdir()?;
     identity(directory.path());

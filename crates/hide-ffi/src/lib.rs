@@ -33,6 +33,9 @@ pub const HIDE_ERR_AUTHENTICATION: i32 = 4;
 pub const HIDE_ERR_NO_MATCHING_RECIPIENT: i32 = 5;
 pub const HIDE_ERR_MALFORMED: i32 = 6;
 pub const HIDE_ERR_TOO_LARGE: i32 = 7;
+/// The input uses a version, suite or feature this build does not implement.
+/// Distinct from `HIDE_ERR_MALFORMED`: the bytes are well-formed, just newer.
+pub const HIDE_ERR_UNSUPPORTED: i32 = 10;
 pub const HIDE_ERR_PANIC: i32 = 98;
 pub const HIDE_ERR_INTERNAL: i32 = 99;
 
@@ -114,11 +117,18 @@ unsafe fn borrow_str<'a>(text: *const c_char) -> Option<Option<&'a str>> {
 }
 
 fn object_error_code(error: &hide_object::ObjectError) -> i32 {
-    use hide_object::ObjectError;
+    use hide_object::{FormatError, ObjectError};
     match error {
         ObjectError::NoMatchingRecipient => HIDE_ERR_NO_MATCHING_RECIPIENT,
         ObjectError::Crypto(_) => HIDE_ERR_AUTHENTICATION,
+        // A forged or missing signature is an authentication failure, not a
+        // corrupted file: the two must be told apart by a caller.
+        ObjectError::InvalidSignature
+        | ObjectError::MissingSignature
+        | ObjectError::UnexpectedSignature => HIDE_ERR_AUTHENTICATION,
         ObjectError::ObjectTooLarge => HIDE_ERR_TOO_LARGE,
+        ObjectError::Format(FormatError::UnsupportedFeature | FormatError::UnsupportedSuite)
+        | ObjectError::Format(FormatError::UnsupportedVersion) => HIDE_ERR_UNSUPPORTED,
         _ => HIDE_ERR_MALFORMED,
     }
 }
@@ -162,6 +172,7 @@ pub extern "C" fn hide_error_message(code: i32) -> *const c_char {
         HIDE_ERR_NO_MATCHING_RECIPIENT => b"no matching recipient for this key\0",
         HIDE_ERR_MALFORMED => b"malformed or corrupt input\0",
         HIDE_ERR_TOO_LARGE => b"input is too large\0",
+        HIDE_ERR_UNSUPPORTED => b"input uses an unsupported version, suite or feature\0",
         HIDE_ERR_CHALLENGE_EXPIRED => b"the challenge expired before it was answered\0",
         HIDE_ERR_CHALLENGE_REPLAYED => b"this challenge was already answered\0",
         HIDE_ERR_PANIC => b"internal error (panic)\0",
@@ -405,6 +416,12 @@ pub unsafe extern "C" fn hide_encrypt(
             Ok(_) => {
                 unsafe { *out = HideBuffer::from_vec(container) };
                 HIDE_OK
+            }
+            // A metadata value the writer refuses (a path-separator filename, a
+            // non-printable media type) is the caller's error, not a corrupt
+            // input; every other failure keeps its own class.
+            Err(hide_object::ObjectError::Format(hide_object::FormatError::InvalidMetadata)) => {
+                HIDE_ERR_INVALID_ARGUMENT
             }
             Err(error) => object_error_code(&error),
         }
@@ -1365,6 +1382,46 @@ mod tests {
                 .join(name),
         )
         .expect("frozen vector")
+    }
+
+    /// A caller must be able to tell a forgery from corruption from a newer
+    /// format. Signature failures are authentication failures, and a well-formed
+    /// but unsupported input has its own code (spec §6.1).
+    #[test]
+    fn error_codes_separate_forgery_corruption_and_unsupported_input() {
+        use hide_object::{FormatError, ObjectError};
+        for error in [
+            ObjectError::InvalidSignature,
+            ObjectError::MissingSignature,
+            ObjectError::UnexpectedSignature,
+        ] {
+            assert_eq!(
+                object_error_code(&error),
+                HIDE_ERR_AUTHENTICATION,
+                "{error:?}"
+            );
+        }
+        for error in [
+            FormatError::UnsupportedFeature,
+            FormatError::UnsupportedSuite,
+            FormatError::UnsupportedVersion,
+        ] {
+            let message = format!("{error:?}");
+            assert_eq!(
+                object_error_code(&ObjectError::Format(error)),
+                HIDE_ERR_UNSUPPORTED,
+                "{message}"
+            );
+        }
+        // The new code must not collide with any existing one.
+        for other in [
+            HIDE_ERR_MALFORMED,
+            HIDE_ERR_AUTHENTICATION,
+            HIDE_ERR_CHALLENGE_EXPIRED,
+            HIDE_ERR_CHALLENGE_REPLAYED,
+        ] {
+            assert_ne!(HIDE_ERR_UNSUPPORTED, other);
+        }
     }
 
     /// §16.1 through the C ABI, on the frozen vectors including the hijack.

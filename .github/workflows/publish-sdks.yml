@@ -3,6 +3,12 @@ name: Publish SDKs
 # Publishing to a registry claims a name permanently and, on crates.io and
 # PyPI, cannot be undone — only yanked. So this never runs automatically on a
 # tag: a person starts it, names the version, and says which registries.
+#
+# No registry credential is stored in this repository. Every publish job
+# exchanges the run's OIDC identity for a short-lived token (trusted
+# publishing); `gh secret list` must stay empty. Each job also installs the
+# generated THIRD-PARTY-LICENSES.txt beside the compiled core, because the
+# core statically links third-party crates whose licences require it.
 on:
   workflow_dispatch:
     inputs:
@@ -40,30 +46,84 @@ permissions:
 env:
   CARGO_TERM_COLOR: always
   CARGO_INCREMENTAL: 0
+  # Same pin as release.yml: the notices are a legal artifact.
+  CARGO_ABOUT_VERSION: "0.9.3"
 
 jobs:
   # Nothing is published unless the whole suite passes at the exact commit
   # being published.
   verify:
     runs-on: ubuntu-24.04
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
-      - run: cargo test --workspace --all-features
+      - run: cargo test --workspace --all-features --locked
       - name: The version in the tree must match what is being published
+        env:
+          REQUESTED: ${{ inputs.version }}
         run: |
           set -euo pipefail
           declared=$(grep -m1 '^version' Cargo.toml | cut -d'"' -f2)
-          if [ "$declared" != "${{ inputs.version }}" ]; then
-            echo "::error::Cargo.toml says $declared, but $"'{{ inputs.version }}'" was requested" >&2
+          if [ "$declared" != "$REQUESTED" ]; then
+            echo "::error::Cargo.toml says $declared, but $REQUESTED was requested" >&2
             exit 1
           fi
+
+      # The same two checks release.yml runs: the licence file is the real
+      # Apache-2.0 text, and every .crate about to be uploaded carries it.
+      - name: LICENSE must be the complete, unmodified Apache-2.0 text
+        run: |
+          set -euo pipefail
+          echo "cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30  LICENSE" \
+            | sha256sum --check
+      - name: Every published crate must carry LICENSE and a README
+        run: |
+          set -euo pipefail
+          crates="$(cargo metadata --no-deps --format-version 1 --locked \
+            | jq -r '.packages[] | select(.publish == null) | .name')"
+          [ -n "$crates" ] || { echo "::error::no publishable crates found"; exit 1; }
+          for crate in $crates; do
+            listing="$(cargo package --list --locked -p "$crate")"
+            for file in LICENSE README.md; do
+              grep -qx "$file" <<<"$listing" \
+                || { echo "::error::the $crate crate would be published without $file"; exit 1; }
+            done
+          done
+          echo "all crates carry LICENSE and README.md"
+
+      # Notices for the native library and the WASM module, once, for the SDK
+      # jobs below. The npm, gem and wheel for a platform each carry the file
+      # for that platform's graph; the one NuGet package carries every graph.
+      - name: Install cargo-about
+        run: cargo install cargo-about --locked --version "$CARGO_ABOUT_VERSION" --features cli
+      - name: Generate the third-party notices
+        run: |
+          set -euo pipefail
+          out="$RUNNER_TEMP/notices"
+          mkdir -p "$out"
+          for target in \
+            x86_64-unknown-linux-gnu aarch64-unknown-linux-gnu x86_64-unknown-linux-musl \
+            x86_64-pc-windows-msvc aarch64-pc-windows-msvc \
+            aarch64-apple-darwin x86_64-apple-darwin; do
+            bash scripts/licences/generate.sh ffi "$target" "$out/ffi-$target.txt"
+          done
+          bash scripts/licences/generate.sh ffi all "$out/ffi-all.txt"
+          bash scripts/licences/generate.sh wasm wasm32-unknown-unknown "$out/wasm.txt"
+          ls -la "$out"
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: notices
+          path: ${{ runner.temp }}/notices/*.txt
+          if-no-files-found: error
+          retention-days: 7
 
   crates:
     needs: verify
     if: inputs.crates
     runs-on: ubuntu-24.04
+    timeout-minutes: 120
     environment: crates-io
     # Trusted publishing: crates.io mints a short-lived token from this run's
     # OIDC identity, so no CARGO_REGISTRY_TOKEN secret is needed.
@@ -80,23 +140,26 @@ jobs:
       - name: Publish crates in dependency order
         env:
           CARGO_REGISTRY_TOKEN: ${{ steps.auth.outputs.token }}
+          DRY_RUN: ${{ inputs.dry_run }}
+          VERSION: ${{ inputs.version }}
         run: |
           set -euo pipefail
-          flags="--locked"
-          if [ "${{ inputs.dry_run }}" = "true" ]; then
-            flags="$flags --dry-run"
+          # An array, so the flags survive word splitting as separate args.
+          flags=(--locked)
+          if [ "$DRY_RUN" = "true" ]; then
+            flags+=(--dry-run)
           fi
           # Dependency order: each crate's dependencies must already be on the
           # index when it is published, or cargo refuses it.
           for crate in hide-format hide-crypto hide-sign hide-transparency hide-epoch hide-identity hide-mls hide-keyring hide-object hide-ffi hide-cli; do
             echo "::group::$crate"
-            if [ "${{ inputs.dry_run }}" = "true" ]; then
+            if [ "$DRY_RUN" = "true" ]; then
               # A dependent cannot resolve its sibling during a dry run: the
               # new version exists only in this checkout. That shows up either
               # as a missing crate (before its first publish) or as a missing
               # version (every release after). Both are expected; every other
               # error still fails the job.
-              if ! out=$(cargo publish $flags -p "$crate" 2>&1); then
+              if ! out=$(cargo publish "${flags[@]}" -p "$crate" 2>&1); then
                 echo "$out"
                 echo "$out" | grep -Eq "no matching package named .hide-|failed to select a version for the requirement .hide-" \
                   || { echo "::error::$crate failed for a reason other than an unpublished sibling"; exit 1; }
@@ -111,13 +174,13 @@ jobs:
               # start over: cargo's own error is the authority on that.
               published=yes
               for attempt in 1 2 3 4 5 6 7; do
-                if out=$(cargo publish $flags -p "$crate" 2>&1); then
+                if out=$(cargo publish "${flags[@]}" -p "$crate" 2>&1); then
                   echo "$out"; break
                 fi
                 echo "$out"
                 case "$out" in
                   *"already exists on crates.io index"*)
-                    echo "::notice::$crate ${{ inputs.version }} is already published, skipping"
+                    echo "::notice::$crate $VERSION is already published, skipping"
                     published=no; break ;;
                   *"429 Too Many Requests"*) ;;
                   *) echo "::error::$crate failed for a reason other than the rate limit"; exit 1 ;;
@@ -136,6 +199,7 @@ jobs:
     needs: verify
     if: inputs.pypi
     runs-on: ${{ matrix.os }}
+    timeout-minutes: 45
     environment: pypi
     strategy:
       fail-fast: false
@@ -150,6 +214,10 @@ jobs:
           - os: macos-15
             target: aarch64-apple-darwin
             wheel: macosx_11_0_arm64
+    env:
+      TARGET: ${{ matrix.target }}
+      WHEEL_TAG: ${{ matrix.wheel }}
+      VERSION: ${{ inputs.version }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable
@@ -160,10 +228,19 @@ jobs:
       - run: cargo build --release --locked -p hide-ffi
 
       # sdk/python has its own README; copying the root one here would replace
-      # it on PyPI. The licence is not in the tree, so it is staged.
-      - name: Stage the licence
+      # it on PyPI. The licence is not in the tree, so it is staged. hatchling
+      # packs root files named LICENSE* into dist-info/licenses/, which is how
+      # the third-party notices reach the wheel without a pyproject change.
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        with:
+          name: notices
+          path: notices
+      - name: Stage the licence and the third-party notices
         shell: bash
-        run: cp LICENSE sdk/python/
+        run: |
+          set -euo pipefail
+          cp LICENSE sdk/python/
+          cp "notices/ffi-$TARGET.txt" sdk/python/LICENSE-THIRD-PARTY.txt
 
       # The wheel carries the compiled core, so installing it needs no
       # toolchain on the user's machine.
@@ -199,21 +276,31 @@ jobs:
           python -m pip install --upgrade wheel
           python -m build --wheel
           python -m wheel tags --remove \
-            --platform-tag ${{ matrix.wheel }} \
+            --platform-tag "$WHEEL_TAG" \
             dist/*-py3-none-any.whl
-          test -f dist/hide_protocol-${{ inputs.version }}-py3-none-${{ matrix.wheel }}.whl
+          wheel="dist/hide_protocol-$VERSION-py3-none-$WHEEL_TAG.whl"
+          test -f "$wheel"
+          # Both licence files must be inside, or the wheel ships a binary
+          # whose licences are nowhere in the package.
+          listing="$(python -m zipfile -l "$wheel")"
+          for file in LICENSE LICENSE-THIRD-PARTY.txt; do
+            grep -q "dist-info/licenses/$file" <<<"$listing" \
+              || { echo "::error::$wheel has no $file"; exit 1; }
+          done
           ls -la dist
 
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: wheel-${{ matrix.target }}
           path: sdk/python/dist/*.whl
+          if-no-files-found: error
           retention-days: 7
 
   pypi-upload:
     needs: pypi
     if: inputs.pypi && !inputs.dry_run
     runs-on: ubuntu-24.04
+    timeout-minutes: 15
     environment: pypi
     permissions:
       id-token: write
@@ -235,6 +322,7 @@ jobs:
     needs: verify
     if: inputs.npm || inputs.rubygems || inputs.nuget
     runs-on: ${{ matrix.os }}
+    timeout-minutes: 45
     strategy:
       fail-fast: false
       matrix:
@@ -255,6 +343,8 @@ jobs:
             target: aarch64-apple-darwin
           - os: macos-15
             target: x86_64-apple-darwin
+    env:
+      TARGET: ${{ matrix.target }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable
@@ -269,7 +359,7 @@ jobs:
         run: |
           set -euo pipefail
           sudo apt-get update
-          case "${{ matrix.target }}" in
+          case "$TARGET" in
             aarch64-unknown-linux-gnu)
               sudo apt-get install -y --no-install-recommends \
                 gcc-aarch64-linux-gnu libc6-dev-arm64-cross
@@ -283,36 +373,46 @@ jobs:
               ;;
           esac
 
-      - run: cargo build --release --locked -p hide-ffi --target ${{ matrix.target }}
+      - run: cargo build --release --locked -p hide-ffi --target "$TARGET"
+        shell: bash
 
       # A library that cannot decrypt the frozen vectors is not shippable.
       # Cross-compiled ones cannot run here, so the check is host-native.
-      - run: cargo test -p hide-object --test vectors --release
+      - run: cargo test -p hide-object --test vectors --release --locked
         if: '!matrix.cross'
 
+      # The notices travel with the library from here on, so every packaging
+      # job below finds them beside the binary under the same artifact name.
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        with:
+          name: notices
+          path: notices
       - name: Collect
         shell: bash
         run: |
           set -euo pipefail
           mkdir -p out
           for name in libhide_ffi.so libhide_ffi.dylib hide_ffi.dll; do
-            if [ -f "target/${{ matrix.target }}/release/$name" ]; then
-              cp "target/${{ matrix.target }}/release/$name" out/
+            if [ -f "target/$TARGET/release/$name" ]; then
+              cp "target/$TARGET/release/$name" out/
             fi
           done
-          ls -la out
           test -n "$(ls -A out)"
+          cp "notices/ffi-$TARGET.txt" out/THIRD-PARTY-LICENSES.txt
+          ls -la out
 
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: native-${{ matrix.target }}
           path: out/*
+          if-no-files-found: error
           retention-days: 7
 
   npm:
     needs: [verify, native]
     if: inputs.npm
     runs-on: ubuntu-24.04
+    timeout-minutes: 45
     environment: npm
     # --provenance signs the package with an OIDC token from this run.
     permissions:
@@ -330,6 +430,14 @@ jobs:
           node-version: 24
           registry-url: https://registry.npmjs.org
 
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        with:
+          name: notices
+          path: notices
+
+      # npm always packs a root file named LICENSE.* regardless of "files", so
+      # the notices are staged under that name and reach every package
+      # without touching three package.json files.
       - name: Build the WASM package
         run: |
           set -euo pipefail
@@ -338,11 +446,17 @@ jobs:
           wasm-bindgen target/wasm32-unknown-unknown/release/hide_wasm.wasm \
             --out-dir sdk/wasm --target web
           cp LICENSE sdk/wasm/
+          cp notices/wasm.txt sdk/wasm/LICENSE.third-party.txt
 
       # package.json lists LICENSE in "files"; npm omits a missing file silently.
       # The README is sdk/node's own and must not be replaced by the root one.
-      - name: Stage the licence
-        run: cp LICENSE sdk/node/
+      # The loader package contains no compiled code; its notices are those of
+      # the library every platform package carries, listed for all targets.
+      - name: Stage the licence and the notices
+        run: |
+          set -euo pipefail
+          cp LICENSE sdk/node/
+          cp notices/ffi-all.txt sdk/node/LICENSE.third-party.txt
 
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
         with:
@@ -353,15 +467,36 @@ jobs:
       # machine via os/cpu/libc. hide-protocol lists all seven as optional
       # dependencies, so exactly one resolves.
       - name: Build the platform packages
+        env:
+          VERSION: ${{ inputs.version }}
         run: |
           set -euo pipefail
           for dir in native/native-*; do
             target="${dir#native/native-}"
-            library=$(ls "$dir")
-            node scripts/pack-native.mjs npm "$target" "${{ inputs.version }}" \
-              "$dir/$library" platform-packages
+            # The artifact holds the library and its notices; pick by suffix.
+            library="$(find "$dir" -maxdepth 1 -type f \( -name '*.so' -o -name '*.dylib' -o -name '*.dll' \) -printf '%f\n')"
+            [ "$(wc -l <<<"$library")" -eq 1 ] || { echo "::error::expected one library in $dir, found: $library"; exit 1; }
+            out="$(node scripts/pack-native.mjs npm "$target" "$VERSION" "$dir/$library" platform-packages)"
+            cp "$dir/THIRD-PARTY-LICENSES.txt" "$out/LICENSE.third-party.txt"
           done
           ls -la platform-packages/*
+
+      # What npm will actually upload, package by package: the notices must be
+      # in every tarball, or a binary ships without its licences.
+      - name: Every package must contain LICENSE and LICENSE.third-party.txt
+        run: |
+          set -euo pipefail
+          for pkg in ./sdk/wasm ./sdk/node ./platform-packages/*; do
+            listing="$(npm pack --dry-run --json "$pkg" 2>/dev/null | node -e '
+              const [pack] = JSON.parse(require("fs").readFileSync(0, "utf8"));
+              console.log(pack.files.map((f) => f.path).join("\n"));
+            ')"
+            for file in LICENSE LICENSE.third-party.txt; do
+              grep -qx "$file" <<<"$listing" \
+                || { echo "::error::$pkg would be published without $file"; exit 1; }
+            done
+            echo "$pkg: LICENSE and LICENSE.third-party.txt packed"
+          done
 
       - name: Build and test the Node package
         run: |
@@ -380,6 +515,8 @@ jobs:
       # left in the build tree. Installing the tarballs into a clean directory
       # is the only thing that proves it.
       - name: Prove the platform package resolves with nothing else present
+        env:
+          VERSION: ${{ inputs.version }}
         run: |
           set -euo pipefail
           npm pack --pack-destination "$RUNNER_TEMP" ./sdk/node >/dev/null
@@ -388,8 +525,8 @@ jobs:
           cd "$work"
           echo '{"name":"probe","private":true,"type":"module"}' > package.json
           npm install --silent \
-            "$RUNNER_TEMP"/hide-protocol-${{ inputs.version }}.tgz \
-            "$RUNNER_TEMP"/hide-protocol-linux-x64-${{ inputs.version }}.tgz
+            "$RUNNER_TEMP/hide-protocol-$VERSION.tgz" \
+            "$RUNNER_TEMP/hide-protocol-linux-x64-$VERSION.tgz"
           env -u HIDE_LIBRARY node -e "
             const m = await import('hide-protocol');
             const sk = m.SecretKey.generate();
@@ -430,6 +567,7 @@ jobs:
     needs: [verify, native]
     if: inputs.rubygems
     runs-on: ubuntu-24.04
+    timeout-minutes: 45
     environment: rubygems
     # Trusted publishing: no GEM_HOST_API_KEY secret.
     permissions:
@@ -462,30 +600,53 @@ jobs:
       # binary instead of all seven. The loader looks beside binding.rb, which
       # is where pack-native.mjs puts it and what the gemspec globs.
       - name: Build a gem per platform
+        env:
+          VERSION: ${{ inputs.version }}
         run: |
           set -euo pipefail
           mkdir -p gems
           for dir in native/native-*; do
             target="${dir#native/native-}"
-            library=$(ls "$dir")
+            # The artifact holds the library and its notices; pick by suffix.
+            library="$(find "$dir" -maxdepth 1 -type f \( -name '*.so' -o -name '*.dylib' -o -name '*.dll' \) -printf '%f\n')"
+            [ "$(wc -l <<<"$library")" -eq 1 ] || { echo "::error::expected one library in $dir, found: $library"; exit 1; }
             rm -f sdk/ruby/lib/hide_protocol/*.so sdk/ruby/lib/hide_protocol/*.dylib \
                   sdk/ruby/lib/hide_protocol/*.dll
-            platform=$(node scripts/pack-native.mjs gem "$target" "${{ inputs.version }}" "$dir/$library")
-            ( cd sdk/ruby && HIDE_GEM_PLATFORM="$platform" gem build hide-protocol.gemspec )
-            mv sdk/ruby/hide-protocol-${{ inputs.version }}-"$platform".gem gems/
+            # The notices of this platform's library, beside it. The committed
+            # gemspec globs README.md and LICENSE only; a one-line wrapper
+            # spec adds the notices for this build, so the SDK tree needs no
+            # generated file to build a plain source gem locally.
+            cp "$dir/THIRD-PARTY-LICENSES.txt" sdk/ruby/LICENSE-THIRD-PARTY.txt
+            cat > sdk/ruby/hide-protocol-release.gemspec <<'RUBY'
+          spec = Gem::Specification.load("hide-protocol.gemspec")
+          spec.files += ["LICENSE-THIRD-PARTY.txt"]
+          spec
+          RUBY
+            platform=$(node scripts/pack-native.mjs gem "$target" "$VERSION" "$dir/$library")
+            ( cd sdk/ruby && HIDE_GEM_PLATFORM="$platform" gem build hide-protocol-release.gemspec )
+            gem="sdk/ruby/hide-protocol-$VERSION-$platform.gem"
+            # A gem is a tar of data.tar.gz; list the data to see what ships.
+            listing="$(tar -xOf "$gem" data.tar.gz | tar -tz)"
+            for file in LICENSE LICENSE-THIRD-PARTY.txt; do
+              grep -qx "$file" <<<"$listing" \
+                || { echo "::error::$gem does not contain $file"; exit 1; }
+            done
+            mv "$gem" gems/
           done
           ls -la gems
 
       # A gem that installs but cannot load its own binary is worse than one
       # that refuses: prove the vendored library is found with nothing else set.
       - name: Prove the vendored library loads
+        env:
+          VERSION: ${{ inputs.version }}
         run: |
           set -euo pipefail
           work=$(mktemp -d)
           gem install --no-document --install-dir "$work" \
-            gems/hide-protocol-${{ inputs.version }}-x86_64-linux.gem
+            "gems/hide-protocol-$VERSION-x86_64-linux.gem"
           env -u HIDE_LIBRARY GEM_HOME="$work" ruby \
-            -I "$work/gems/hide-protocol-${{ inputs.version }}-x86_64-linux/lib" -e '
+            -I "$work/gems/hide-protocol-$VERSION-x86_64-linux/lib" -e '
               require "hide_protocol"
               sk = Hide::SecretKey.generate
               c = Hide.encrypt("secret", recipients: [sk.public_key])
@@ -510,6 +671,7 @@ jobs:
     needs: [verify, native]
     if: inputs.nuget
     runs-on: ubuntu-24.04
+    timeout-minutes: 45
     environment: nuget
     # Trusted publishing: NuGet/login exchanges OIDC for a 1-hour API key.
     permissions:
@@ -538,6 +700,7 @@ jobs:
       - name: Stage the binaries under their runtime identifiers
         run: |
           set -euo pipefail
+          # shellcheck disable=SC2016  # the ${...} are JavaScript template literals
           node -e '
             const {mkdirSync, copyFileSync, readdirSync, readFileSync} = require("node:fs");
             const {targets} = JSON.parse(readFileSync("sdk/native-targets.json", "utf8"));
@@ -545,23 +708,60 @@ jobs:
               const from = `native/native-${t.target}`;
               const dir = `sdk/dotnet/HideProtocol/runtimes/${t.rid}/native`;
               mkdirSync(dir, {recursive: true});
-              copyFileSync(`${from}/${readdirSync(from)[0]}`, `${dir}/${t.library}`);
+              // The artifact also holds the notices file: pick the library by
+              // its extension, never by position.
+              const libraries = readdirSync(from).filter((f) => /\.(so|dylib|dll)$/.test(f));
+              if (libraries.length !== 1) throw new Error(`${from}: expected one library, found ${libraries}`);
+              copyFileSync(`${from}/${libraries[0]}`, `${dir}/${t.library}`);
             }
           '
           find sdk/dotnet/HideProtocol/runtimes -type f
 
+      # One package carries seven binaries, so it carries the union of their
+      # notices (ffi-all). The csproj packs README.md and the runtimes; the two
+      # licence files are added through a Directory.Build.props written here,
+      # beside the project, so that a plain local `dotnet pack` still works
+      # without generated files and no SDK source changes for a release.
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        with:
+          name: notices
+          path: notices
+      - name: Stage the licence and the notices into the package
+        run: |
+          set -euo pipefail
+          cp LICENSE sdk/dotnet/HideProtocol/LICENSE
+          cp notices/ffi-all.txt sdk/dotnet/HideProtocol/THIRD-PARTY-LICENSES.txt
+          test ! -e sdk/dotnet/Directory.Build.props
+          cat > sdk/dotnet/Directory.Build.props <<'XML'
+          <Project>
+            <!-- Written by publish-sdks.yml for the pack step only. -->
+            <ItemGroup Condition="'$(IsPackable)' == 'true'">
+              <None Include="$(MSBuildProjectDirectory)/LICENSE" Pack="true" PackagePath="\" />
+              <None Include="$(MSBuildProjectDirectory)/THIRD-PARTY-LICENSES.txt" Pack="true" PackagePath="\" />
+            </ItemGroup>
+          </Project>
+          XML
+
       - name: Pack
         run: dotnet pack sdk/dotnet/HideProtocol/HideProtocol.csproj -c Release -o nupkg
 
-      - name: The package must carry a binary for every runtime
+      - name: The package must carry a binary for every runtime, and the licences
+        env:
+          VERSION: ${{ inputs.version }}
         run: |
           set -euo pipefail
-          unzip -l nupkg/HideProtocol.${{ inputs.version }}.nupkg | grep runtimes/
+          nupkg="nupkg/HideProtocol.$VERSION.nupkg"
+          listing="$(unzip -l "$nupkg")"
+          grep runtimes/ <<<"$listing"
           for rid in linux-x64 linux-arm64 linux-musl-x64 win-x64 win-arm64 osx-arm64 osx-x64; do
-            unzip -l nupkg/HideProtocol.${{ inputs.version }}.nupkg \
-              | grep -q "runtimes/$rid/native/" \
+            grep -q "runtimes/$rid/native/" <<<"$listing" \
               || { echo "::error::the package has no native library for $rid"; exit 1; }
           done
+          for file in LICENSE THIRD-PARTY-LICENSES.txt; do
+            grep -Eq " $file\$" <<<"$listing" \
+              || { echo "::error::the package has no $file"; exit 1; }
+          done
+          echo "every runtime and both licence files are in $nupkg"
 
       - name: NuGet login (OIDC -> short-lived key)
         if: '!inputs.dry_run'

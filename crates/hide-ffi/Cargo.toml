@@ -5,6 +5,7 @@ edition.workspace = true
 rust-version.workspace = true
 authors.workspace = true
 license.workspace = true
+license-file = "../../LICENSE"
 repository.workspace = true
 homepage.workspace = true
 documentation = "https://docs.rs/hide-ffi"
@@ -34,3 +35,6 @@ unsafe_code = "allow"
 
 [lints.clippy]
 all = "warn"
+# `as_chunks::<N>()` would change the element type for no benefit; the length is
+# checked at the call site. Same reasoning as the workspace default.
+chunks_exact_to_as_chunks = { level = "allow", priority = 1 }

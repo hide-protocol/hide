@@ -37,7 +37,9 @@ This Code of Conduct applies within all community spaces, and also applies when 
 
 ## Enforcement
 
-Instances of abusive, harassing, or otherwise unacceptable behavior may be reported to the community leaders responsible for enforcement via a GitHub issue asking for a private contact. All complaints will be reviewed and investigated promptly and fairly.
+Instances of abusive, harassing, or otherwise unacceptable behavior may be reported privately to conduct@codai.ro, which is read only by the maintainer. Do not open a public issue to report a conduct problem. HIDE has one maintainer, so he is the only person who reviews a report; complaints will be reviewed and investigated fairly, as soon as he reads them.
+
+If your report concerns the maintainer himself, use GitHub's "Report abuse" function on the relevant content or profile, which goes to GitHub and not to the maintainer.
 
 All community leaders are obligated to respect the privacy and security of the reporter of any incident.
 

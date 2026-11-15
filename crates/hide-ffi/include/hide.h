@@ -39,6 +39,9 @@ extern "C" {
 #define HIDE_ERR_TOO_LARGE             7
 #define HIDE_ERR_CHALLENGE_EXPIRED     8
 #define HIDE_ERR_CHALLENGE_REPLAYED    9
+/* Well-formed input using a version, suite or feature this build does not
+  implement. Distinct from HIDE_ERR_MALFORMED and from HIDE_ERR_AUTHENTICATION. */
+#define HIDE_ERR_UNSUPPORTED          10
 #define HIDE_ERR_PANIC                98
 #define HIDE_ERR_INTERNAL             99
 

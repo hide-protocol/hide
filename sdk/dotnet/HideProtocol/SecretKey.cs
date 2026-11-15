@@ -6,17 +6,19 @@ namespace HideProtocol;
 /// </summary>
 public sealed unsafe class SecretKey : IDisposable
 {
-    private IntPtr _handle;
+    private readonly SecretKeyHandle _handle;
 
-    private SecretKey(IntPtr handle) => _handle = handle;
+    private SecretKey(IntPtr handle) => _handle = new SecretKeyHandle(handle);
 
     public static SecretKey Generate()
     {
         IntPtr handle = IntPtr.Zero;
         HideBuffer publicKey = Native.hide_buffer_empty();
         Interop.Check(Native.hide_keypair_generate(&handle, &publicKey));
+        // Owned before anything else can throw, so the key cannot leak.
+        SecretKey secret = new(handle);
         Interop.Take(ref publicKey);
-        return new SecretKey(handle);
+        return secret;
     }
 
     /// <summary>Loads a key file. A protected key without its passphrase fails.</summary>
@@ -35,7 +37,7 @@ public sealed unsafe class SecretKey : IDisposable
 
     public byte[] PublicKey()
     {
-        IntPtr handle = Alive();
+        SecretKeyHandle handle = Alive();
         HideBuffer output = Native.hide_buffer_empty();
         Interop.Check(Native.hide_secret_key_public(handle, &output));
         return Interop.Take(ref output);
@@ -48,7 +50,7 @@ public sealed unsafe class SecretKey : IDisposable
     public byte[] Protect(string passphrase)
     {
         ArgumentNullException.ThrowIfNull(passphrase);
-        IntPtr handle = Alive();
+        SecretKeyHandle handle = Alive();
         if (passphrase.Length < Hide.MinPassphraseLength)
         {
             throw new ArgumentException(
@@ -62,23 +64,13 @@ public sealed unsafe class SecretKey : IDisposable
         return Interop.Take(ref output);
     }
 
-    internal IntPtr Alive() =>
-        _handle == IntPtr.Zero ? throw new ObjectDisposedException(nameof(SecretKey)) : _handle;
+    internal SecretKeyHandle Alive() =>
+        _handle.IsClosed ? throw new ObjectDisposedException(nameof(SecretKey)) : _handle;
 
-    public void Dispose()
-    {
-        if (_handle != IntPtr.Zero)
-        {
-            Native.hide_secret_key_free(_handle);
-            _handle = IntPtr.Zero;
-        }
-
-        GC.SuppressFinalize(this);
-    }
-
-    ~SecretKey() => Dispose();
+    /// <summary>Releases the key and zeroizes its material. Safe to call twice.</summary>
+    public void Dispose() => _handle.Dispose();
 
     // Never render key material, not even a fingerprint of it.
     public override string ToString() =>
-        $"HideProtocol.SecretKey ({(_handle == IntPtr.Zero ? "disposed" : "open")})";
+        $"HideProtocol.SecretKey ({(_handle.IsClosed ? "disposed" : "open")})";
 }

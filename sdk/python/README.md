@@ -12,10 +12,25 @@ of its own.
 pip install hide-protocol
 ```
 
-The wheel bundles the compiled core, so no toolchain is needed. Wheels are
-published for three platforms: `manylinux_2_28_x86_64`, `win_amd64` and
-`macosx_11_0_arm64`. On any other platform, build the core yourself and point
-the binding at it (see [Native library](#native-library)).
+The wheel bundles the compiled core, so no toolchain is needed. PyPI carries
+exactly three wheels per release, each tagged `py3-none-<platform>`, and no
+source distribution:
+
+| Wheel platform tag | Machine |
+| --- | --- |
+| `manylinux_2_28_x86_64` | Linux x86-64 with glibc |
+| `win_amd64` | Windows x86-64 |
+| `macosx_11_0_arm64` | macOS 11 or newer on Apple silicon |
+
+The Linux wheel's core is compiled on Ubuntu 24.04 and then given the
+`manylinux_2_28` tag; the tag is not checked against the binary. If it fails
+to load on an older distribution, build the core there.
+
+On anything else (Linux arm64, musl distributions such as Alpine, Intel
+macOS, Windows on Arm) `pip install hide-protocol` finds nothing to install.
+There, install the binding from a checkout (`pip install ./sdk/python`), build
+the core yourself and point the binding at it (see
+[Native library](#native-library)).
 
 ## Quick start
 
@@ -41,6 +56,11 @@ with hide.SecretKey.generate() as secret:
 unless the whole payload authenticates. The filename is attacker-controlled:
 never use it to choose an output path.
 
+A `filename` must be one portable file name, and encryption refuses anything
+else: at most 255 bytes, not `.` or `..`, no control characters, none of
+`< > : " / \ | ? *`, no trailing dot or space, and not a Windows device name
+such as `CON` or `COM1`.
+
 Keys on disk: `secret.protect(passphrase)` returns a sealed key file
 (`MIN_PASSPHRASE_LEN` is 8, and there is no escrow); `SecretKey.load(data,
 passphrase)` opens one; `inspect_key(data)` reports `"raw"` or `"protected"`
@@ -51,7 +71,14 @@ Errors: every failure is a subclass of `hide.HideError` — `AuthenticationError
 (altered, or not a container), its subclass `Malformed` (did not decode at
 all), `WrongPassphrase`, `NoMatchingRecipient`, `NotAKeyFile`,
 `ChallengeExpired`, `ChallengeReplayed`. Arguments this binding rejects before
-calling the core raise `ValueError`.
+calling the core raise `ValueError`, or `TypeError` when the argument is the
+wrong type (text that is not a `str`, a `decrypt` key that is not a
+`SecretKey`).
+
+Text arguments must not contain a NUL character. Passphrases, filenames,
+media types, audiences, origins and armored keys cross into the core as C
+strings, which end at the first NUL: `"longenough\0rest"` would otherwise seal
+a key under `"longenough"`. Such text raises `ValueError` instead.
 
 ## Signing and verification
 
@@ -77,10 +104,24 @@ with hide.SigningIdentity.load(sealed, "correct horse battery") as signer:
 ```
 
 `context` separates uses of one identity so a signature made for one purpose
-cannot be replayed as another; never let a remote party choose it. `verify`
+cannot be replayed as another; never let a remote party choose it. Contexts
+beginning with `HIDE/` are reserved for the protocol: `sign` refuses them with
+`ValueError`, while `verify` accepts any context. `verify`
 returns `None` and raises `AuthenticationError` on failure rather than
 returning a boolean a caller could forget to check. A key file written before
 signatures existed carries no signing seed and raises `NotAKeyFile`.
+
+## Threads
+
+- `SpentNonces` may be shared between threads. `accept` takes a per-object
+    lock around the native call, which changes the record; `ctypes` releases
+    the GIL during that call, so without the lock two threads could both accept
+    the same answer. Keep one record per verifier, not one per thread: a replay
+    is only caught by the record that saw the first answer.
+- `SecretKey` and `SigningIdentity` may be used from several threads at once;
+    the native calls only read them. Do not `close()` one while another thread
+    is still inside a call on it.
+- Module-level functions hold no shared state.
 
 ## Identity logs, epoch chains, transparency proofs
 
@@ -109,13 +150,18 @@ that is not 32 bytes raises `ValueError`.
 
 ## Native library
 
-The core is located in this order:
+The core is loaded from one of two places, always by absolute path:
 
 1. `HIDE_LIBRARY`, if it names a file **and** `HIDE_ALLOW_LIBRARY_OVERRIDE=1`
-   is also set;
-2. the library bundled inside the package (`hide_ffi.dll`,
-   `libhide_ffi.dylib` or `libhide_ffi.so` beside `_binding.py`);
-3. the system loader, by name.
+    is also set. Once opted in it is the only candidate: if it cannot be
+    loaded, the import fails rather than falling back to another copy;
+2. otherwise the library bundled inside the package (`hide_ffi.dll`,
+    `libhide_ffi.dylib` or `libhide_ffi.so` beside `_binding.py`).
+
+The system loader is never asked to search by name, so a library placed in
+the working directory, on `PATH` or on `LD_LIBRARY_PATH` is not picked up. If
+neither place has the library, `import hide_protocol` raises `ImportError`
+naming the platform and what to install.
 
 `HIDE_LIBRARY` is a development override: it replaces the entire cryptographic
 core, so a single settable environment variable must not be enough to redirect
@@ -127,6 +173,14 @@ export HIDE_LIBRARY="$PWD/target/release/libhide_ffi.so"   # hide_ffi.dll / libh
 export HIDE_ALLOW_LIBRARY_OVERRIDE=1
 ```
 
+The core and the binding must be the same release. At import the binding
+compares the core's `major.minor.patch` with its own and raises `ImportError`
+on any difference: the core enforces checks this binding only documents, so
+an older core beside a newer binding would silently lose them.
+The binding reads its own version from the installed package's metadata, so
+an application that freezes or vendors the package must carry that metadata
+with it (PyInstaller: `--copy-metadata hide-protocol`).
+
 ## Key material
 
 `SecretKey` and `SigningIdentity` are opaque handles. The seed bytes stay in the
@@ -134,6 +188,12 @@ native library and this SDK exposes no accessor for them; `repr()` shows only
 whether the handle is open. Release a handle with `close()` or a `with` block
 (it is also released on garbage collection, but that leaves key material in
 memory for an unbounded time). A closed handle raises `ValueError` on use.
+
+A handle cannot be copied: `copy.copy`, `copy.deepcopy` and pickling a
+`SecretKey`, `SigningIdentity` or `SpentNonces` raise `TypeError`. A copy
+would share the native object, and releasing either one would free it under
+the other. To use a key in a second place, pass the same object, or load the
+key file again.
 
 ## Limits
 

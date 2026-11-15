@@ -66,11 +66,11 @@
 </head>
 <body>
 <main>
-  <p class="banner" role="note">HIDE is <strong>experimental and unaudited</strong>. Do not use it for sensitive data. The protocol is a draft, no third party has reviewed the code, and the hybrid KEM tracks a moving IETF draft. See <a href="https://github.com/hide-protocol/hide/blob/main/docs/audit-status.md">audit status</a>.</p>
+  <p class="banner" role="note">HIDE is <strong>experimental and unaudited</strong>. Do not use it for sensitive data. The wire format is a release candidate, frozen since 0.9.0 and not 1.0; no third party has reviewed the code; the post-quantum crates it depends on are unaudited too; and the hybrid KEM tracks an IETF draft. See <a href="https://github.com/hide-protocol/hide/blob/main/docs/audit-status.md">audit status</a>.</p>
 
   <h1>HIDE — hybrid post-quantum file &amp; message encryption</h1>
 
-  <p><em>Human-friendly Identity &amp; Data Encryption.</em> HIDE is end-to-end encryption for files and short messages whose key encapsulation is quantum-resistant by construction: every content key is wrapped with X-Wing, a hybrid of X25519 and ML-KEM-768 as standardised in <strong>NIST FIPS 203 (ML-KEM)</strong>, and every signature is a hybrid of Ed25519 and ML-DSA-65 from <strong>FIPS 204 (ML-DSA)</strong>. A break of either half alone is not enough. The goal is to <strong>encrypt to a person, not to a key</strong>: the repository implements the file format engine, a hybrid signature scheme, and the machinery an identity needs to outlive a single key — device enrollment and revocation, forward security by erasure, an auditable history, and group messaging over MLS.</p>
+  <p><em>Human-friendly Identity &amp; Data Encryption.</em> HIDE is end-to-end encryption for files and short messages whose key encapsulation is designed to resist quantum attacks: every content key is wrapped with X-Wing, a hybrid of X25519 and ML-KEM-768 as standardised in <strong>NIST FIPS 203 (ML-KEM)</strong>, and every signature is a hybrid of Ed25519 and ML-DSA-65 from <strong>FIPS 204 (ML-DSA)</strong>. A break of either half alone is not enough. The goal is to <strong>encrypt to a person, not to a key</strong>: the repository implements the file format engine, a hybrid signature scheme, and the machinery an identity needs to outlive a single key — device enrollment and revocation, forward security by erasure, an auditable history, and group messaging over MLS. Group messaging and SSH login are not post-quantum.</p>
 
   <p>Source, specification and vectors: <a href="https://github.com/hide-protocol/hide">github.com/hide-protocol/hide</a> (Apache-2.0). Machine-readable summary: <a href="llms.txt">llms.txt</a>, <a href="llms-full.txt">llms-full.txt</a>.</p>
 
@@ -81,25 +81,27 @@ pip install hide-protocol               # Python
 npm install hide-protocol               # Node / TypeScript
 npm install @hide-protocol/wasm         # browser (WebAssembly)
 gem install hide-protocol               # Ruby
-dotnet add package HideProtocol         # .NET / C#
-go get github.com/hide-protocol/hide/sdk/go   # Go, from source via cgo</code></pre>
-  <p>Registry pages: <a href="https://crates.io/crates/hide-cli">crates.io</a> · <a href="https://pypi.org/project/hide-protocol/">PyPI</a> · <a href="https://www.npmjs.com/package/hide-protocol">npm</a> · <a href="https://www.npmjs.com/package/@hide-protocol/wasm">npm (wasm)</a> · <a href="https://rubygems.org/gems/hide-protocol">RubyGems</a> · <a href="https://www.nuget.org/packages/HideProtocol">NuGet</a>. Java and PHP are built from source. Desktop and portable builds are on the <a href="https://github.com/hide-protocol/hide/releases">releases page</a>; verify against <code>SHA256SUMS</code>.</p>
+dotnet add package HideProtocol         # .NET / C#</code></pre>
+  <p>Registry pages: <a href="https://crates.io/crates/hide-cli">crates.io</a> · <a href="https://pypi.org/project/hide-protocol/">PyPI</a> · <a href="https://www.npmjs.com/package/hide-protocol">npm</a> · <a href="https://www.npmjs.com/package/@hide-protocol/wasm">npm (wasm)</a> · <a href="https://rubygems.org/gems/hide-protocol">RubyGems</a> · <a href="https://www.nuget.org/packages/HideProtocol">NuGet</a>. The npm, RubyGems and NuGet packages carry the compiled core for seven targets; PyPI has wheels for three platforms (<code>manylinux_2_28_x86_64</code>, <code>win_amd64</code>, <code>macosx_11_0_arm64</code>). Go, Java and PHP are built from source: Go is clone-and-build (<code>go get</code> alone does not give a package that compiles, see <a href="https://github.com/hide-protocol/hide/blob/main/sdk/go/README.md">sdk/go</a>), Java is not on Maven Central and PHP is not on Packagist.</p>
+  <p>Desktop and portable builds are on the <a href="https://github.com/hide-protocol/hide/releases">releases page</a>. The installers and executables are <strong>not code-signed</strong>, so Windows or macOS may warn that the publisher is unknown. Verify a download against <code>SHA256SUMS</code> and with <code>gh attestation verify &lt;file&gt; --repo hide-protocol/hide</code>, which checks that the file was built by this repository's release workflow.</p>
 
   <h2 id="comparison">Compared with age, GPG, libsodium</h2>
+  <p>Checked on 2026-11-11. Sources for the cells about other projects are under the table.</p>
   <div class="tbl">
   <table>
     <thead><tr><th></th><th>HIDE</th><th>age</th><th>GPG</th><th>libsodium sealed box</th><th>Signal / MLS</th><th>AWS KMS envelope</th></tr></thead>
     <tbody>
-      <tr><td>Post-quantum KEM</td><td>X-Wing (X25519 + ML-KEM-768), always</td><td>Yes, opt-in: <code>age-keygen -pq</code> gives ML-KEM-768 + X25519 since v1.3.0</td><td>No (RFC 4880; PQ drafts in progress)</td><td>No (X25519)</td><td>Signal: PQXDH; MLS: PQ suites are a draft</td><td>ML-KEM in TLS to the service; envelope key is AES</td></tr>
+      <tr><td>Post-quantum KEM</td><td>X-Wing (X25519 + ML-KEM-768), always</td><td>Yes, opt-in: <code>age-keygen -pq</code> gives ML-KEM-768 + X25519 since v1.3.0</td><td>GnuPG 2.5 and later: Kyber (ML-KEM) encryption keys. Separately, RFC 9980 defines post-quantum algorithms for OpenPGP</td><td>No (X25519)</td><td>Signal: PQXDH; MLS: PQ suites are a draft</td><td>ML-KEM in TLS to the service; envelope key is AES</td></tr>
       <tr><td>Multi-device identity</td><td>Signed device log with revocation; no directory</td><td>No — one key per recipient</td><td>Keyring, subkeys, web of trust</td><td>No — a key is a key</td><td>Yes, service-operated directory</td><td>IAM principals, not people</td></tr>
       <tr><td>Forward secrecy</td><td>By erasure of epoch keys, no ratchet</td><td>No</td><td>No</td><td>No</td><td>Yes, double ratchet / tree ratchet</td><td>Rotation policy on the master key</td></tr>
       <tr><td>Signatures</td><td>Ed25519 + ML-DSA-65 hybrid</td><td>No (integrity only)</td><td>Yes, classical</td><td>Separate <code>crypto_sign</code>, Ed25519</td><td>Implicit via ratchet authentication</td><td>Separate KMS sign API</td></tr>
       <tr><td>Streaming large files</td><td>Yes, 64 KiB chunks, constant memory (unsigned)</td><td>Yes, 64 KiB STREAM</td><td>Yes</td><td>No — one message in memory</td><td>Attachments handled by the app</td><td>Application concern</td></tr>
-      <tr><td>Third-party audit</td><td><strong>None</strong></td><td>Yes (Trail of Bits, findings fixed Aug 2026)</td><td>Long public review history</td><td>Yes (Private Internet Access, 2017)</td><td>Yes (multiple)</td><td>Vendor-attested</td></tr>
+      <tr><td>Third-party audit</td><td><strong>None</strong></td><td>See the project; no public audit report located as of 2026-11-11</td><td>Long public review history</td><td>Yes (Cryptography Engineering, 2017, sponsored by Private Internet Access)</td><td>Yes (multiple)</td><td>Vendor-attested</td></tr>
     </tbody>
   </table>
   </div>
-  <p>age and libsodium are mature, audited tools, and age has offered a hybrid post-quantum recipient type since v1.3.0. If what you need is post-quantum file encryption to a key, <strong>use age</strong>: it is audited and HIDE is not. What HIDE adds on top is a signed multi-device identity with revocation, hybrid signatures on containers, forward security by epoch erasure, a transparency-log primitive and MLS group binding, all under one format. Detail in <a href="https://github.com/hide-protocol/hide/blob/main/docs/comparison.md">docs/comparison.md</a>.</p>
+  <p>Sources: <a href="https://github.com/FiloSottile/age/releases/tag/v1.3.0">age v1.3.0 release notes</a> (post-quantum recipients); <a href="https://lists.gnupg.org/pipermail/gnupg-announce/2025q4/000500.html">GnuPG 2.5.16 announcement</a> (2.5 declared stable; Kyber, "aka ML-KEM or FIPS-203"); <a href="https://www.rfc-editor.org/info/rfc9980">RFC 9980</a>, Post-Quantum Cryptography in OpenPGP; <a href="https://www.privateinternetaccess.com/blog/libsodium-audit-results/">libsodium audit results</a> (Dr. Matthew Green, Cryptography Engineering, sponsored by Private Internet Access). The remaining cells about other projects are the maintainer's reading of their public documentation and are not individually sourced here.</p>
+  <p>age and libsodium are far more widely deployed and reviewed than HIDE, and age has offered a hybrid post-quantum recipient type since v1.3.0. If what you need is post-quantum file encryption to a key, <strong>use age</strong>: HIDE is unaudited and has no deployment history. What HIDE adds on top is a signed multi-device identity with revocation, hybrid signatures on containers, forward security by epoch erasure, a transparency-log primitive and MLS group binding, all under one format. Detail in <a href="https://github.com/hide-protocol/hide/blob/main/docs/comparison.md">docs/comparison.md</a>.</p>
 
   <h2 id="docs">Documentation</h2>
   <ul>
@@ -115,14 +117,14 @@ go get github.com/hide-protocol/hide/sdk/go   # Go, from source via cgo</code></
     <li><a href="https://github.com/hide-protocol/hide/blob/main/docs/audit-status.md">Audit status</a> — what has and has not been reviewed</li>
     <li><a href="https://github.com/hide-protocol/hide/blob/main/docs/advisories.md">Advisories</a></li>
     <li><a href="https://github.com/hide-protocol/hide/blob/main/docs/TRACKER.md">Tracker</a></li>
-    <li><a href="https://github.com/hide-protocol/hide/blob/main/SECURITY.md">SECURITY.md</a> — scope, non-goals, private vulnerability reporting</li>
+    <li><a href="https://github.com/hide-protocol/hide/blob/main/SECURITY.md">SECURITY.md</a> — scope, non-goals, supported versions, private vulnerability reporting</li>
     <li><a href="https://github.com/hide-protocol/hide/blob/main/CHANGELOG.md">CHANGELOG</a></li>
   </ul>
 
   <h2 id="audit">Help audit this</h2>
-  <p>No third party has audited HIDE, and an unaudited encryption tool should be treated as broken until proven otherwise. Report findings through GitHub's private advisory as described in <a href="https://github.com/hide-protocol/hide/blob/main/SECURITY.md">SECURITY.md</a>; every finding is credited. There is no bounty, only credit and a fast fix.</p>
+  <p>No third party has audited HIDE, and an unaudited encryption tool should be treated as broken until proven otherwise. Report a finding privately, either through <a href="https://github.com/hide-protocol/hide/security/advisories/new">GitHub's private advisory form</a> or by mail to <a href="mailto:hide-security@codai.ro">hide-security@codai.ro</a> (mail is not end-to-end encrypted; prefer the form for sensitive detail), as described in <a href="https://github.com/hide-protocol/hide/blob/main/SECURITY.md">SECURITY.md</a>. A finding is credited unless you prefer otherwise. There is no bounty and no guaranteed response time: HIDE has one maintainer. Machine-readable contact: <a href=".well-known/security.txt">security.txt</a>.</p>
 
-  <footer>HIDE 0.6.2 · Apache-2.0 · This page loads no scripts, fonts or analytics from anywhere.</footer>
+  <footer>HIDE <span id="version">0.9.1</span> · Apache-2.0 · This page loads no scripts, fonts or analytics from anywhere. It is static and hosted on GitHub Pages; <a href="https://docs.github.com/en/pages/getting-started-with-github-pages/what-is-github-pages">GitHub logs visitor IP addresses</a> for security. HIDE itself has no telemetry, update check or accounts.</footer>
 </main>
 </body>
 </html>

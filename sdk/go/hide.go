@@ -14,7 +14,7 @@ package hide
 #cgo darwin LDFLAGS: -L${SRCDIR}/lib -lhide_ffi -framework Security
 #cgo windows LDFLAGS: -L${SRCDIR}/lib -lhide_ffi -lbcrypt -ladvapi32 -luserenv -lntdll -lws2_32
 #include <stdlib.h>
-#include "hide.h"
+#include "hide_core.h"
 */
 import "C"
 
@@ -22,6 +22,7 @@ import (
 	"errors"
 	"fmt"
 	"runtime"
+	"strings"
 	"unsafe"
 )
 
@@ -44,6 +45,33 @@ var (
 	ErrNotAKey             = errors.New("hide: not a HIDE key file")
 	ErrClosed              = errors.New("hide: this key has been closed")
 )
+
+// errInvalid wraps ErrInvalidArgument so a pre-check made in Go reports the
+// same sentinel as one made by the core: errors.Is(err, ErrInvalidArgument)
+// is the only test a caller should need.
+func errInvalid(format string, args ...any) error {
+	return fmt.Errorf("%w: %s", ErrInvalidArgument, fmt.Sprintf(format, args...))
+}
+
+// cString copies a Go string for a `const char *` parameter. The core reads
+// such parameters up to the first NUL, so a string carrying one would be
+// silently cut: "longenough\x00rest" would seal under "longenough". Refuse it
+// instead. Every `const char *` call site in this package goes through here.
+// The caller frees the result with C.free; a nil result needs no free.
+func cString(value, what string) (*C.char, error) {
+	if strings.IndexByte(value, 0) >= 0 {
+		return nil, errInvalid("the %s must not contain a NUL byte", what)
+	}
+	return C.CString(value), nil
+}
+
+// optionalCString is cString for parameters where "" means NULL (absent).
+func optionalCString(value, what string) (*C.char, error) {
+	if value == "" {
+		return nil, nil
+	}
+	return cString(value, what)
+}
 
 func status(code C.int32_t) error {
 	switch code {
@@ -115,14 +143,15 @@ func GenerateKey() (*SecretKey, error) {
 // key without its passphrase fails rather than guessing.
 func LoadKey(data []byte, passphrase string) (*SecretKey, error) {
 	var handle *C.HideSecretKey
-	var cPassphrase *C.char
-	if passphrase != "" {
-		cPassphrase = C.CString(passphrase)
-		defer C.free(unsafe.Pointer(cPassphrase))
+	cPassphrase, err := optionalCString(passphrase, "passphrase")
+	if err != nil {
+		return nil, err
 	}
+	defer C.free(unsafe.Pointer(cPassphrase))
 	code := C.hide_secret_key_open(
 		bytePointer(data), C.size_t(len(data)), cPassphrase, &handle,
 	)
+	runtime.KeepAlive(data)
 	if err := status(code); err != nil {
 		return nil, err
 	}
@@ -135,7 +164,11 @@ func (k *SecretKey) PublicKey() ([]byte, error) {
 		return nil, ErrClosed
 	}
 	var out C.HideBuffer = C.hide_buffer_empty()
-	if err := status(C.hide_secret_key_public(k.handle, &out)); err != nil {
+	code := C.hide_secret_key_public(k.handle, &out)
+	// Without this, k is dead once its handle has been read, and the finalizer
+	// may free the key while the core is still using it.
+	runtime.KeepAlive(k)
+	if err := status(code); err != nil {
 		return nil, err
 	}
 	return take(&out), nil
@@ -149,13 +182,18 @@ func (k *SecretKey) Protect(passphrase string) ([]byte, error) {
 		return nil, ErrClosed
 	}
 	if len(passphrase) < MinPassphraseLen {
-		return nil, fmt.Errorf("hide: the passphrase must be at least %d characters", MinPassphraseLen)
+		return nil, errInvalid("the passphrase must be at least %d characters", MinPassphraseLen)
 	}
-	cPassphrase := C.CString(passphrase)
+	cPassphrase, err := cString(passphrase, "passphrase")
+	if err != nil {
+		return nil, err
+	}
 	defer C.free(unsafe.Pointer(cPassphrase))
 
 	var out C.HideBuffer = C.hide_buffer_empty()
-	if err := status(C.hide_secret_key_protect(k.handle, cPassphrase, &out)); err != nil {
+	code := C.hide_secret_key_protect(k.handle, cPassphrase, &out)
+	runtime.KeepAlive(k)
+	if err := status(code); err != nil {
 		return nil, err
 	}
 	return take(&out), nil
@@ -203,25 +241,26 @@ func bytePointer(data []byte) *C.uint8_t {
 // Encrypt encrypts for 1..64 recipient public keys.
 func Encrypt(plaintext []byte, recipients [][]byte, options Options) ([]byte, error) {
 	if len(recipients) < 1 || len(recipients) > 64 {
-		return nil, errors.New("hide: there must be between 1 and 64 recipients")
+		return nil, errInvalid("there must be between 1 and 64 recipients")
 	}
 	joined := make([]byte, 0, len(recipients)*PublicKeyLen)
 	for _, key := range recipients {
 		if len(key) != PublicKeyLen {
-			return nil, fmt.Errorf("hide: a public key is %d bytes, got %d", PublicKeyLen, len(key))
+			return nil, errInvalid("a public key is %d bytes, got %d", PublicKeyLen, len(key))
 		}
 		joined = append(joined, key...)
 	}
 
-	var filename, mediaType *C.char
-	if options.Filename != "" {
-		filename = C.CString(options.Filename)
-		defer C.free(unsafe.Pointer(filename))
+	filename, err := optionalCString(options.Filename, "filename")
+	if err != nil {
+		return nil, err
 	}
-	if options.MediaType != "" {
-		mediaType = C.CString(options.MediaType)
-		defer C.free(unsafe.Pointer(mediaType))
+	defer C.free(unsafe.Pointer(filename))
+	mediaType, err := optionalCString(options.MediaType, "media type")
+	if err != nil {
+		return nil, err
 	}
+	defer C.free(unsafe.Pointer(mediaType))
 
 	var out C.HideBuffer = C.hide_buffer_empty()
 	code := C.hide_encrypt(
@@ -241,6 +280,9 @@ func Encrypt(plaintext []byte, recipients [][]byte, options Options) ([]byte, er
 // Decrypt decrypts and verifies. Nothing is returned unless the entire payload
 // authenticates, so a caller cannot act on unverified data.
 func Decrypt(container []byte, key *SecretKey) (*Decrypted, error) {
+	if key == nil {
+		return nil, errInvalid("the key must not be nil")
+	}
 	if key.handle == nil {
 		return nil, ErrClosed
 	}
@@ -254,6 +296,7 @@ func Decrypt(container []byte, key *SecretKey) (*Decrypted, error) {
 		key.handle, &out, &filename, &mediaType,
 	)
 	runtime.KeepAlive(container)
+	runtime.KeepAlive(key)
 	if err := status(code); err != nil {
 		return nil, err
 	}
@@ -277,7 +320,10 @@ func ArmorPublicKey(publicKey []byte) (string, error) {
 
 // DearmorPublicKey parses armored public-key text back into bytes.
 func DearmorPublicKey(text string) ([]byte, error) {
-	cText := C.CString(text)
+	cText, err := cString(text, "armored key")
+	if err != nil {
+		return nil, err
+	}
 	defer C.free(unsafe.Pointer(cText))
 
 	var out C.HideBuffer = C.hide_buffer_empty()

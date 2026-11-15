@@ -5,8 +5,13 @@ name: Publish package manifests
 # will not have read SECURITY.md. A release should be downloadable immediately;
 # being installable is a decision someone takes deliberately.
 #
-# Needs a PAT with `contents: write` on the tap repositories, as
-# secrets.TAP_TOKEN. The default GITHUB_TOKEN cannot push to another repo.
+# The two push jobs need `secrets.TAP_TOKEN`, a token with `contents: write`
+# on hide-protocol/homebrew-tap and hide-protocol/scoop-bucket: the default
+# GITHUB_TOKEN cannot push to another repository, and neither Homebrew nor
+# Scoop has an OIDC path. It is the one credential this repository's
+# workflows can use at all, scoped to the `packaging` environment. Today it
+# does not exist (`gh secret list` is empty) and neither tap repository does,
+# so the push jobs fail at the clone; `generate` runs without it.
 on:
   workflow_dispatch:
     inputs:
@@ -32,6 +37,9 @@ permissions:
 jobs:
   generate:
     runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    env:
+      VERSION: ${{ inputs.version }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
@@ -43,30 +51,42 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p dist
-          gh release download "v${{ inputs.version }}" --dir dist --pattern 'SHA256SUMS'
-          bash packaging/generate.sh "${{ inputs.version }}" dist
+          gh release download "v$VERSION" --dir dist --pattern 'SHA256SUMS'
+          bash packaging/generate.sh "$VERSION" dist
 
-      # A manifest whose checksum does not match the asset it names would make
-      # every install fail, so verify before pushing rather than after.
-      - name: The manifests must match the real assets
+      # Two checks, both against the bytes users will download. First the
+      # manifests against SHA256SUMS: every URL names this release and every
+      # hash is the entry of the asset the URL names (up to 0.9.1 the Scoop
+      # manifest paired new hashes with v0.5.0 URLs, and the old check below
+      # could not see it because it never read a manifest). Then SHA256SUMS
+      # against the assets themselves, downloaded from the release.
+      - name: The manifests must point at this release's assets
+        run: |
+          set -euo pipefail
+          bash packaging/verify.sh "$VERSION" dist
+      - name: SHA256SUMS must match the published assets
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
           cd dist
-          gh release download "v${{ inputs.version }}" --dir . --pattern '*.tar.gz' --pattern '*.zip'
-          sha256sum --check --ignore-missing SHA256SUMS
+          gh release download "v$VERSION" --dir . --pattern 'hide-v*.tar.gz' --pattern 'hide-v*.zip'
+          # Exactly the seven CLI archives the manifests reference.
+          [ "$(find . -maxdepth 1 \( -name 'hide-v*.tar.gz' -o -name 'hide-v*.zip' \) | wc -l)" -eq 7 ]
+          sha256sum --check --ignore-missing --strict SHA256SUMS
 
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: packaging-manifests
           path: dist/packaging/**
+          if-no-files-found: error
           retention-days: 7
 
   homebrew:
     needs: generate
     if: inputs.homebrew && !inputs.dry_run
     runs-on: ubuntu-24.04
+    timeout-minutes: 10
     environment: packaging
     steps:
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
@@ -76,8 +96,10 @@ jobs:
       - name: Push the formula
         env:
           GH_TOKEN: ${{ secrets.TAP_TOKEN }}
+          VERSION: ${{ inputs.version }}
         run: |
           set -euo pipefail
+          [ -n "$GH_TOKEN" ] || { echo "::error::secrets.TAP_TOKEN is not set in the packaging environment"; exit 1; }
           git clone --depth 1 \
             "https://x-access-token:${GH_TOKEN}@github.com/hide-protocol/homebrew-tap.git" tap
           mkdir -p tap/Formula
@@ -87,13 +109,14 @@ jobs:
           git config user.email "bot@hide-protocol.invalid"
           git add Formula/hide.rb
           git diff --cached --quiet && { echo "already up to date"; exit 0; }
-          git commit -m "hide ${{ inputs.version }}"
+          git commit -m "hide $VERSION"
           git push
 
   scoop:
     needs: generate
     if: inputs.scoop && !inputs.dry_run
     runs-on: ubuntu-24.04
+    timeout-minutes: 10
     environment: packaging
     steps:
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
@@ -103,8 +126,10 @@ jobs:
       - name: Push the manifest
         env:
           GH_TOKEN: ${{ secrets.TAP_TOKEN }}
+          VERSION: ${{ inputs.version }}
         run: |
           set -euo pipefail
+          [ -n "$GH_TOKEN" ] || { echo "::error::secrets.TAP_TOKEN is not set in the packaging environment"; exit 1; }
           git clone --depth 1 \
             "https://x-access-token:${GH_TOKEN}@github.com/hide-protocol/scoop-bucket.git" bucket
           mkdir -p bucket/bucket
@@ -114,5 +139,5 @@ jobs:
           git config user.email "bot@hide-protocol.invalid"
           git add bucket/hide.json
           git diff --cached --quiet && { echo "already up to date"; exit 0; }
-          git commit -m "hide ${{ inputs.version }}"
+          git commit -m "hide $VERSION"
           git push

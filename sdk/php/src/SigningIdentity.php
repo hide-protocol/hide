@@ -9,14 +9,48 @@ namespace HideProtocol;
  * to PHP — there is deliberately no accessor for it.
  *
  * Release it with close(); it is also released when the object is collected.
+ *
+ * It cannot be cloned or serialized: a copy would share the one native handle
+ * and free it a second time.
  */
 final class SigningIdentity
 {
-    private ?\FFI\CData $handle;
+    // Null by default, so an instance made without the constructor
+    // (unserialize, reflection) is simply closed rather than uninitialised.
+    private ?\FFI\CData $handle = null;
 
     private function __construct(\FFI\CData $handle)
     {
         $this->handle = $handle;
+    }
+
+    /**
+     * Private, so `clone $identity` is refused by the engine before any copy
+     * exists. If it is reached from inside the class scope anyway, $this is
+     * the copy: it must forget the handle before failing, or its destructor
+     * would free the identity the original still owns.
+     */
+    private function __clone()
+    {
+        $this->handle = null;
+
+        throw new HideException(
+            'a SigningIdentity cannot be cloned: the copy would share one native identity'
+        );
+    }
+
+    /** @return array<string, mixed> */
+    public function __serialize(): array
+    {
+        throw new HideException(
+            'a SigningIdentity cannot be serialized: store the sealed key file from generate()'
+        );
+    }
+
+    /** @param array<string, mixed> $data */
+    public function __unserialize(array $data): void
+    {
+        throw new HideException('a SigningIdentity cannot be unserialized: use SigningIdentity::load()');
     }
 
     /**
@@ -54,8 +88,10 @@ final class SigningIdentity
     {
         $ffi = Binding::ffi();
         $handle = $ffi->new('void *');
-        $data = Binding::bytes($bytes);
+        // Text first: a refused passphrase must not strand the unmanaged copy
+        // of the key file made below.
         $secret = Binding::cString($passphrase, 'passphrase');
+        $data = Binding::bytes($bytes);
 
         try {
             Binding::check($ffi->hide_signing_identity_open(

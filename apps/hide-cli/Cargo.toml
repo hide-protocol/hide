@@ -4,12 +4,14 @@ version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
+license-file = "../../LICENSE"
 repository.workspace = true
 homepage.workspace = true
+readme = "README.md"
 keywords.workspace = true
 categories.workspace = true
 publish.workspace = true
-description = "Command-line interface for the HIDE protocol: encrypt to a person, not to a key"
+description = "Experimental, unaudited command-line tool for the HIDE encrypted-file protocol. Not for sensitive data."
 
 [[bin]]
 name = "hide"

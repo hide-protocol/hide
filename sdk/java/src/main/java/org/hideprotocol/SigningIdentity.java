@@ -33,7 +33,7 @@ public final class SigningIdentity implements AutoCloseable {
         }
         try (Arena arena = Arena.ofConfined()) {
             MemorySegment out = Native.emptyBuffer(arena);
-            MemorySegment phrase = arena.allocateFrom(passphrase);
+            MemorySegment phrase = Native.cString(arena, passphrase, "passphrase");
             Hide.check((int) Native.IDENTITY_GENERATE.invokeExact(phrase, out));
             return Native.take(out);
         } catch (Throwable error) {
@@ -54,9 +54,7 @@ public final class SigningIdentity implements AutoCloseable {
             MemorySegment identity = arena.allocate(ValueLayout.ADDRESS);
             // Bound to a MemorySegment local: invokeExact matches static types,
             // and a ternary widening to Object would fail to link at runtime.
-            MemorySegment phrase = passphrase == null
-                    ? MemorySegment.NULL
-                    : arena.allocateFrom(passphrase);
+            MemorySegment phrase = Native.optionalCString(arena, passphrase, "passphrase");
             Hide.check((int) Native.SIGNING_IDENTITY_OPEN.invokeExact(
                     bytes, (long) data.length, phrase, identity));
             return new SigningIdentity(identity.get(ValueLayout.ADDRESS, 0));

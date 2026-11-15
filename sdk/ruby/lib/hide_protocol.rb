@@ -84,7 +84,7 @@ module Hide
               :hide_encrypt,
               buffer_arg(plain), plain.bytesize,
               joined, recipients.length,
-              cstring(filename), cstring(media_type),
+              cstring(filename, "filename"), cstring(media_type, "media type"),
               out
             ))
       Binding.take(out)
@@ -133,7 +133,7 @@ module Hide
 
     def dearmor_public_key(text)
       out = Binding.empty_buffer
-      check(Binding.call(:hide_public_key_dearmor, cstring(text.to_s), out))
+      check(Binding.call(:hide_public_key_dearmor, cstring(text.to_s, "armored text"), out))
       Binding.take(out)
     end
 
@@ -175,7 +175,7 @@ module Hide
       out = Binding.empty_buffer
       check(Binding.call(
               :hide_challenge_new,
-              cstring(audience), Integer(now), Integer(valid_for), out
+              cstring(audience, "audience"), Integer(now), Integer(valid_for), out
             ))
       Binding.take(out)
     end
@@ -351,7 +351,7 @@ module Hide
         check(Binding.call(
                 :hide_checkpoint_verify,
                 buffer_arg(bytes), bytes.bytesize,
-                cstring(origin.to_s),
+          cstring(origin.to_s, "origin"),
                 buffer_arg(key), key.bytesize,
                 size, out
               ))
@@ -368,6 +368,30 @@ module Hide
 
       message = Binding.static_string(Binding.call(:hide_error_message, code))
       raise ERRORS.fetch(code, Error), message
+    end
+
+    # Text for a `const char *` parameter: NULL for absent, otherwise UTF-8
+    # plus a terminator.
+    #
+    # C strings end at the first NUL, so "longenough\0rest" would reach the
+    # core as "longenough" and a key would be sealed under a passphrase the
+    # caller never chose. Every text argument, passphrases included, goes
+    # through here.
+    def cstring(value, what = "text")
+      return nil if value.nil?
+
+      text = value.to_s
+      # Binary-tagged text is taken as the UTF-8 bytes it already is; the core
+      # refuses it if it is not.
+      text = text.encode(Encoding::UTF_8) unless text.encoding == Encoding::BINARY
+      bytes = text.b
+      if bytes.include?("\x00".b)
+        raise InvalidArgumentError, "#{what} must not contain a NUL character"
+      end
+
+      bytes << "\x00".b
+    rescue EncodingError
+      raise InvalidArgumentError, "#{what} must be text that converts to UTF-8"
     end
 
     private
@@ -401,17 +425,20 @@ module Hide
     def buffer_arg(bytes)
       bytes.empty? ? Fiddle::Pointer.malloc(1, Fiddle::RUBY_FREE) : bytes
     end
+  end
 
-    # NULL for absent, UTF-8 plus a terminator otherwise.
-    def cstring(value)
-      return nil if value.nil?
+  # Refuses every way of making a second Ruby object around one native pointer.
+  #
+  # A copy would hold the same address, and whichever of the two was closed
+  # first would free it under the other: use after free, then a double free.
+  # Nothing about a copy can be made safe, so dup, clone and Marshal all raise.
+  module Uncopyable
+    def initialize_copy(_source)
+      raise TypeError, "#{self.class} cannot be copied: it owns a native handle"
+    end
 
-      text = value.to_s
-      if text.include?("\x00")
-        raise InvalidArgumentError, "text passed to the core must not contain NUL"
-      end
-
-      "#{text.encode(Encoding::UTF_8)}\x00".force_encoding(Encoding::BINARY)
+    def marshal_dump
+      raise TypeError, "#{self.class} cannot be serialized: it owns a native handle"
     end
   end
 
@@ -452,6 +479,7 @@ module Hide
   # exposed to Ruby; there is deliberately no accessor for it.
   class SigningIdentity
     include Bytes
+    include Uncopyable
 
     class << self
       # Creates an identity and returns the sealed key file to store. One seed
@@ -464,7 +492,7 @@ module Hide
         end
 
         out = Binding.empty_buffer
-        Hide.check(Binding.call(:hide_identity_generate, "#{text}\x00".b, out))
+        Hide.check(Binding.call(:hide_identity_generate, Hide.cstring(text, "passphrase"), out))
         Binding.take(out)
       end
 
@@ -479,7 +507,7 @@ module Hide
                      :hide_signing_identity_open,
                      bytes.empty? ? Fiddle::Pointer.malloc(1, Fiddle::RUBY_FREE) : bytes,
                      bytes.bytesize,
-                     passphrase.nil? ? nil : "#{passphrase}\x00".b,
+                     Hide.cstring(passphrase, "passphrase"),
                      handle
                    ))
         identity = new(handle[0, Binding::WORD].unpack1(Binding::WORD_PACK))
@@ -493,6 +521,10 @@ module Hide
       end
 
       alias load open
+
+      # An identity exists only around a pointer the core handed out; wrapping
+      # a caller's integer would make a second owner of someone else's memory.
+      private :new
     end
 
     def initialize(address)
@@ -568,8 +600,14 @@ module Hide
   # Replay can only be detected by the verifier: a replayed answer is a genuine
   # signature and nothing about it is invalid on its own. This must therefore
   # outlive a single request.
+  #
+  # One record may be shared between threads: accept holds a per-object lock
+  # around the native call, which mutates the record and is not synchronised
+  # on the native side. fiddle releases the interpreter lock during the call,
+  # so without the lock two threads could both accept the same answer.
   class SpentNonces
     include Bytes
+    include Uncopyable
 
     def self.open
       record = new
@@ -587,33 +625,41 @@ module Hide
       raise Error, "could not allocate the nonce record" if pointer.null?
 
       @address = pointer.to_i
+      @lock = Mutex.new
     end
 
     # Accepts an answer exactly once: raises ChallengeReplayedError the second
     # time, ChallengeExpiredError after the window, AuthenticationError if it
     # does not verify.
     def accept(challenge, signature, public_key, now)
-      raise ClosedKeyError, "this record has been closed" if closed?
-
       chal = binary(challenge, "challenge")
       sig = binary(signature, "signature")
       key = binary(public_key, "public key")
-      Hide.check(Binding.call(
-                   :hide_challenge_accept,
-                   Fiddle::Pointer.new(@address),
-                   arg(chal), chal.bytesize,
-                   arg(sig), sig.bytesize,
-                   arg(key), key.bytesize,
-                   Integer(now)
-                 ))
+      at = Integer(now)
+      @lock.synchronize do
+        raise ClosedKeyError, "this record has been closed" if closed?
+
+        Hide.check(Binding.call(
+                     :hide_challenge_accept,
+                     Fiddle::Pointer.new(@address),
+                     arg(chal), chal.bytesize,
+                     arg(sig), sig.bytesize,
+                     arg(key), key.bytesize,
+                     at
+                   ))
+      end
       nil
     end
 
     def close
-      return if closed?
+      # Under the lock, so the record is never freed beneath an accept that
+      # another thread is still inside.
+      @lock.synchronize do
+        next if closed?
 
-      Binding.call(:hide_spent_nonces_free, Fiddle::Pointer.new(@address))
-      @address = nil
+        Binding.call(:hide_spent_nonces_free, Fiddle::Pointer.new(@address))
+        @address = nil
+      end
       nil
     end
 
@@ -625,6 +671,8 @@ module Hide
   # A secret key. The bytes stay inside the native library and are never
   # exposed to Ruby; there is deliberately no accessor for them.
   class SecretKey
+    include Uncopyable
+
     class << self
       def generate(&block)
         handle = Binding.pointer_slot
@@ -646,7 +694,7 @@ module Hide
                      :hide_secret_key_open,
                      bytes.empty? ? Fiddle::Pointer.malloc(1, Fiddle::RUBY_FREE) : bytes,
                      bytes.bytesize,
-                     passphrase.nil? ? nil : "#{passphrase}\x00".b,
+                     Hide.cstring(passphrase, "passphrase"),
                      handle
                    ))
         wrap(handle, &block)
@@ -655,6 +703,10 @@ module Hide
       alias load open
 
       private
+
+  # A key exists only around a pointer the core handed out; wrapping a
+  # caller's integer would make a second owner of someone else's memory.
+  private :new
 
       # With a block the key is always closed, even if the block raises.
       def wrap(handle, &block)
@@ -691,7 +743,7 @@ module Hide
       end
 
       out = Binding.empty_buffer
-      Hide.check(Binding.call(:hide_secret_key_protect, handle, "#{text}\x00".b, out))
+      Hide.check(Binding.call(:hide_secret_key_protect, handle, Hide.cstring(text, "passphrase"), out))
       Binding.take(out)
     end
 
