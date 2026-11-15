@@ -1133,6 +1133,16 @@ All of the following, in this order of dependency:
 1. **A third-party audit** of the container format, the key schedule, the authenticated streaming and the signature transcript (items 1–4 in [audit-status.md](audit-status.md)), with every finding fixed or documented as a known limitation, and the report published unredacted.
 2. **One year of frozen container format** after the last format change to suite 1, measured from the release that made it.
 3. **Two independent implementations** passing the full vector set in `conformance/vectors/manifest.json`, including the rejection vectors. The Rust crates are one; the Node verifier under `conformance/node` (`verify.mjs` for the container and signatures, `subsystems.mjs` for identity logs, epoch chains and transparency proofs) is written in this repository by the same maintainers, so an implementation maintained outside it is still wanted.
+
+	What a third party needs to make that claim now exists: [`conformance/harness`](../conformance/harness)
+	runs any implementation against every vector and reports the verdict through exit statuses, so no
+	output format has to be parsed, and it checks the **class** of each refusal rather than only that
+	something failed. The levels, the behaviours with the spec section each comes from, and the hash
+	of the vector set a claim is made against are in
+	[`conformance/compliance.json`](../conformance/compliance.json); the protocol is in
+	[`conformance/README.md`](../conformance/README.md). The reference adapter drives this repository's
+	own CLI and is an example, not the independent implementation. **No implementation maintained
+	outside this repository has run the harness yet**, so this criterion is still open.
 4. The HPKE-PQ specification carrying X-Wing published as an RFC, or a documented decision to freeze on the draft with a HIDE-owned suite id.
 5. Epoch secrets persisted, so forward security by erasure is operational rather than demonstrable.
 6. The stability table above with no "evolving" row among the crates a container depends on.

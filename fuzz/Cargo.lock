@@ -851,6 +851,7 @@ name = "hide-transparency"
 version = "0.9.1"
 dependencies = [
  "base64",
+ "ed25519-dalek",
  "hide-sign",
  "minicbor",
  "sha2",

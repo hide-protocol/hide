@@ -1,0 +1,799 @@
+{
+  "compliance": "hide-conformance/1",
+  "about": "What a HIDE 1 implementation must do to be called conformant, in machine-readable form. Verified by conformance/harness/run.mjs against the frozen vector set named below.",
+  "spec": "spec/hide-1.md",
+  "vectors": {
+    "directory": "conformance/vectors",
+    "manifest": "conformance/vectors/manifest.json",
+    "format": "hide-vectors/1",
+    "manifestSha256": "bdb5319aa873f1e593fed481b81091238b98f772de355b367614a6a778cd2df3",
+    "counts": {
+      "container": {
+        "open": 10,
+        "reject": 28
+      },
+      "detached-signature": {
+        "open": 2,
+        "reject": 0
+      },
+      "public-key": {
+        "open": 4,
+        "reject": 3
+      },
+      "key": {
+        "open": 3,
+        "reject": 1
+      },
+      "subsystem": {
+        "open": 24,
+        "reject": 9
+      }
+    },
+    "total": 84,
+    "defaultSecret": "recipient.test-secret",
+    "frozen": "The vector files are frozen artifacts (docs/stability.md); the harness only reads them and writes nothing inside conformance/vectors."
+  },
+  "protocol": {
+    "document": "conformance/README.md",
+    "verbs": {
+      "container": "open-container",
+      "key": "load-key",
+      "public-key": "load-public-key",
+      "subsystem": "verify-subsystem"
+    },
+    "hashOnlyKinds": [
+      "detached-signature"
+    ],
+    "placeholders": [
+      "{verb}",
+      "{input}",
+      "{key}",
+      "{out}",
+      "{message}",
+      "{vectors}"
+    ],
+    "exitCodes": {
+      "0": "accepted",
+      "2": "refused, malformed (§6.1)",
+      "3": "refused, unsupported (§6.1)",
+      "4": "refused, authentication (§6.1)",
+      "5": "refused, no matching recipient (§6.1, the single non-recipient outcome)",
+      "10": "this command does not implement {verb}; the vector is reported NOT CHECKED, never a pass",
+      "other": "the command did not run; the harness reports a failure"
+    }
+  },
+  "levels": [
+    {
+      "id": "container",
+      "requires": [
+        "container"
+      ],
+      "meaning": "Reads and refuses containers with the §6.1 class on each refusal. The minimum for an interoperable reader."
+    },
+    {
+      "id": "container+credentials",
+      "requires": [
+        "container",
+        "key",
+        "public-key"
+      ],
+      "meaning": "Also opens key files and accepts or refuses recipient public keys. The level the reference `hide` CLI can be driven to today."
+    },
+    {
+      "id": "full",
+      "requires": [
+        "container",
+        "key",
+        "public-key",
+        "subsystem"
+      ],
+      "meaning": "Every vector in the manifest, run with --require-complete. This is what criterion 3 of docs/stability.md asks of an implementation maintained outside this repository."
+    }
+  ],
+  "behaviours": [
+    {
+      "id": "unsigned-container",
+      "statement": "A HIDE 1 unsigned container opens to exactly the recorded plaintext, including a newer minor (7) and one that carries ignorable header, metadata and stanza data the reader does not understand.",
+      "spec": "§1–§5",
+      "vectors": [
+        "hello.hide",
+        "empty.hide",
+        "grease.hide",
+        "grease-minor.hide"
+      ]
+    },
+    {
+      "id": "signed-container",
+      "statement": "The SIGNED flag with the HIDE/1.0 transcript verifies, in the public and the confidential placement, and an unknown stanza or extension stays bound by the transcript.",
+      "spec": "§7.1–§7.3",
+      "vectors": [
+        "v1-signed.hide",
+        "v1-signed-confidential.hide",
+        "grease-signed.hide"
+      ]
+    },
+    {
+      "id": "legacy-signed-container",
+      "statement": "A minor-2 container still opens and reports its signer, publicly or confidentially.",
+      "spec": "§7.4",
+      "vectors": [
+        "signed-public.hide",
+        "signed-confidential.hide"
+      ]
+    },
+    {
+      "id": "seed-derived-recipient",
+      "statement": "A container sealed to the recipient key derived from a 32-byte master seed opens with the seed.",
+      "spec": "§9.1",
+      "vectors": [
+        "identity.hide"
+      ]
+    },
+    {
+      "id": "key-file",
+      "statement": "The unprotected 32-byte seed, the protected HIDE-KEY file and the signing seed load; a key file whose Argon2 parameters are outside the bounds is refused before it allocates.",
+      "spec": "§9.2–§9.4",
+      "vectors": [
+        "recipient.test-secret",
+        "identity.test-seed",
+        "signer.test-seed",
+        "rejections/argon2-memory.test-secret"
+      ]
+    },
+    {
+      "id": "recipient-public-key",
+      "statement": "A 1216-byte recipient public key is accepted; a small-order or non-canonical X25519 component is refused. A 1984-byte verifying key file loads.",
+      "spec": "§9.5, §9.6",
+      "vectors": [
+        "recipient.test-public",
+        "identity.test-public",
+        "signed.test-public",
+        "signer.test-public",
+        "rejections/small-order.test-public",
+        "rejections/x25519-high-bit.test-public",
+        "rejections/x25519-not-reduced.test-public"
+      ]
+    },
+    {
+      "id": "preamble",
+      "statement": "Magic, major, minor, kind and flags are refused exactly as the preamble table says.",
+      "spec": "§1.1",
+      "vectors": [
+        "rejections/bad-magic.hide",
+        "rejections/unsupported-major.hide",
+        "rejections/minor-zero.hide",
+        "rejections/unknown-flag.hide",
+        "rejections/legacy-minor-with-flag.hide",
+        "rejections/header-len-overflow.hide"
+      ]
+    },
+    {
+      "id": "header-and-stanzas",
+      "statement": "Critical and out-of-range header keys, the extension limits, the stanza grammar and a recipient set with only unknown stanzas are handled as the header section says.",
+      "spec": "§2.1–§2.3",
+      "vectors": [
+        "rejections/critical-header-key.hide",
+        "rejections/header-key-over-u16.hide",
+        "rejections/ignorable-ext-oversize.hide",
+        "rejections/ignorable-ext-not-bstr.hide",
+        "rejections/too-many-extensions.hide",
+        "rejections/only-unknown-stanzas.hide",
+        "rejections/two-signatures.hide",
+        "rejections/unknown-signature-tag.hide"
+      ]
+    },
+    {
+      "id": "metadata",
+      "statement": "Reserved and critical metadata keys are refused, a filename must be a portable path component, and a non-shortest-form integer is not canonical.",
+      "spec": "§4",
+      "vectors": [
+        "rejections/critical-metadata-key.hide",
+        "rejections/reserved-metadata-key.hide",
+        "rejections/filename-dotdot.hide",
+        "rejections/non-canonical-metadata.hide"
+      ]
+    },
+    {
+      "id": "record-stream",
+      "statement": "A damaged header MAC, AEAD tag, altered payload salt, truncation, trailing bytes, and a stream that never reaches FINAL are all refused, and no plaintext is published on refusal.",
+      "spec": "§5, §6",
+      "vectors": [
+        "rejections/header-bit-flipped.hide",
+        "rejections/final-record-bit-flipped.hide",
+        "rejections/payload-salt-altered.hide",
+        "rejections/truncated-before-final.hide",
+        "rejections/trailing-bytes-after-final.hide"
+      ]
+    },
+    {
+      "id": "signature-obligations",
+      "statement": "A stripped, unexpected or rewritten signature is refused, and minor 2 refuses what its transcript cannot bind.",
+      "spec": "§7.3, §7.4",
+      "vectors": [
+        "rejections/stripped-signature.hide",
+        "rejections/unexpected-signature.hide",
+        "rejections/signature-extension-rewritten.hide",
+        "rejections/signature-unknown-stanza-removed.hide",
+        "rejections/legacy-minor2-with-extension.hide"
+      ]
+    },
+    {
+      "id": "error-classes",
+      "statement": "Each refusal carries the §6.1 class the spec names for it, not merely \"it failed\".",
+      "spec": "§6.1",
+      "vectors": [
+        "rejections/argon2-memory.test-secret",
+        "rejections/bad-magic.hide",
+        "rejections/critical-header-key.hide",
+        "rejections/critical-metadata-key.hide",
+        "rejections/filename-dotdot.hide",
+        "rejections/final-record-bit-flipped.hide",
+        "rejections/header-bit-flipped.hide",
+        "rejections/header-key-over-u16.hide",
+        "rejections/header-len-overflow.hide",
+        "rejections/ignorable-ext-not-bstr.hide",
+        "rejections/ignorable-ext-oversize.hide",
+        "rejections/legacy-minor-with-flag.hide",
+        "rejections/legacy-minor2-with-extension.hide",
+        "rejections/minor-zero.hide",
+        "rejections/non-canonical-metadata.hide",
+        "rejections/only-unknown-stanzas.hide",
+        "rejections/payload-salt-altered.hide",
+        "rejections/reserved-metadata-key.hide",
+        "rejections/signature-extension-rewritten.hide",
+        "rejections/signature-unknown-stanza-removed.hide",
+        "rejections/small-order.test-public",
+        "rejections/stripped-signature.hide",
+        "rejections/too-many-extensions.hide",
+        "rejections/trailing-bytes-after-final.hide",
+        "rejections/truncated-before-final.hide",
+        "rejections/two-signatures.hide",
+        "rejections/unexpected-signature.hide",
+        "rejections/unknown-flag.hide",
+        "rejections/unknown-signature-tag.hide",
+        "rejections/unsupported-major.hide",
+        "rejections/x25519-high-bit.test-public",
+        "rejections/x25519-not-reduced.test-public"
+      ]
+    },
+    {
+      "id": "frozen-hashes",
+      "statement": "Every vector hashes to the sha256 the manifest records, including the two implementation-defined detached signatures whose content is not otherwise constrained.",
+      "spec": "Conformance, conformance/vectors/README.md",
+      "vectors": [
+        "empty.hide",
+        "empty.sig",
+        "grease-minor.hide",
+        "grease-signed.hide",
+        "grease.hide",
+        "hello.hide",
+        "hello.sig",
+        "identity.hide",
+        "identity.test-public",
+        "identity.test-seed",
+        "recipient.test-public",
+        "recipient.test-secret",
+        "rejections/argon2-memory.test-secret",
+        "rejections/bad-magic.hide",
+        "rejections/critical-header-key.hide",
+        "rejections/critical-metadata-key.hide",
+        "rejections/filename-dotdot.hide",
+        "rejections/final-record-bit-flipped.hide",
+        "rejections/header-bit-flipped.hide",
+        "rejections/header-key-over-u16.hide",
+        "rejections/header-len-overflow.hide",
+        "rejections/ignorable-ext-not-bstr.hide",
+        "rejections/ignorable-ext-oversize.hide",
+        "rejections/legacy-minor-with-flag.hide",
+        "rejections/legacy-minor2-with-extension.hide",
+        "rejections/minor-zero.hide",
+        "rejections/non-canonical-metadata.hide",
+        "rejections/only-unknown-stanzas.hide",
+        "rejections/payload-salt-altered.hide",
+        "rejections/reserved-metadata-key.hide",
+        "rejections/signature-extension-rewritten.hide",
+        "rejections/signature-unknown-stanza-removed.hide",
+        "rejections/small-order.test-public",
+        "rejections/stripped-signature.hide",
+        "rejections/too-many-extensions.hide",
+        "rejections/trailing-bytes-after-final.hide",
+        "rejections/truncated-before-final.hide",
+        "rejections/two-signatures.hide",
+        "rejections/unexpected-signature.hide",
+        "rejections/unknown-flag.hide",
+        "rejections/unknown-signature-tag.hide",
+        "rejections/unsupported-major.hide",
+        "rejections/x25519-high-bit.test-public",
+        "rejections/x25519-not-reduced.test-public",
+        "signed-confidential.hide",
+        "signed-public.hide",
+        "signed.test-public",
+        "signer.test-public",
+        "signer.test-seed",
+        "subsystems/binding-epoch-stranger.bin",
+        "subsystems/binding-epoch.bin",
+        "subsystems/binding-hijacked-log.bin",
+        "subsystems/binding-identity-log.bin",
+        "subsystems/binding-recovery-forged.bin",
+        "subsystems/binding-recovery-key.bin",
+        "subsystems/binding-recovery.bin",
+        "subsystems/binding-root.bin",
+        "subsystems/checkpoint-2.note",
+        "subsystems/checkpoint-3.note",
+        "subsystems/checkpoint-consistency.bin",
+        "subsystems/checkpoint-inclusion.bin",
+        "subsystems/checkpoint-log-key.bin",
+        "subsystems/checkpoint-tampered.note",
+        "subsystems/checkpoint-witness-key.bin",
+        "subsystems/consistency-path.bin",
+        "subsystems/epoch-broken.bin",
+        "subsystems/epoch-chain.bin",
+        "subsystems/epoch-public-key-1.bin",
+        "subsystems/identity-device-laptop.bin",
+        "subsystems/identity-device-phone.bin",
+        "subsystems/identity-head.bin",
+        "subsystems/identity-log-legacy.bin",
+        "subsystems/identity-log.bin",
+        "subsystems/identity-recovery.bin",
+        "subsystems/identity-tampered-legacy.bin",
+        "subsystems/identity-tampered.bin",
+        "subsystems/inclusion-path.bin",
+        "subsystems/leaf.bin",
+        "subsystems/other-leaf.bin",
+        "subsystems/rewritten-root.bin",
+        "subsystems/root-at-5.bin",
+        "subsystems/tree-root.bin",
+        "v1-signed-confidential.hide",
+        "v1-signed.hide"
+      ]
+    },
+    {
+      "id": "subsystems",
+      "statement": "Identity logs, epoch chains, transparency proofs and MLS credential bindings replay and verify (or refuse) as §10–§13 say.",
+      "spec": "§10–§13",
+      "vectors": [
+        "subsystems/binding-epoch-stranger.bin",
+        "subsystems/binding-epoch.bin",
+        "subsystems/binding-hijacked-log.bin",
+        "subsystems/binding-identity-log.bin",
+        "subsystems/binding-recovery-forged.bin",
+        "subsystems/binding-recovery-key.bin",
+        "subsystems/binding-recovery.bin",
+        "subsystems/binding-root.bin",
+        "subsystems/checkpoint-2.note",
+        "subsystems/checkpoint-3.note",
+        "subsystems/checkpoint-consistency.bin",
+        "subsystems/checkpoint-inclusion.bin",
+        "subsystems/checkpoint-log-key.bin",
+        "subsystems/checkpoint-tampered.note",
+        "subsystems/checkpoint-witness-key.bin",
+        "subsystems/consistency-path.bin",
+        "subsystems/epoch-broken.bin",
+        "subsystems/epoch-chain.bin",
+        "subsystems/epoch-public-key-1.bin",
+        "subsystems/identity-device-laptop.bin",
+        "subsystems/identity-device-phone.bin",
+        "subsystems/identity-head.bin",
+        "subsystems/identity-log-legacy.bin",
+        "subsystems/identity-log.bin",
+        "subsystems/identity-recovery.bin",
+        "subsystems/identity-tampered-legacy.bin",
+        "subsystems/identity-tampered.bin",
+        "subsystems/inclusion-path.bin",
+        "subsystems/leaf.bin",
+        "subsystems/other-leaf.bin",
+        "subsystems/rewritten-root.bin",
+        "subsystems/root-at-5.bin",
+        "subsystems/tree-root.bin"
+      ]
+    }
+  ],
+  "expected": {
+    "empty.hide": {
+      "expect": "open"
+    },
+    "empty.sig": {
+      "expect": "open"
+    },
+    "grease-minor.hide": {
+      "expect": "open"
+    },
+    "grease-signed.hide": {
+      "expect": "open"
+    },
+    "grease.hide": {
+      "expect": "open"
+    },
+    "hello.hide": {
+      "expect": "open"
+    },
+    "hello.sig": {
+      "expect": "open"
+    },
+    "identity.hide": {
+      "expect": "open",
+      "key": "identity.test-seed",
+      "note": "sealed to the recipient key derived from the master seed (§9.1), not to recipient.test-secret"
+    },
+    "identity.test-public": {
+      "expect": "open"
+    },
+    "identity.test-seed": {
+      "expect": "open"
+    },
+    "recipient.test-public": {
+      "expect": "open"
+    },
+    "recipient.test-secret": {
+      "expect": "open"
+    },
+    "rejections/argon2-memory.test-secret": {
+      "expect": "reject",
+      "classes": [
+        "malformed",
+        "unsupported"
+      ],
+      "spec": "§9.3 step 4 / §9.4 a reader MUST reject parameters outside the bounds before allocating; §6.1 names no class for a key file",
+      "why": "the bounds are limits (malformed, §6.1) but an implementation may report \"unsupported parameters\""
+    },
+    "rejections/bad-magic.hide": {
+      "expect": "reject",
+      "classes": [
+        "malformed"
+      ],
+      "spec": "§1.1 magic — not a HIDE container (InvalidContainer)"
+    },
+    "rejections/critical-header-key.hide": {
+      "expect": "reject",
+      "classes": [
+        "unsupported"
+      ],
+      "spec": "§2.1 key 6..=63 critical — UnsupportedFeature"
+    },
+    "rejections/critical-metadata-key.hide": {
+      "expect": "reject",
+      "classes": [
+        "unsupported"
+      ],
+      "spec": "§4 metadata key 6..=63 critical — UnsupportedFeature"
+    },
+    "rejections/filename-dotdot.hide": {
+      "expect": "reject",
+      "classes": [
+        "malformed"
+      ],
+      "spec": "§4 a filename must be a portable path component — InvalidMetadata"
+    },
+    "rejections/final-record-bit-flipped.hide": {
+      "expect": "reject",
+      "classes": [
+        "authentication"
+      ],
+      "spec": "§5 record AEAD tag — §6.1 authentication failure"
+    },
+    "rejections/header-bit-flipped.hide": {
+      "expect": "reject",
+      "classes": [
+        "no-matching-recipient"
+      ],
+      "spec": "§6.1 \"every non-recipient outcome is the single result NoMatchingRecipient\""
+    },
+    "rejections/header-key-over-u16.hide": {
+      "expect": "reject",
+      "classes": [
+        "malformed"
+      ],
+      "spec": "§2.1 key > 65535 — MalformedHeader"
+    },
+    "rejections/header-len-overflow.hide": {
+      "expect": "reject",
+      "classes": [
+        "malformed"
+      ],
+      "spec": "§1.1 header_len 1..=1048576 — HeaderTooLarge, §6.1 \"a limit exceeded\""
+    },
+    "rejections/ignorable-ext-not-bstr.hide": {
+      "expect": "reject",
+      "classes": [
+        "malformed"
+      ],
+      "spec": "§2.1 ignorable value not a bstr — MalformedHeader"
+    },
+    "rejections/ignorable-ext-oversize.hide": {
+      "expect": "reject",
+      "classes": [
+        "malformed"
+      ],
+      "spec": "§2.1 ignorable value over 65536 bytes — MalformedHeader"
+    },
+    "rejections/legacy-minor-with-flag.hide": {
+      "expect": "reject",
+      "classes": [
+        "unsupported"
+      ],
+      "spec": "§1.1 minor 2 with a flag set — UnsupportedFeature"
+    },
+    "rejections/legacy-minor2-with-extension.hide": {
+      "expect": "reject",
+      "classes": [
+        "malformed"
+      ],
+      "spec": "§7.3 / §7.4 minor 2 with an extension — MalformedHeader"
+    },
+    "rejections/minor-zero.hide": {
+      "expect": "reject",
+      "classes": [
+        "unsupported"
+      ],
+      "spec": "§1.1 minor 0 — UnsupportedVersion"
+    },
+    "rejections/non-canonical-metadata.hide": {
+      "expect": "reject",
+      "classes": [
+        "malformed"
+      ],
+      "spec": "§4 with §Conventions a non-shortest-form integer — NonCanonical"
+    },
+    "rejections/only-unknown-stanzas.hide": {
+      "expect": "reject",
+      "classes": [
+        "no-matching-recipient"
+      ],
+      "spec": "§2.2 \"the result is NoMatchingRecipient\""
+    },
+    "rejections/payload-salt-altered.hide": {
+      "expect": "reject",
+      "classes": [
+        "authentication"
+      ],
+      "spec": "§6 \"altering it changes the payload key so every record fails to open\""
+    },
+    "rejections/reserved-metadata-key.hide": {
+      "expect": "reject",
+      "classes": [
+        "unsupported"
+      ],
+      "spec": "§4 metadata key 4 reserved core — UnsupportedFeature"
+    },
+    "rejections/signature-extension-rewritten.hide": {
+      "expect": "reject",
+      "classes": [
+        "authentication"
+      ],
+      "spec": "§7.3 the 1.0 transcript binds a changed extension — InvalidSignature"
+    },
+    "rejections/signature-unknown-stanza-removed.hide": {
+      "expect": "reject",
+      "classes": [
+        "authentication"
+      ],
+      "spec": "§7.3 the 1.0 transcript binds every stanza — InvalidSignature"
+    },
+    "rejections/small-order.test-public": {
+      "expect": "reject",
+      "classes": [
+        "authentication",
+        "malformed"
+      ],
+      "spec": "§9.5 seven small-order X25519 encodings MUST be refused as a recipient",
+      "why": "§6.1 names no class for a refused public key; the reference reports it in its credential bucket (authentication) and a shape-driven refusal would be malformed"
+    },
+    "rejections/stripped-signature.hide": {
+      "expect": "reject",
+      "classes": [
+        "authentication"
+      ],
+      "spec": "§7.3 signed with no signature — reject (MissingSignature)"
+    },
+    "rejections/too-many-extensions.hide": {
+      "expect": "reject",
+      "classes": [
+        "malformed"
+      ],
+      "spec": "§2.1 more than 16 ignorable keys — MalformedHeader"
+    },
+    "rejections/trailing-bytes-after-final.hide": {
+      "expect": "reject",
+      "classes": [
+        "malformed"
+      ],
+      "spec": "§1.2 / §5 \"No bytes may follow the FINAL record\" (TrailingData)"
+    },
+    "rejections/truncated-before-final.hide": {
+      "expect": "reject",
+      "classes": [
+        "malformed"
+      ],
+      "spec": "§5 \"a missing FINAL (TruncatedPayload) ... MUST be rejected\", grouped with a wrong length"
+    },
+    "rejections/two-signatures.hide": {
+      "expect": "reject",
+      "classes": [
+        "malformed"
+      ],
+      "spec": "§2.3 / §7.3 a second stanza in key 5 — MalformedHeader"
+    },
+    "rejections/unexpected-signature.hide": {
+      "expect": "reject",
+      "classes": [
+        "authentication"
+      ],
+      "spec": "§7.3 a signature but not signed — reject (UnexpectedSignature)"
+    },
+    "rejections/unknown-flag.hide": {
+      "expect": "reject",
+      "classes": [
+        "unsupported"
+      ],
+      "spec": "§1.1 every flag bit is critical — UnsupportedFeature"
+    },
+    "rejections/unknown-signature-tag.hide": {
+      "expect": "reject",
+      "classes": [
+        "unsupported"
+      ],
+      "spec": "§2.3 signature stanzas are never skipped — UnsupportedFeature"
+    },
+    "rejections/unsupported-major.hide": {
+      "expect": "reject",
+      "classes": [
+        "unsupported"
+      ],
+      "spec": "§1.1 major — UnsupportedVersion"
+    },
+    "rejections/x25519-high-bit.test-public": {
+      "expect": "reject",
+      "classes": [
+        "authentication",
+        "malformed"
+      ],
+      "spec": "§15.7 with §9.5 bit 255 set is a non-canonical encoding of a small-order point",
+      "why": "as for small-order.test-public"
+    },
+    "rejections/x25519-not-reduced.test-public": {
+      "expect": "reject",
+      "classes": [
+        "authentication",
+        "malformed"
+      ],
+      "spec": "§9.5 the component is p + 1, a non-canonical encoding of u = 1",
+      "why": "as for small-order.test-public"
+    },
+    "signed-confidential.hide": {
+      "expect": "open"
+    },
+    "signed-public.hide": {
+      "expect": "open"
+    },
+    "signed.test-public": {
+      "expect": "open"
+    },
+    "signer.test-public": {
+      "expect": "open"
+    },
+    "signer.test-seed": {
+      "expect": "open"
+    },
+    "subsystems/binding-epoch-stranger.bin": {
+      "expect": "reject",
+      "note": "§6.1 groups container errors; §10–§13 state the rule a subsystem vector violates without naming a §6.1 class, so only the verdict is fixed"
+    },
+    "subsystems/binding-epoch.bin": {
+      "expect": "open"
+    },
+    "subsystems/binding-hijacked-log.bin": {
+      "expect": "reject",
+      "note": "§6.1 groups container errors; §10–§13 state the rule a subsystem vector violates without naming a §6.1 class, so only the verdict is fixed"
+    },
+    "subsystems/binding-identity-log.bin": {
+      "expect": "open"
+    },
+    "subsystems/binding-recovery-forged.bin": {
+      "expect": "reject",
+      "note": "§6.1 groups container errors; §10–§13 state the rule a subsystem vector violates without naming a §6.1 class, so only the verdict is fixed"
+    },
+    "subsystems/binding-recovery-key.bin": {
+      "expect": "open"
+    },
+    "subsystems/binding-recovery.bin": {
+      "expect": "open"
+    },
+    "subsystems/binding-root.bin": {
+      "expect": "open"
+    },
+    "subsystems/checkpoint-2.note": {
+      "expect": "open"
+    },
+    "subsystems/checkpoint-3.note": {
+      "expect": "open"
+    },
+    "subsystems/checkpoint-consistency.bin": {
+      "expect": "open"
+    },
+    "subsystems/checkpoint-inclusion.bin": {
+      "expect": "open"
+    },
+    "subsystems/checkpoint-log-key.bin": {
+      "expect": "open"
+    },
+    "subsystems/checkpoint-tampered.note": {
+      "expect": "reject",
+      "note": "§6.1 groups container errors; §10–§13 state the rule a subsystem vector violates without naming a §6.1 class, so only the verdict is fixed"
+    },
+    "subsystems/checkpoint-witness-key.bin": {
+      "expect": "open"
+    },
+    "subsystems/consistency-path.bin": {
+      "expect": "open"
+    },
+    "subsystems/epoch-broken.bin": {
+      "expect": "reject",
+      "note": "§6.1 groups container errors; §10–§13 state the rule a subsystem vector violates without naming a §6.1 class, so only the verdict is fixed"
+    },
+    "subsystems/epoch-chain.bin": {
+      "expect": "open"
+    },
+    "subsystems/epoch-public-key-1.bin": {
+      "expect": "open"
+    },
+    "subsystems/identity-device-laptop.bin": {
+      "expect": "open"
+    },
+    "subsystems/identity-device-phone.bin": {
+      "expect": "open"
+    },
+    "subsystems/identity-head.bin": {
+      "expect": "open"
+    },
+    "subsystems/identity-log-legacy.bin": {
+      "expect": "open"
+    },
+    "subsystems/identity-log.bin": {
+      "expect": "open"
+    },
+    "subsystems/identity-recovery.bin": {
+      "expect": "open"
+    },
+    "subsystems/identity-tampered-legacy.bin": {
+      "expect": "reject",
+      "note": "§6.1 groups container errors; §10–§13 state the rule a subsystem vector violates without naming a §6.1 class, so only the verdict is fixed"
+    },
+    "subsystems/identity-tampered.bin": {
+      "expect": "reject",
+      "note": "§6.1 groups container errors; §10–§13 state the rule a subsystem vector violates without naming a §6.1 class, so only the verdict is fixed"
+    },
+    "subsystems/inclusion-path.bin": {
+      "expect": "open"
+    },
+    "subsystems/leaf.bin": {
+      "expect": "open"
+    },
+    "subsystems/other-leaf.bin": {
+      "expect": "reject",
+      "note": "§6.1 groups container errors; §10–§13 state the rule a subsystem vector violates without naming a §6.1 class, so only the verdict is fixed"
+    },
+    "subsystems/rewritten-root.bin": {
+      "expect": "reject",
+      "note": "§6.1 groups container errors; §10–§13 state the rule a subsystem vector violates without naming a §6.1 class, so only the verdict is fixed"
+    },
+    "subsystems/root-at-5.bin": {
+      "expect": "open"
+    },
+    "subsystems/tree-root.bin": {
+      "expect": "open"
+    },
+    "v1-signed-confidential.hide": {
+      "expect": "open"
+    },
+    "v1-signed.hide": {
+      "expect": "open"
+    }
+  },
+  "outOfScope": [
+    "This proves the format, not the cryptography: vectors show that the specified bytes are produced and refused, not that the primitives are sound, that the implementation is side-channel free, or that it is safe to use. HIDE is experimental and unaudited.",
+    "Nothing here checks an implementation's own writers, only its readers: every vector is an input, and the harness never asks a command to encrypt.",
+    "detached-signature vectors are hash-checked only. spec §14 makes the detached-signature file implementation-defined and conformance/vectors/README.md obliges only the recorded hash; byte-for-byte reproduction is pinned by `cargo test -p hide-sign --test vectors`.",
+    "The transient behaviour the vectors cannot express: memory bounds before allocation (only the refusal of rejections/argon2-memory.test-secret is observed), timing, and running as a service.",
+    "Conformance is claimed against a specific manifestSha256. A different vector set needs a different claim."
+  ]
+}

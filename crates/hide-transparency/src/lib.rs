@@ -34,6 +34,13 @@ pub use checkpoint::{
     key_id,
 };
 
+mod witness;
+pub use witness::{
+    AddCheckpointOutcome, C2SP_ED25519_ALGORITHM, Cosignature, MAX_WITNESS_PROOF_LINES, Witness,
+    add_checkpoint_body, c2sp_key_id, classify_add_checkpoint, cosignature_input, empty_tree_root,
+    is_empty_tree_checkpoint, verify_ed25519_cosignature,
+};
+
 /// RFC 6962 domain separators.
 const LEAF_PREFIX: u8 = 0x00;
 const NODE_PREFIX: u8 = 0x01;

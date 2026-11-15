@@ -869,7 +869,6 @@ dependencies = [
  "hide-crypto",
  "hkdf",
  "ml-dsa",
- "proptest",
  "sha2",
  "thiserror",
  "zeroize",
@@ -880,6 +879,7 @@ name = "hide-transparency"
 version = "0.9.1"
 dependencies = [
  "base64",
+ "ed25519-dalek",
  "hide-sign",
  "minicbor",
  "proptest",

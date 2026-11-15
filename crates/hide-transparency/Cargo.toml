@@ -21,6 +21,10 @@ sha2.workspace = true
 thiserror.workspace = true
 minicbor.workspace = true
 base64.workspace = true
+# Verifying a C2SP cosignature (c2sp.org/tlog-cosignature, Ed25519 algorithm)
+# needs plain Ed25519 verification. HIDE-Sign's verifier requires both halves of
+# the hybrid key, so it cannot check a witness's Ed25519-only signature.
+ed25519-dalek.workspace = true
 
 [dev-dependencies]
 proptest.workspace = true

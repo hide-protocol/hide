@@ -241,6 +241,44 @@ header_mac     = HMAC-SHA256(header_mac_key, preamble || protected)
 `CEK` is 32 random bytes. Each derived key has exactly one purpose, so the fixed all-zero metadata
 nonce is safe. The header MAC MUST be compared in constant time.
 
+### 3.1 Normative references for the hybrid KEM
+
+The KEM is X-Wing exactly as specified, not a HIDE construction: `X25519 || ML-KEM-768` with the
+combiner of [draft-connolly-cfrg-xwing-kem]. Three properties of that draft are load-bearing here
+and are why HIDE does not use the generic combiner of
+[I-D.ounsworth-cfrg-kem-combiners]:
+
+- **The ML-KEM ciphertext is not hashed into the shared secret.** The draft notes this is what
+  makes X-Wing faster than instantiating the generic combiner over the same two KEMs at the same
+  security level. HIDE depends on neither variant's speed, but it does depend on the exact bytes
+  the KEM produces, so the choice has to be stated rather than assumed.
+- **The combiner is specific to ML-KEM's Fujisaki–Okamoto transformation.** The draft warns it
+  cannot be assumed secure with other KEMs, and that leaving the post-quantum ciphertext out of the
+  combiner is not known to be safe in the general case. Nothing in HIDE re-orders or re-derives the
+  KEM output; `wrapped_cek` is HPKE's, over this KEM.
+- **The expanded decapsulation key MUST NOT be transmitted.** HIDE stores and transports the
+  32-byte X-Wing *seed* and lets X-Wing expand it (spec §9.2), so this rule is satisfied by
+  construction rather than by a check.
+
+`ML-KEM-768` is the parameter set NIST recommends as the default for key establishment in
+[NIST IR 8547], and it is the one X-Wing fixes. The KEM identifier `0x647A`, the 1120-byte
+encapsulation and the 32-byte seed are asserted by a test
+(`crates/hide-crypto/src/lib.rs`), so a dependency bump that changed any of them would fail rather
+than silently change the format. HIDE pins the RustCrypto `x-wing` implementation at an exact
+version; that crate is listed as an implementation of the draft (Appendix A). The draft's own
+Appendix C test vectors are marked `TODO` by the draft at revision 09, so they cannot be pinned
+here yet — a placeholder vector asserted as a conformance requirement would be worth less than the
+constant-level check above.
+
+The references above are pinned to the revisions this document was checked against:
+
+| label | document |
+|---|---|
+| `draft-connolly-cfrg-xwing-kem` | X-Wing: general-purpose hybrid post-quantum KEM, revision 09 |
+| `I-D.ounsworth-cfrg-kem-combiners` | Combiner function for hybrid key encapsulation mechanisms, revision 05 |
+| `[NIST IR 8547]` | Transition to Post-Quantum Cryptography Standards, October 2026 |
+| FIPS 203 | ML-KEM, final |
+
 ## 4. Metadata
 
 ```

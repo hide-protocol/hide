@@ -60,7 +60,7 @@ pub fn key_id(name: &str, key: &VerifyingIdentity) -> [u8; 4] {
     [digest[0], digest[1], digest[2], digest[3]]
 }
 
-fn valid_name(name: &str) -> bool {
+pub(crate) fn valid_name(name: &str) -> bool {
     !name.is_empty()
         && name.len() <= MAX_ORIGIN_BYTES
         && name
