@@ -237,8 +237,22 @@ impl VerifyingIdentity {
         let (ed, ml) = bytes.split_at(ED25519_PUBLIC_LEN);
         let ed: [u8; ED25519_PUBLIC_LEN] = ed.try_into().expect("split at the exact length");
         let ml: &[u8; ML_DSA_PUBLIC_LEN] = ml.try_into().expect("split at the exact length");
+        let ed25519 = EdVerifyingKey::from_bytes(&ed).map_err(|_| SignError::MalformedKey)?;
+        // ed25519-dalek parses per ZIP-215, which accepts a y-coordinate at or
+        // above the field prime and silently reduces it. That names one point
+        // with two byte strings, so a signature could be attributed to two
+        // "different" signers. Spec §8.4 step 3 requires the canonical
+        // encoding, and re-compressing is how it is checked.
+        //
+        // NOT `ed25519.to_bytes()`: that returns the bytes `from_bytes` was
+        // given, verbatim, so comparing them would compare the input with
+        // itself and could never fire. The decompressed point is what carries
+        // the reduction, so the comparison has to go through it.
+        if ed25519.to_edwards().compress().to_bytes() != ed {
+            return Err(SignError::MalformedKey);
+        }
         Ok(Self {
-            ed25519: EdVerifyingKey::from_bytes(&ed).map_err(|_| SignError::MalformedKey)?,
+            ed25519,
             ml_dsa: MlVerifyingKey::<MlDsa65>::new(ml.into()),
         })
     }
@@ -478,6 +492,43 @@ mod tests {
         assert_eq!(
             degenerate.verify(CONTEXT, b"anything", &[0; SIGNATURE_LENGTH]),
             Err(SignError::Verification)
+        );
+    }
+
+    /// A y-coordinate at or above the field prime is a second encoding of a
+    /// point some canonical encoding already names. Spec §8.4 step 3 says the
+    /// Ed25519 half MUST reject it; the parser alone does not, so the check is
+    /// `from_bytes`'s job. Without it, one key answers to two byte strings.
+    #[test]
+    fn a_non_canonical_ed25519_key_is_refused() {
+        // y = p = 2^255 - 19, little-endian, sign bit clear. It reduces to
+        // y = 0, whose point (x^2 = -1) exists, so the parser accepts it.
+        let mut bytes = [0_u8; VERIFYING_KEY_LENGTH];
+        bytes[0] = 0xed;
+        bytes[1..31].fill(0xff);
+        bytes[31] = 0x7f;
+
+        // The premise: this is exactly the case the parser lets through. If a
+        // dalek release starts refusing it, this test is no longer exercising
+        // anything and should be revisited rather than deleted.
+        assert!(
+            EdVerifyingKey::from_bytes(&bytes[..ED25519_PUBLIC_LEN].try_into().expect("32 bytes"))
+                .is_ok(),
+            "the parser no longer accepts a non-canonical A; revisit this test"
+        );
+        assert_eq!(
+            VerifyingIdentity::from_bytes(&bytes),
+            Err(SignError::MalformedKey),
+            "a non-canonical Ed25519 A must be refused"
+        );
+
+        // The canonical encoding of the same point is still accepted, so the
+        // refusal is about the encoding and not about the point.
+        let mut canonical = bytes;
+        canonical[..ED25519_PUBLIC_LEN].fill(0);
+        assert!(
+            VerifyingIdentity::from_bytes(&canonical).is_ok(),
+            "the canonical encoding of the same point must be accepted"
         );
     }
 

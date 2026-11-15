@@ -32,3 +32,4 @@ filename-dotdot	filename '..' is a path component, not a name
 non-canonical-metadata	metadata integer key not in shortest form
 x25519-high-bit.test-public	X25519 component has bit 255 set (the zero point, non-canonically); refuse as a recipient
 x25519-not-reduced.test-public	X25519 component is p + 1, a non-canonical encoding of u = 1; refuse as a recipient
+non-canonical-ed25519.test-public	Ed25519 A is a y-coordinate at or above the field prime; refuse as a verifying key

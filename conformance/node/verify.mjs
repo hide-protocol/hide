@@ -163,6 +163,17 @@ function hasSmallOrder(point) {
   });
 }
 
+/// p = 2^255 - 19, the Ed25519 field prime.
+const ED25519_P = (1n << 255n) - 19n;
+
+/// §8.4 step 3: the encoded y-coordinate must be the canonical one. Bit 255 is
+/// the sign of x, so the value is y and not a 256-bit integer. node:crypto
+/// accepts a reduced encoding (ZIP-215), and Rust's parser does too, so this is
+/// a check neither of them performs for us.
+function hasNonCanonicalY(point) {
+  return (littleEndian(point) & ((1n << 255n) - 1n)) >= ED25519_P;
+}
+
 function littleEndian(bytes) {
   let value = 0n;
   for (let i = bytes.length - 1; i >= 0; i--) value = (value << 8n) | BigInt(bytes[i]);
@@ -171,6 +182,9 @@ function littleEndian(bytes) {
 
 function ed25519Strict(publicKey, signature, message) {
   if (hasSmallOrder(publicKey)) return false;
+  // A second encoding of a point some canonical encoding already names must be
+  // refused, or one key answers to two byte strings (§8.4 step 3).
+  if (hasNonCanonicalY(publicKey)) return false;
   if (hasSmallOrder(signature.subarray(0, 32))) return false;
   if (littleEndian(signature.subarray(32, 64)) >= ED25519_L) return false;
   try {
@@ -688,7 +702,11 @@ export function publicKeyProblem(bytes) {
     const u = BigInt(`0x${Buffer.from(x25519).reverse().toString("hex")}`);
     return u >= (1n << 255n) - 19n ? "non-canonical X25519 component" : null;
   }
-  if (bytes.length === VERIFYING_KEY_LEN) return hasSmallOrder(bytes.subarray(0, 32)) ? "small-order Ed25519 component" : null;
+  if (bytes.length === VERIFYING_KEY_LEN) {
+    const a = bytes.subarray(0, 32);
+    if (hasSmallOrder(a)) return "small-order Ed25519 component";
+    return hasNonCanonicalY(a) ? "non-canonical Ed25519 component" : null;
+  }
   return `length ${bytes.length}`;
 }
 

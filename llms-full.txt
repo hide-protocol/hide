@@ -31,7 +31,7 @@ Every claim below was produced by a command in this repository, on Rust 1.99.0 (
   decryption fail (`cargo test -p hide-object --test vectors`), and property tests extend that to
   random single-byte mutations of random containers.
 - Truncation, chunk reordering, duplication, deletion and trailing bytes are all rejected.
-- Thirty-two **frozen rejection vectors** (`conformance/vectors/rejections/`) — among them bad magic,
+- Thirty-three **frozen rejection vectors** (`conformance/vectors/rejections/`) — among them bad magic,
   minor 0, an unknown preamble flag, header-length overflow, flipped header and FINAL bits,
   truncation before FINAL, trailing bytes, a stripped or unexpected signature, a recipient who
   re-MACed a changed extension or removed an unknown stanza, critical header and metadata keys,
@@ -41,7 +41,7 @@ Every claim below was produced by a command in this repository, on Rust 1.99.0 (
 - **Forward compatibility is tested, not promised**: the GREASE vectors (`grease.hide`,
   `grease-signed.hide`, `grease-minor.hide`) carry an unknown recipient stanza, ignorable header and
   metadata extensions and a future minor, and must open. `conformance/vectors/manifest.json` lists
-  all 84 vectors with expected outcome and SHA-256 ([conformance/vectors/README.md](conformance/vectors/README.md)).
+  all 86 vectors with expected outcome and SHA-256 ([conformance/vectors/README.md](conformance/vectors/README.md)).
 - **Fuzzed**: eleven libFuzzer targets under `fuzz/` (`format_header`, `object_open`,
   `keyring_open`, `identity_log`, `epoch_chain`, `transparency_proofs`, `challenge_decode`,
   `mls_message`, `epoch_store`, `checkpoint_note`, `identity_bindings`) run 45 seconds each in CI
@@ -683,7 +683,7 @@ No. It calls the same Rust crates as the CLI, key material never reaches the web
 
 ## Is there a formal specification and are there test vectors?
 
-Yes: [../spec/hide-1.md](../spec/hide-1.md) is normative, and `conformance/vectors/` holds frozen containers, GREASE vectors that exercise the extension points, subsystem vectors and thirty-two rejection vectors, all listed with expected outcome and SHA-256 in `manifest.json` ([../conformance/vectors/README.md](../conformance/vectors/README.md)). An independent Node implementation (`conformance/node/verify.mjs`) decrypts the vectors and refuses the rejections, so two implementations agree on what is invalid, not only on what is valid. Both are maintained in this repository; an outside implementation would be worth more.
+Yes: [../spec/hide-1.md](../spec/hide-1.md) is normative, and `conformance/vectors/` holds frozen containers, GREASE vectors that exercise the extension points, subsystem vectors and thirty-three rejection vectors, all listed with expected outcome and SHA-256 in `manifest.json` ([../conformance/vectors/README.md](../conformance/vectors/README.md)). An independent Node implementation (`conformance/node/verify.mjs`) decrypts the vectors and refuses the rejections, so two implementations agree on what is invalid, not only on what is valid. Both are maintained in this repository; an outside implementation would be worth more.
 
 ## How can I help, audit or fund?
 
@@ -954,7 +954,7 @@ These are not audits. They constrain what a bug can look like; they do not show 
 - Property tests (`proptest`): the parser never panics on arbitrary input; any single-byte mutation of a container fails to decrypt; truncation and appended bytes always fail.
 - Eleven libFuzzer targets under [../fuzz/fuzz_targets](../fuzz/fuzz_targets) (`format_header`, `object_open`, `keyring_open`, `identity_log`, `epoch_chain`, `transparency_proofs`, `challenge_decode`, `mls_message`, `epoch_store`, `checkpoint_note`, `identity_bindings`), run 45 seconds each in CI on every push and for four hours per target every night, in parallel, with the corpus carried forward ([fuzz-nightly.yml](../.github/workflows/fuzz-nightly.yml)). A crash or hang opens an issue labelled `fuzz` + `security`. A manual four-hour run of all eight targets that existed in 2026-09 was clean (tracker P12.9). Three bugs found so far: two fixed in 0.7.0, the third (a key file requesting 2.4 GiB of Argon2 memory, [#6](https://github.com/hide-protocol/hide/issues/6)) released in 0.8.0 as [HIDE-2026-001](advisories.md).
 - Supply chain, CI job `supply-chain`: `cargo audit --deny warnings`, and `cargo deny check` ([../deny.toml](../deny.toml)) — licence allow-list, a ban on a second cryptographic stack (`openssl`, `ring`), unknown registries refused, and every duplicated dependency version attributed to its cause so a new one is visible. Every dependency is pinned to an exact version.
-- Frozen vectors under [../conformance/vectors](../conformance/vectors), including 32 rejection vectors and a `manifest.json` over all 84 vectors; flipping every byte position of the frozen containers is asserted to fail.
+- Frozen vectors under [../conformance/vectors](../conformance/vectors), including 33 rejection vectors and a `manifest.json` over all 86 vectors; flipping every byte position of the frozen containers is asserted to fail. The set gained two entries in 0.10.0, both from this audit: a positive vector for the passphrase-sealed key file (`protected-identity.test-secret`, which nothing previously asserted could be *opened*) and a rejection vector for a non-canonical Ed25519 key.
 - An independent Node implementation ([../conformance/node/verify.mjs](../conformance/node/verify.mjs)) decrypts the Rust vectors and refuses the rejection vectors.
 - Mutation testing was applied by hand to the signing and keyring code during development; results are recorded in commit messages, not in a report.
 

@@ -29,7 +29,7 @@ Every claim below was produced by a command in this repository, on Rust 1.99.0 (
   decryption fail (`cargo test -p hide-object --test vectors`), and property tests extend that to
   random single-byte mutations of random containers.
 - Truncation, chunk reordering, duplication, deletion and trailing bytes are all rejected.
-- Thirty-two **frozen rejection vectors** (`conformance/vectors/rejections/`) — among them bad magic,
+- Thirty-three **frozen rejection vectors** (`conformance/vectors/rejections/`) — among them bad magic,
   minor 0, an unknown preamble flag, header-length overflow, flipped header and FINAL bits,
   truncation before FINAL, trailing bytes, a stripped or unexpected signature, a recipient who
   re-MACed a changed extension or removed an unknown stanza, critical header and metadata keys,
@@ -39,7 +39,7 @@ Every claim below was produced by a command in this repository, on Rust 1.99.0 (
 - **Forward compatibility is tested, not promised**: the GREASE vectors (`grease.hide`,
   `grease-signed.hide`, `grease-minor.hide`) carry an unknown recipient stanza, ignorable header and
   metadata extensions and a future minor, and must open. `conformance/vectors/manifest.json` lists
-  all 84 vectors with expected outcome and SHA-256 ([conformance/vectors/README.md](conformance/vectors/README.md)).
+  all 86 vectors with expected outcome and SHA-256 ([conformance/vectors/README.md](conformance/vectors/README.md)).
 - **Fuzzed**: eleven libFuzzer targets under `fuzz/` (`format_header`, `object_open`,
   `keyring_open`, `identity_log`, `epoch_chain`, `transparency_proofs`, `challenge_decode`,
   `mls_message`, `epoch_store`, `checkpoint_note`, `identity_bindings`) run 45 seconds each in CI

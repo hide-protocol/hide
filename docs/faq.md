@@ -120,7 +120,7 @@ No. It calls the same Rust crates as the CLI, key material never reaches the web
 
 ## Is there a formal specification and are there test vectors?
 
-Yes: [../spec/hide-1.md](../spec/hide-1.md) is normative, and `conformance/vectors/` holds frozen containers, GREASE vectors that exercise the extension points, subsystem vectors and thirty-two rejection vectors, all listed with expected outcome and SHA-256 in `manifest.json` ([../conformance/vectors/README.md](../conformance/vectors/README.md)). An independent Node implementation (`conformance/node/verify.mjs`) decrypts the vectors and refuses the rejections, so two implementations agree on what is invalid, not only on what is valid. Both are maintained in this repository; an outside implementation would be worth more.
+Yes: [../spec/hide-1.md](../spec/hide-1.md) is normative, and `conformance/vectors/` holds frozen containers, GREASE vectors that exercise the extension points, subsystem vectors and thirty-three rejection vectors, all listed with expected outcome and SHA-256 in `manifest.json` ([../conformance/vectors/README.md](../conformance/vectors/README.md)). An independent Node implementation (`conformance/node/verify.mjs`) decrypts the vectors and refuses the rejections, so two implementations agree on what is invalid, not only on what is valid. Both are maintained in this repository; an outside implementation would be worth more.
 
 ## How can I help, audit or fund?
 

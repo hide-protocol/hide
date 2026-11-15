@@ -57,6 +57,59 @@ fn the_seed_vector_opens_the_way_every_surface_loads_a_key_file() -> Result<(), 
     Ok(())
 }
 
+/// The passphrase of `protected-identity.test-secret`. It is a test fixture, not
+/// a secret; the file it opens is checked in.
+pub const PROTECTED_KEY_PASSPHRASE: &str = "correct horse battery staple";
+
+/// The other half of the key-file format: a well-formed passphrase-sealed
+/// identity MUST open, and MUST yield the same recipient key as the raw seed it
+/// was derived from. Until this vector existed, every frozen key file was one
+/// that had to be refused, so nothing asserted that the shape the writer
+/// actually emits can be opened at all — by this crate or by an implementer
+/// working from `manifest.json`.
+#[test]
+fn the_protected_key_file_opens_the_frozen_container() -> Result<(), Box<dyn Error>> {
+    let directory = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../conformance/vectors");
+    let file = fs::read(directory.join("protected-identity.test-secret"))?;
+
+    // Structure first, so a failure names which part moved.
+    assert_eq!(
+        hide_keyring::inspect(&file),
+        hide_keyring::KeyFormat::Protected
+    );
+    assert_eq!(
+        file[8], 2,
+        "the frozen file must use the current key-file version"
+    );
+    assert_eq!(
+        file[46], 1,
+        "the frozen file must carry the identity purpose byte"
+    );
+
+    let sealed = hide_keyring::open(&file, Some(PROTECTED_KEY_PASSPHRASE))?;
+    // It holds the same master seed as `identity.test-seed`, so the two must
+    // derive the same recipient key. A drifted derivation or a wrong purpose
+    // byte shows up here as two keys that no longer match.
+    let raw = fs::read(directory.join("identity.test-seed"))?;
+    let plaintext_key = hide_keyring::open(&raw, None)?;
+    assert_eq!(
+        sealed.public_key()?.to_bytes(),
+        plaintext_key.public_key()?.to_bytes(),
+        "the sealed file no longer derives the seed's recipient key"
+    );
+
+    // And the end-to-end obligation: it opens the container in the tree.
+    let container = fs::read(directory.join("identity.hide"))?;
+    let mut plaintext = Vec::new();
+    decrypt_to_staging(&mut container.as_slice(), &mut plaintext, &sealed)?;
+    assert_eq!(plaintext, fs::read(directory.join("identity.txt"))?);
+
+    // A wrong passphrase must still be refused, so the vector cannot pass by
+    // opening with anything.
+    assert!(hide_keyring::open(&file, Some("another passphrase entirely")).is_err());
+    Ok(())
+}
+
 /// The v0.1 containers predate signatures entirely. That they still open, and
 /// report no signer, is the compatibility guarantee for every existing file.
 #[test]
@@ -152,10 +205,16 @@ fn every_frozen_rejection_vector_is_refused() -> Result<(), Box<dyn Error>> {
         }
         if name.ends_with(".test-public") {
             let bytes = fs::read(directory.join(name))?;
-            assert!(
-                hide_crypto::RecipientPublic::from_bytes(&bytes).is_err(),
-                "{name} must be refused as a recipient key: {reason}"
-            );
+            // The extension carries two key shapes. Sniff by length the way the
+            // independent Node checker does, so a vector cannot pass because
+            // the wrong parser refused it (a 1984-byte verifying key is not a
+            // malformed recipient key, it is a key of another kind).
+            let refused = if bytes.len() == hide_sign::VERIFYING_KEY_LENGTH {
+                hide_sign::VerifyingIdentity::from_bytes(&bytes).is_err()
+            } else {
+                hide_crypto::RecipientPublic::from_bytes(&bytes).is_err()
+            };
+            assert!(refused, "{name} must be refused: {reason}");
             continue;
         }
         let container = fs::read(directory.join(format!("{name}.hide")))?;

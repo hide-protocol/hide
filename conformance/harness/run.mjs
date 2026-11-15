@@ -300,8 +300,16 @@ function main(argv) {
       const expectation = expectations[entry.path];
       const verb = VERB.get(entry.kind);
       const selfChecked = SELF_CHECKED.has(entry.kind);
+      // A passphrase-protected key file cannot be driven through the verb set:
+      // `load-key` takes a filename and nothing else, and an implementation
+      // MUST NOT accept a passphrase from anything but a terminal (§15.5). Its
+      // bytes are hash-pinned like an implementation-defined artifact, and the
+      // passphrase is recorded in compliance.json so an implementer can open it
+      // in their own suite.
+      const passphraseProtected = expectation.passphrase !== undefined;
+      const hashOnly = selfChecked || passphraseProtected;
       const label = `${entry.kind} ${entry.expect}`;
-      if (verb === undefined && !selfChecked) {
+      if (verb === undefined && !hashOnly) {
         lines.push(`FAIL  ${entry.path} — unknown kind ${entry.kind}`);
         failed += 1;
         continue;
@@ -327,10 +335,13 @@ function main(argv) {
       // README.md obliges only the recorded hash here, and `cargo test
       // -p hide-sign --test vectors` is what pins byte-for-byte reproduction.
       // Nothing is driven for this kind.
-      if (selfChecked) {
+      if (hashOnly) {
         checked += 1;
         record(entry.kind);
-        lines.push(`PASS  ${entry.path} — ${label}, sha256 (hash-only: implementation-defined, §14)`);
+        const why = selfChecked
+          ? "hash-only: implementation-defined, §14"
+          : "hash-only: passphrase-protected, no verb takes a passphrase";
+        lines.push(`PASS  ${entry.path} — ${label}, sha256 (${why})`);
         continue;
       }
 

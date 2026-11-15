@@ -6,7 +6,7 @@
     "directory": "conformance/vectors",
     "manifest": "conformance/vectors/manifest.json",
     "format": "hide-vectors/1",
-    "manifestSha256": "bdb5319aa873f1e593fed481b81091238b98f772de355b367614a6a778cd2df3",
+    "manifestSha256": "147d69048db398d2d206164740299820a6f59b3cbee758f9772a9fcf4e611128",
     "counts": {
       "container": {
         "open": 10,
@@ -18,10 +18,10 @@
       },
       "public-key": {
         "open": 4,
-        "reject": 3
+        "reject": 4
       },
       "key": {
-        "open": 3,
+        "open": 4,
         "reject": 1
       },
       "subsystem": {
@@ -29,7 +29,7 @@
         "reject": 9
       }
     },
-    "total": 84,
+    "total": 86,
     "defaultSecret": "recipient.test-secret",
     "frozen": "The vector files are frozen artifacts (docs/stability.md); the harness only reads them and writes nothing inside conformance/vectors."
   },
@@ -131,18 +131,19 @@
     },
     {
       "id": "key-file",
-      "statement": "The unprotected 32-byte seed, the protected HIDE-KEY file and the signing seed load; a key file whose Argon2 parameters are outside the bounds is refused before it allocates.",
+      "statement": "The unprotected 32-byte seed, the protected HIDE-KEY file and the signing seed load; a key file whose Argon2 parameters are outside the bounds is refused before it allocates. protected-identity.test-secret is the positive sealed file: it is hash-pinned rather than driven, because no verb takes a passphrase and an implementation must not accept one from anywhere but a terminal (its passphrase is recorded in expected).",
       "spec": "§9.2–§9.4",
       "vectors": [
         "recipient.test-secret",
         "identity.test-seed",
         "signer.test-seed",
+        "protected-identity.test-secret",
         "rejections/argon2-memory.test-secret"
       ]
     },
     {
       "id": "recipient-public-key",
-      "statement": "A 1216-byte recipient public key is accepted; a small-order or non-canonical X25519 component is refused. A 1984-byte verifying key file loads.",
+      "statement": "A 1216-byte recipient public key is accepted; a small-order or non-canonical X25519 component is refused. A 1984-byte verifying key file loads, and one whose Ed25519 A is a non-canonical encoding is refused.",
       "spec": "§9.5, §9.6",
       "vectors": [
         "recipient.test-public",
@@ -150,6 +151,7 @@
         "signed.test-public",
         "signer.test-public",
         "rejections/small-order.test-public",
+        "rejections/non-canonical-ed25519.test-public",
         "rejections/x25519-high-bit.test-public",
         "rejections/x25519-not-reduced.test-public"
       ]
@@ -236,6 +238,7 @@
         "rejections/legacy-minor-with-flag.hide",
         "rejections/legacy-minor2-with-extension.hide",
         "rejections/minor-zero.hide",
+        "rejections/non-canonical-ed25519.test-public",
         "rejections/non-canonical-metadata.hide",
         "rejections/only-unknown-stanzas.hide",
         "rejections/payload-salt-altered.hide",
@@ -271,6 +274,7 @@
         "identity.hide",
         "identity.test-public",
         "identity.test-seed",
+        "protected-identity.test-secret",
         "recipient.test-public",
         "recipient.test-secret",
         "rejections/argon2-memory.test-secret",
@@ -287,6 +291,7 @@
         "rejections/legacy-minor-with-flag.hide",
         "rejections/legacy-minor2-with-extension.hide",
         "rejections/minor-zero.hide",
+        "rejections/non-canonical-ed25519.test-public",
         "rejections/non-canonical-metadata.hide",
         "rejections/only-unknown-stanzas.hide",
         "rejections/payload-salt-altered.hide",
@@ -421,6 +426,11 @@
     "identity.test-seed": {
       "expect": "open"
     },
+    "protected-identity.test-secret": {
+      "expect": "open",
+      "passphrase": "correct horse battery staple",
+      "note": "the only frozen positive key file: a v2 identity sealed with Argon2id. Hash-pinned rather than driven, because the verb set has no passphrase channel and §15.5 forbids reading one from anywhere but a terminal. It must open to the same recipient key as identity.test-seed."
+    },
     "recipient.test-public": {
       "expect": "open"
     },
@@ -533,6 +543,14 @@
         "malformed"
       ],
       "spec": "§4 with §Conventions a non-shortest-form integer — NonCanonical"
+    },
+    "rejections/non-canonical-ed25519.test-public": {
+      "expect": "reject",
+      "classes": [
+        "malformed"
+      ],
+      "spec": "§8.4 step 3 \"it MUST reject a small-order or non-canonical A\"",
+      "why": "the encoded y-coordinate is at or above the field prime, so it is a second encoding of a point some canonical encoding already names; ed25519-dalek and node:crypto both reduce it silently, so it is the reader's check"
     },
     "rejections/only-unknown-stanzas.hide": {
       "expect": "reject",

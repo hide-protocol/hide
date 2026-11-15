@@ -12,7 +12,8 @@ refuse to overwrite an existing vector with different bytes, and the pre-push ho
 
 ## manifest.json
 
-`manifest.json` (`"format": "hide-vectors/1"`) lists all 67 vectors, one entry each:
+`manifest.json` (`"format": "hide-vectors/1"`) lists every vector in this directory — 86 of them at
+the time of writing; the manifest itself is authoritative — one entry each:
 
 | field | meaning |
 | --- | --- |
@@ -27,8 +28,8 @@ The top-level `secret` names the key most containers are sealed to (`recipient.t
 before using a vector, so a corrupted checkout fails loudly. `detached-signature` entries cover an
 implementation-defined format (spec §14): verify the hash, and treat the rest as informative.
 
-Current totals: container 10 open / 28 reject; key 3 / 1; public-key 4 / 1; subsystem 13 / 5;
-detached-signature 2.
+Current totals: container 10 open / 28 reject; key 4 / 1; public-key 4 / 4; subsystem 24 / 9;
+detached-signature 2 / 0.
 
 ## Families
 
@@ -57,6 +58,7 @@ Plaintext is in the matching `.txt`.
 | --- | --- |
 | `recipient.test-secret`, `recipient.test-public` | a 0.1.0 recipient key: this file *is* the X-Wing secret, not a master seed. It cannot be converted to a seed |
 | `identity.test-seed`, `identity.test-public` | a 32-byte master seed and the recipient public key derived from it (spec §9.1) |
+| `protected-identity.test-secret` | the same master seed, sealed with Argon2id+ChaCha20-Poly1305 under a recorded passphrase (spec §9.2–§9.4). The only frozen *positive* key file: every other one here must be refused. It is hash-pinned rather than driven, because no conformance verb takes a passphrase and an implementation must not read one from anywhere but a terminal (§15.5) |
 | `signer.test-seed`, `signer.test-public` | a HIDE-Sign seed and its 1984-byte verifying key (spec §8.2) |
 | `signed.test-public` | the verifying key of the signed container vectors |
 
@@ -81,7 +83,7 @@ must also reproduce byte for byte.
 
 ### Rejections (`rejections/`)
 
-Thirty files, each listed with its reason in [`rejections/rejections.txt`](rejections/rejections.txt).
+Thirty-three files, each listed with its reason in [`rejections/rejections.txt`](rejections/rejections.txt).
 Containers are refused with `recipient.test-secret`; `.test-secret` and `.test-public` files by their
 key parser. Every rejection that needs an authentic header MAC is built with everything a recipient
 controls recomputed, so it is refused for the stated reason and not by an incidental MAC failure.
@@ -93,7 +95,7 @@ controls recomputed, so it is refused for the stated reason and not by an incide
 | Header extensions and stanzas | `critical-header-key`, `header-key-over-u16`, `ignorable-ext-oversize`, `ignorable-ext-not-bstr`, `too-many-extensions`, `only-unknown-stanzas` |
 | Signatures | `stripped-signature`, `unexpected-signature`, `two-signatures`, `unknown-signature-tag`, `signature-extension-rewritten`, `signature-unknown-stanza-removed`, `legacy-minor2-with-extension` |
 | Metadata | `critical-metadata-key`, `reserved-metadata-key`, `filename-dotdot`, `non-canonical-metadata` |
-| Keys | `small-order.test-public`, `argon2-memory.test-secret` |
+| Keys | `small-order.test-public`, `non-canonical-ed25519.test-public`, `argon2-memory.test-secret` |
 
 ## Running
 
@@ -107,7 +109,7 @@ node verify.mjs
 ```
 
 It prints one `PASS` line per check, including
-`manifest.json: 67 vectors, sha256 verified; …`, and exits non-zero on the first failure.
+`manifest.json: 86 vectors, sha256 verified; …`, and exits non-zero on the first failure.
 
 Rust:
 

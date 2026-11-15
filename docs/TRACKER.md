@@ -55,7 +55,7 @@ The measurements below were taken at 0.10.0.
   corpus carried forward (`fuzz-nightly.yml`; a finding files an issue).
   Three real bugs in the first three runs: P11.3, P11.4, P12.1. `cargo audit` and `cargo deny`
   gate advisories, licences, banned crypto stacks and duplicate versions.
-  Thirty-two frozen rejection vectors shared with
+  Thirty-three frozen rejection vectors shared with
   the independent Node verifier (containers, signatures, §10–§12 and §16 subsystems),
   a Rust↔Node differential fuzzer in CI, cross-surface conformance,
   `unsafe_code = "forbid"` outside `hide-ffi`, every dependency pinned exactly.
