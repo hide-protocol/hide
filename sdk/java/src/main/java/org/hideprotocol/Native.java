@@ -34,7 +34,7 @@ final class Native {
      * major.minor.patch is refused at load: it would still link, and would
      * silently lack whatever the newer release enforces.
      */
-    static final String BINDING_VERSION = "0.9.1";
+    static final String BINDING_VERSION = "0.10.0";
 
     static final int OK = 0;
     static final int ERR_INVALID_ARGUMENT = 1;

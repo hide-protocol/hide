@@ -3,6 +3,109 @@
 This project is pre-1.0. The wire format may change while the version is 0.x,
 and a format change is always called out here explicitly.
 
+## 0.10.0 — 2026-11-15
+
+An internal audit of every surface, with the findings fixed and a dated report:
+[`docs/reality-check-2026-11-15.md`](docs/reality-check-2026-11-15.md). **No byte
+of the frozen wire changed**: every 0.9.0 and 0.9.1 container, key file, log,
+chain and vector reads exactly as before (`generate_v1_vectors -- --check` and
+the subsystem vectors are unchanged), and the one-year clock continues.
+
+The API changes below are breaking for a caller, not for a container.
+
+### Security
+
+- **A challenge answer is now bound to the verifier that issued it.** An answer
+  given to one service is worthless at another, because `SpentNonces` is built
+  with the name the verifier answers to and refuses a mismatch before it checks
+  the signature. New status `HIDE_ERR_CHALLENGE_AUDIENCE` (11) in the C ABI, a
+  new error in every SDK, and a cross-surface check that proves the refusal.
+  `Challenge::new` and `Challenge::decode` also refuse an empty audience and a
+  lifetime above 3600 seconds (spec §14.2).
+- **A device HIDE revoked can no longer commit into an MLS group it is still
+  in.** MLS validates the roster when a member is added and never again, so a
+  revoked device could commit, or leave a by-reference proposal for an honest
+  client to fold into its next commit. Installed `MlsRules` refuse a proposal
+  or commit from a sender the identity no longer trusts, and require an update
+  path on every commit.
+- **`hide passwd` no longer changes the identity.** On an unprotected key it
+  resealed a master seed as an encryption-only key, so containers sent to the
+  published public key stopped opening; on a protected `keygen` key it failed.
+- **The ssh-agent refuses to sign a HIDE-shaped payload.** That key is the
+  classical half of every HIDE signature, so one approved request on a reserved
+  context quietly reduced the hybrid to ML-DSA alone.
+- **The C ABI distinguishes forgery from corruption again.** `InvalidSignature`,
+  `MissingSignature` and `UnexpectedSignature`, and every unsupported version,
+  suite or feature, no longer collapse into `HIDE_ERR_MALFORMED`; there is a
+  separate `HIDE_ERR_UNSUPPORTED`.
+- **The writer API refuses to emit metadata a reader must reject** (extension
+  keys, which spec §4 forbids a writer to emit, or a pre-set signature on an
+  unsigned container).
+- **`identity-create` no longer overwrites an existing identity log**, which
+  destroyed the whole device history and its root; it is no-clobber like every
+  other output.
+- **A conflicting recovery binding is detected** (spec §16.1 had no code).
+- **Argon2 intermediates are zeroized** (`argon2`'s `zeroize` feature), so H0
+  and the final block no longer stay in freed memory after every open.
+- Handle lifetime and threading fixed across the SDKs: a mutex inside the
+  spent-nonce record, `KeepAlive`/`SafeHandle` so a finalizer cannot free a
+  handle mid-call, copyable handles refused in PHP, Python and Ruby, and a Ruby
+  binding corrected for arm64.
+- The user-supplied unix endpoint of the ssh-agent is removed only when it is a
+  stale socket; it used to delete whatever was at that path, a live agent's
+  socket included. See *Interoperability* below for the C2SP work.
+
+### Interoperability
+
+- **C2SP witness support.** A HIDE checkpoint note is already a C2SP note, so a
+  standard witness cosignature can live beside the HIDE-Sign one:
+  `hide_transparency::verify_ed25519_cosignature` verifies it,
+  `add_checkpoint_body` builds the request and `classify_add_checkpoint` reads
+  the response by the status codes `c2sp.org/tlog-witness` defines. ML-DSA-44
+  cosignatures are out of scope and say so: HIDE implements ML-DSA-65.
+- **A conformance harness a third party can run**:
+  [`conformance/harness`](conformance/harness) drives any implementation
+  against every frozen vector and reports the verdict through exit statuses, so
+  no output format has to be parsed, and it checks the *class* of each refusal
+  rather than only that something failed. Levels and behaviours are
+  machine-readable in
+  [`conformance/compliance.json`](conformance/compliance.json). No
+  implementation maintained outside this repository has passed it yet.
+- **The spec now cites the standards it depends on** instead of restating them:
+  the X-Wing draft and its three load-bearing properties, the generic combiner
+  HIDE deliberately does not use, and NIST IR 8547 (spec §3.1).
+- **`identity-recover` and the spec §16 binding commands exist**: `identity
+  create` writes the recovery binding and prints the identity root,
+  `identity show --root/--binding` reads them, and `epoch-bind` produces an
+  epoch binding. The layer was unreachable from the CLI before.
+
+### Changed
+
+- **MSRV is 1.88**, and the CI job now actually checks it: it ran `stable`
+  because `rust-toolchain.toml` overrode the action, so the gate could never
+  fail. Every cargo invocation in CI is `--locked`, the fuzz workspace has a
+  committed lockfile CI checks, and the desktop lockfile is audited.
+- Dependencies: `hpke` 0.15.1, `ml-dsa` 0.1.2, `sha2` 0.11.1, `mls-rs` 0.57.0,
+  `mls-rs-crypto-rustcrypto` 0.23.0, and `ctutils` 0.4.4 for
+  RUSTSEC-2026-0385.
+- The desktop app keeps the path the user chose in Rust and hands the webview an
+  opaque id, decrypts no-clobber, creates secret files 0600 on unix, reports the
+  signer fingerprint of a verified signature, runs its commands off the UI
+  thread, and states that its build is unsigned and how to verify a download.
+- `proptest` now has real property suites in `hide-identity`, `hide-epoch` and
+  `hide-transparency` (arbitrary bytes never panic; a successful decode
+  re-encodes byte-identically; every prefix and any suffix is refused), and the
+  declaration was removed from `hide-sign`, which never used it at all.
+
+### Fixed in the documentation
+
+Measurable claims were corrected against a command — fuzz targets, rejection
+vectors, test counts, MSRV, `mls-rs`, the crate diagram, spec section
+references — and two claims were withdrawn because no source could be found for
+them (age's audit, and a peak-RSS figure no command in this repository
+measures). `docs/audit-status.md` no longer lists the identity-log encoding as
+open, which 0.9.0 closed.
+
 ## 0.9.1 — 2026-09-27
 
 Closes every known limitation of the 1.0 freeze ([spec §15](spec/hide-1.md#15-known-limitations-of-the-10-freeze))

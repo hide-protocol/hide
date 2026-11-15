@@ -19,7 +19,7 @@ final class Binding
      * major.minor.patch is refused at load: it would still load, and would
      * silently lack whatever the newer release enforces.
      */
-    public const VERSION = '0.9.1';
+    public const VERSION = '0.10.0';
 
     public const OK = 0;
     public const ERR_INVALID_ARGUMENT = 1;

@@ -14,7 +14,7 @@ import (
 // newer checkout. A stale core would still link and would silently lack
 // whatever the newer release enforces, so the package refuses to start unless
 // the linked core reports exactly this major.minor.patch.
-const BindingVersion = "0.9.1"
+const BindingVersion = "0.10.0"
 
 func init() {
 	if err := checkCoreVersion(BindingVersion, Version()); err != nil {

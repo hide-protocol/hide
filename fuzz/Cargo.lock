@@ -710,7 +710,7 @@ dependencies = [
 
 [[package]]
 name = "hide-cli"
-version = "0.9.1"
+version = "0.10.0"
 dependencies = [
  "base64",
  "clap",
@@ -730,7 +730,7 @@ dependencies = [
 
 [[package]]
 name = "hide-crypto"
-version = "0.9.1"
+version = "0.10.0"
 dependencies = [
  "chacha20poly1305",
  "getrandom",
@@ -745,7 +745,7 @@ dependencies = [
 
 [[package]]
 name = "hide-epoch"
-version = "0.9.1"
+version = "0.10.0"
 dependencies = [
  "hide-crypto",
  "hkdf",
@@ -757,7 +757,7 @@ dependencies = [
 
 [[package]]
 name = "hide-format"
-version = "0.9.1"
+version = "0.10.0"
 dependencies = [
  "minicbor",
  "thiserror",
@@ -782,7 +782,7 @@ dependencies = [
 
 [[package]]
 name = "hide-identity"
-version = "0.9.1"
+version = "0.10.0"
 dependencies = [
  "hide-epoch",
  "hide-sign",
@@ -794,7 +794,7 @@ dependencies = [
 
 [[package]]
 name = "hide-keyring"
-version = "0.9.1"
+version = "0.10.0"
 dependencies = [
  "argon2",
  "base64",
@@ -811,7 +811,7 @@ dependencies = [
 
 [[package]]
 name = "hide-mls"
-version = "0.9.1"
+version = "0.10.0"
 dependencies = [
  "hide-identity",
  "hide-sign",
@@ -823,7 +823,7 @@ dependencies = [
 
 [[package]]
 name = "hide-object"
-version = "0.9.1"
+version = "0.10.0"
 dependencies = [
  "hide-crypto",
  "hide-format",
@@ -834,7 +834,7 @@ dependencies = [
 
 [[package]]
 name = "hide-sign"
-version = "0.9.1"
+version = "0.10.0"
 dependencies = [
  "ed25519-dalek",
  "getrandom",
@@ -848,7 +848,7 @@ dependencies = [
 
 [[package]]
 name = "hide-transparency"
-version = "0.9.1"
+version = "0.10.0"
 dependencies = [
  "base64",
  "ed25519-dalek",

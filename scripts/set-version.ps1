@@ -58,6 +58,13 @@ $targets = @(
     # The visible footer. It said 0.6.2 for three releases because only the
     # JSON-LD above was managed.
     @{ Path = 'site/index.html'; Pattern = '<span id="version">([^<]+)</span>' }
+    # The hand-written "this binding was written against" constant three SDKs
+    # carry so a stale core beside a newer binding is refused at load. They were
+    # maintained by hand and drifted: at 0.10.0 all three still said 0.9.1, which
+    # is a version check that cannot fire.
+    @{ Path = 'sdk/go/version.go'; Pattern = 'const BindingVersion = "([^"]+)"' }
+    @{ Path = 'sdk/java/src/main/java/org/hideprotocol/Native.java'; Pattern = 'BINDING_VERSION = "([^"]+)"' }
+    @{ Path = 'sdk/php/src/Binding.php'; Pattern = "public const VERSION = '([^']+)'" }
 )
 
 # The version internal dependencies must point at. In -Check mode this is
