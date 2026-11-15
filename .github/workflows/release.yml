@@ -210,13 +210,19 @@ jobs:
           cd dist
           if [ "$RUNNER_OS_NAME" = "Windows" ]; then
             7z a -tzip "$name.zip" "$name" >/dev/null
-            7z l "$name.zip" | grep -q "THIRD-PARTY-LICENSES.txt" \
-              || { echo "::error::$name.zip has no THIRD-PARTY-LICENSES.txt"; exit 1; }
+            # List to a file rather than piping into `grep -q`. `grep -q` exits
+            # at the first match, closing the pipe; the writer then reports a
+            # write error, and with `pipefail` that error becomes the pipeline's
+            # status — so the check fails precisely when the file IS present.
+            7z l "$name.zip" > "$name.contents"
+            grep -q "THIRD-PARTY-LICENSES.txt" "$name.contents" \
+              || { echo "::error::$name.zip has no THIRD-PARTY-LICENSES.txt"; sed -n '1,40p' "$name.contents"; exit 1; }
             certutil -hashfile "$name.zip" SHA256 | sed -n 2p | tr -d ' \r' > "$name.zip.sha256"
           else
             tar -czf "$name.tar.gz" "$name"
-            tar -tzf "$name.tar.gz" | grep -qx "$name/THIRD-PARTY-LICENSES.txt" \
-              || { echo "::error::$name.tar.gz has no THIRD-PARTY-LICENSES.txt"; exit 1; }
+            tar -tzf "$name.tar.gz" > "$name.contents"
+            grep -qx "$name/THIRD-PARTY-LICENSES.txt" "$name.contents" \
+              || { echo "::error::$name.tar.gz has no THIRD-PARTY-LICENSES.txt"; sed -n '1,40p' "$name.contents"; exit 1; }
             shasum -a 256 "$name.tar.gz" | cut -d' ' -f1 > "$name.tar.gz.sha256"
           fi
 
@@ -480,12 +486,17 @@ jobs:
           cd "$out"
           if [ "$RUNNER_OS" = "Windows" ]; then
             7z a -tzip "$portable.zip" "$portable" >/dev/null
-            7z l "$portable.zip" | grep -q "THIRD-PARTY-LICENSES.txt" \
-              || { echo "::error::$portable.zip has no THIRD-PARTY-LICENSES.txt"; exit 1; }
+            # See the CLI Package step: `grep -q` closes the pipe on its first
+            # match, the writer reports a write error, and `pipefail` turns that
+            # into a failed check for a file that is actually there.
+            7z l "$portable.zip" > "$portable.contents"
+            grep -q "THIRD-PARTY-LICENSES.txt" "$portable.contents" \
+              || { echo "::error::$portable.zip has no THIRD-PARTY-LICENSES.txt"; sed -n '1,40p' "$portable.contents"; exit 1; }
           else
             tar -czf "$portable.tar.gz" "$portable"
-            tar -tzf "$portable.tar.gz" | grep -qx "$portable/THIRD-PARTY-LICENSES.txt" \
-              || { echo "::error::$portable.tar.gz has no THIRD-PARTY-LICENSES.txt"; exit 1; }
+            tar -tzf "$portable.tar.gz" > "$portable.contents"
+            grep -qx "$portable/THIRD-PARTY-LICENSES.txt" "$portable.contents" \
+              || { echo "::error::$portable.tar.gz has no THIRD-PARTY-LICENSES.txt"; sed -n '1,40p' "$portable.contents"; exit 1; }
           fi
           rm -rf "$portable"
 
