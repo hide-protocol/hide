@@ -12,7 +12,8 @@
     "hide_wasm_bg.wasm",
     "hide_wasm_bg.wasm.d.ts",
     "README.md",
-    "LICENSE"
+    "LICENSE",
+    "LICENSE.third-party.txt"
   ],
   "sideEffects": [
     "./hide_wasm.js"

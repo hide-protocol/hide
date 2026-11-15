@@ -729,14 +729,17 @@ jobs:
       - name: Stage the licence and the notices into the package
         run: |
           set -euo pipefail
-          cp LICENSE sdk/dotnet/HideProtocol/LICENSE
           cp notices/ffi-all.txt sdk/dotnet/HideProtocol/THIRD-PARTY-LICENSES.txt
           test ! -e sdk/dotnet/Directory.Build.props
           cat > sdk/dotnet/Directory.Build.props <<'XML'
           <Project>
             <!-- Written by publish-sdks.yml for the pack step only. -->
+            <!-- LICENSE is NOT listed here: HideProtocol.csproj already packs
+                 the repository-root one, and a second include of the same
+                 target path is NU5118, which TreatWarningsAsErrors makes
+                 fatal. The assertion after the pack proves both files are in
+                 the package, so removing the duplicate cannot hide a gap. -->
             <ItemGroup Condition="'$(IsPackable)' == 'true'">
-              <None Include="$(MSBuildProjectDirectory)/LICENSE" Pack="true" PackagePath="\" />
               <None Include="$(MSBuildProjectDirectory)/THIRD-PARTY-LICENSES.txt" Pack="true" PackagePath="\" />
             </ItemGroup>
           </Project>

@@ -21,7 +21,8 @@
     "!dist/**/fixtures.*",
     "native",
     "README.md",
-    "LICENSE"
+    "LICENSE",
+    "LICENSE.third-party.txt"
   ],
   "scripts": {
     "build": "tsc",

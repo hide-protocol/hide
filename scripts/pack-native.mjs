@@ -37,7 +37,10 @@ if (kind === "npm") {
     os: [entry.nodePlatform],
     cpu: [entry.nodeArch],
     ...(entry.libc ? { libc: [entry.libc] } : {}),
-    files: [entry.library, "LICENSE"],
+    // The compiled core statically links third-party crates, so the notices
+    // have to travel with it; publish-sdks.yml copies them in beside the
+    // library before this manifest is written.
+    files: [entry.library, "LICENSE", "LICENSE.third-party.txt"],
     repository: { type: "git", url: "git+https://github.com/hide-protocol/hide.git" },
     bugs: { url: "https://github.com/hide-protocol/hide/issues" },
     homepage: "https://github.com/hide-protocol/hide",
