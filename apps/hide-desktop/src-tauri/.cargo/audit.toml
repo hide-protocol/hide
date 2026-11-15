@@ -32,4 +32,19 @@ ignore = [
   "RUSTSEC-2025-0075",
   "RUSTSEC-2025-0080",
   "RUSTSEC-2025-0098",
+  # quick-xml 0.38.4 <- plist 1.8.0 <- tauri-utils 2.9.3 <- tauri 2.11.6.
+  # Both advisories are in the XML *parser*: RUSTSEC-2026-0195 is unbounded
+  # namespace-declaration allocation in NsReader, RUSTSEC-2026-0194 is
+  # quadratic time when checking a start tag for duplicate attribute names.
+  # `cargo update -p quick-xml` moves nothing: plist 1.8.0 requires `^0.38`,
+  # and 0.41/0.42 exist but are out of that range. tauri-utils reaches plist in
+  # exactly one place, config.rs::file_associations_plist, which BUILDS a plist
+  # from this application's own bundled configuration; the desktop app declares
+  # no file associations at all, and nothing in it parses an XML or plist
+  # document from any input (searched apps/hide-desktop/src and src-tauri/src
+  # for plist, quick_xml and xml: no hits). No untrusted bytes reach the
+  # affected code. The way out is a Tauri release whose tauri-utils uses plist
+  # 2.x, which is a JS-and-Rust upgrade, not a lockfile update.
+  "RUSTSEC-2026-0195",
+  "RUSTSEC-2026-0194",
 ]

@@ -204,9 +204,11 @@ pierdere de invariantă demonstrată.
 5. **Audit terț.** Rămâne cea mai mare lacună și singurul lucru pe care NICIUN commit nu-l poate
    închide; `audit-status.md` are deja lista a ce ar trebui să acopere. Cost: mare, extern.
 6. **Adâncime de verificare formală.** `proptest` este dependență de dezvoltare în trei crate-uri și
-   nu este folosit nicăieri (constatat în audit). Ideea: fie proprietăți reale pe decodoare
-   (canonicalitate, idempotență), fie eliminarea dependenței; plus MIRI/Kani pe căile de parsare.
-   Cost: mic-mediu. Sursă: `B-25`.
+  **Auditul greșește aici și am verificat înainte de a acționa**: `proptest` chiar este folosit, în
+  `crates/hide-object/tests/properties.rs` și `crates/hide-format/tests/properties.rs`. Adevărul
+  util e altul: șase crate-uri declară dependența și doar două o folosesc, iar `hide-sign` nu o
+  folosea deloc. Ideea: proprietăți reale pe decodoarele care nu aveau niciuna, și eliminarea
+  declarației nefolosite; plus MIRI pe căile de parsare. Cost: mic-mediu. Sursă: `B-25`, corectat.
 7. **Protecție hardware a cheii.** `TRACKER.md` listează „no hardware key protection”. Ideea: un seed
    derivat prin WebAuthn/FIDO2 sau un identity susținut de PKCS#11/YubiKey, care ar închide clasa
    „master seed în clar pe disc”. Cost: mare. Sursă: `docs/TRACKER.md` „What does not exist”.
@@ -215,6 +217,37 @@ pierdere de invariantă demonstrată.
 
 Decizia pe aceste idei este cerută utilizatorului în conversație; rândurile din tracker se adaugă
 pentru cele aprobate.
+
+## 9. Ce s-a făcut din ideile aprobate
+
+Utilizatorul a aprobat ideile 1, 2, 3 și 6. Starea fiecăreia, cu dovada în rândurile `RC-09`…
+`RC-12` din tracker:
+
+- **Ideea 1 (witness C2SP) — livrată.** `crates/hide-transparency/src/witness.rs`: verificarea
+  cosemnăturii Ed25519 în formatul `c2sp.org/tlog-cosignature` peste un checkpoint HIDE (nota HIDE
+  este deja o notă C2SP), construcția corpului `add-checkpoint` și clasificarea răspunsului după
+  codurile de stare din `c2sp.org/tlog-witness`. Cosemnăturile ML-DSA-44 sunt declarate în afara
+  scopului, pentru că HIDE implementează ML-DSA-65.
+- **Ideea 2 (referințe normative) — livrată.** Spec §3.1 citează draft-ul X-Wing cu cele trei
+  proprietăți de care depinde HIDE, combiner-ul generic pe care HIDE nu îl folosește, și NIST
+  IR 8547, cu un tabel de revizii. Onest: draft-ul își marchează singur vectorii din Apendicele C ca
+  `TODO`, deci nu pot fi fixați; verificarea rămâne la nivel de constante (id-ul KEM, dimensiunile),
+  și asta este scris în spec.
+- **Ideea 3 (harness de conformitate) — livrată cu o limitare măsurată.**
+  `conformance/harness/run.mjs` rulează orice implementare pe tot setul de vectori, cu verdictul
+  transmis prin codul de ieșire și cu verificarea **clasei** fiecărui refuz; nivelurile sunt
+  citibile automat în `conformance/compliance.json`. Harness-ul a găsit imediat un defect real în
+  propria verificare inversă a indexului (`rejections.txt` numește intrările fără extensie, manifestul
+  cu ea), reparat. Adapterul de referință care conduce CLI-ul dă 28 trecute și 22 picate, fiecare
+  picată cu semnătura cheii greșite: containerele congelate sunt sigilate cu sensul de cheie brută
+  din 0.1.0–0.4.x, pe care CLI-ul îl refuză prin construcție. Este documentat ca atare, nu raportat
+  ca un verdict.
+- **Ideea 6 (proprietăți + MIRI) — livrată parțial.** Suites de proprietăți reale în `hide-identity`
+  (7), `hide-transparency` (11) și `hide-epoch`, pentru cele trei reguli care contează la un decodor
+  de octeți necontrolați; declarația `proptest` eliminată din `hide-sign`. MIRI a fost instalat și
+  pornit pe `hide-format`, și **nu s-a terminat într-un timp utilizabil** (peste 15 minute pentru
+  testele unitare), deci nu a fost adăugat ca job de CI: un job care expiră este mai rău decât
+  absența lui, iar motivul e consemnat în tracker.
 
 ## 8. Release
 
