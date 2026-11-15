@@ -67,9 +67,9 @@ a pasteable text form.
 Errors: every failure is a subclass of `HideError` — `AuthenticationError`
 (altered, or not a container), its subclass `MalformedError` (did not decode at
 all), `WrongPassphraseError`, `NoMatchingRecipientError`, `NotAKeyError`,
-`ChallengeExpiredError`, `ChallengeReplayedError`. Arguments this binding
-rejects before calling the core throw `RangeError`, or `TypeError` when text
-is not a string.
+`ChallengeExpiredError`, `ChallengeReplayedError`, `ChallengeAudienceError`.
+Arguments this binding rejects before calling the core throw `RangeError`, or
+`TypeError` when text is not a string.
 
 Text arguments must not contain a NUL character. Passphrases, filenames,
 media types, audiences, origins and armored keys cross into the core as C
@@ -82,11 +82,11 @@ One seed backs both encryption and signing, so there is a single thing to back
 up.
 
 ```js
-import { SigningIdentity, verify, newChallenge, SpentNonces, ChallengeReplayedError } from "hide-protocol";
+import { SigningIdentity, verify, newChallenge, SpentNonces, ChallengeAudienceError, ChallengeReplayedError } from "hide-protocol";
 
 const sealed = SigningIdentity.generate("correct horse battery");   // store this
 const signer = SigningIdentity.load(sealed, "correct horse battery");
-const spent = new SpentNonces();                                    // must outlive one request
+const spent = new SpentNonces("app.example");                        // must outlive one request
 try {
   const context = Buffer.from("myapp/v1 release");
   const message = Buffer.from("payload");
@@ -108,6 +108,11 @@ try {
   signer.close();
 }
 ```
+
+A record must be built with the name this verifier answers to, exactly the
+audience the challenge was issued for: an answer minted for another audience —
+a challenge relayed from another service — throws `ChallengeAudienceError`, and
+a record built with an empty audience accepts nothing.
 
 `context` separates uses of one identity so a signature made for one purpose
 cannot be replayed as another; never let a remote party choose it. Contexts

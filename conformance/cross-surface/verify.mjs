@@ -292,7 +292,7 @@ try {
   // authentication could never span a client and a server written differently.
   const challenge = wasm.newChallenge("ssh://cross.example", 1000n, 60n);
   const nodeAnswer = nodeSigner.answer(Buffer.from(challenge));
-  const spent = new wasm.SpentNonces();
+  const spent = new wasm.SpentNonces("ssh://cross.example");
   check(
     "wasm challenge answered by node",
     verifies(() => spent.accept(challenge, new Uint8Array(nodeAnswer), signingPublic, 1000n), null),
@@ -300,6 +300,17 @@ try {
   check(
     "the same answer is refused the second time",
     !verifies(() => spent.accept(challenge, new Uint8Array(nodeAnswer), signingPublic, 1000n), null),
+  );
+  // A verifier named for one audience must refuse an answer minted for another,
+  // which is what stops a challenge relayed from a second service.
+  const elsewhere = wasm.newChallenge("ssh://somewhere.else", 1000n, 60n);
+  const relayed = nodeSigner.answer(Buffer.from(elsewhere));
+  check(
+    "an answer for another audience is refused",
+    !verifies(
+      () => spent.accept(elsewhere, new Uint8Array(relayed), signingPublic, 1000n),
+      null,
+    ),
   );
 
   // Each adapter language against the CLI, the frozen vectors, and damage.

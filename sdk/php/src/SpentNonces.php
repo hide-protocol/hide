@@ -24,9 +24,21 @@ final class SpentNonces
     // (unserialize, reflection) is simply closed rather than uninitialised.
     private ?\FFI\CData $handle = null;
 
-    public function __construct()
+    /**
+     * `$audience` is the name this verifier answers to: the same string that
+     * was passed to Hide::newChallenge(). An answer minted for a different
+     * audience is refused with ChallengeAudienceException, so a challenge
+     * relayed from another service cannot be answered here. A record built
+     * with an empty audience accepts nothing.
+     */
+    public function __construct(string $audience)
     {
-        $handle = Binding::ffi()->hide_spent_nonces_new();
+        $target = Binding::cString($audience, 'audience');
+        try {
+            $handle = Binding::ffi()->hide_spent_nonces_new($target);
+        } finally {
+            Binding::release($target);
+        }
         if ($handle === null) {
             throw new HideException('could not allocate the nonce record');
         }
@@ -66,8 +78,10 @@ final class SpentNonces
      * Accepts an answer exactly once.
      *
      * Throws ChallengeReplayedException the second time,
-     * ChallengeExpiredException after the window, and AuthenticationException
-     * if it does not verify.
+        * ChallengeExpiredException after the window,
+        * ChallengeAudienceException when the challenge names another audience or
+        * the record's audience is empty, and AuthenticationException if it does
+        * not verify.
      */
     public function accept(string $challenge, string $signature, string $publicKey, int $now): void
     {

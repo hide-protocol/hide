@@ -11,6 +11,10 @@ import java.lang.foreign.ValueLayout;
  * genuine signature and nothing about it is invalid on its own. This must
  * therefore outlive a single request.
  *
+ * <p>The record is built for one audience, the name this verifier answers to,
+ * and {@link #accept} refuses an answer minted for any other: a challenge
+ * relayed from another service is worthless here.
+ *
  * <p>Safe for concurrent use: {@link #accept} and {@link #close} are
  * synchronized, so one record can be shared by every request thread. The
  * record is in-process memory; it is not shared across JVMs or restarts.
@@ -19,9 +23,18 @@ public final class SpentNonces implements AutoCloseable {
 
     private MemorySegment handle;
 
-    public SpentNonces() {
-        try {
-            MemorySegment allocated = (MemorySegment) Native.SPENT_NONCES_NEW.invokeExact();
+    /**
+     * Allocates an empty record for the audience this verifier answers to,
+     * which is the same name passed to {@link Hide#newChallenge}.
+     *
+     * <p>The record accepts only answers minted for that name. An empty
+     * audience is accepted by the core but then refuses every answer, so a
+     * verifier that forgot to name itself fails closed.
+     */
+    public SpentNonces(String audience) {
+        try (Arena arena = Arena.ofConfined()) {
+            MemorySegment name = Native.cString(arena, audience, "audience");
+            MemorySegment allocated = (MemorySegment) Native.SPENT_NONCES_NEW.invokeExact(name);
             if (allocated.equals(MemorySegment.NULL)) {
                 throw new HideException("could not allocate the nonce record");
             }
@@ -35,8 +48,10 @@ public final class SpentNonces implements AutoCloseable {
      * Accepts an answer exactly once.
      *
      * <p>Throws {@link HideException.ChallengeReplayed} the second time,
-     * {@link HideException.ChallengeExpired} after the window, and
-     * {@link HideException.Authentication} if it does not verify.
+     * {@link HideException.ChallengeExpired} after the window,
+     * {@link HideException.ChallengeAudience} if the answer was minted for
+     * another audience, and {@link HideException.Authentication} if it does not
+     * verify.
      */
     public synchronized void accept(byte[] challenge, byte[] signature, byte[] publicKey,
                                     long now) {

@@ -69,3 +69,15 @@ public sealed class ChallengeReplayedException : HideException
     {
     }
 }
+
+/// <summary>
+/// The challenge names an audience this verifier does not answer to. An answer
+/// minted for another service is refused, so a challenge relayed from
+/// elsewhere cannot be answered here.
+/// </summary>
+public sealed class ChallengeAudienceException : HideException
+{
+    public ChallengeAudienceException(string message) : base(message)
+    {
+    }
+}

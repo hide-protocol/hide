@@ -77,4 +77,20 @@ public class HideException extends RuntimeException {
             super(message);
         }
     }
+
+    /**
+     * The challenge names a different audience than this verifier answers to.
+     *
+     * <p>An answer is good only where it was minted for, so a challenge relayed
+     * from another service — a genuine signature over a genuine challenge — is
+     * worthless here. A record built with an empty audience throws this for
+     * every answer, so a verifier that forgot to name itself fails closed.
+     */
+    public static final class ChallengeAudience extends HideException {
+        private static final long serialVersionUID = 1L;
+
+        ChallengeAudience(String message) {
+            super(message);
+        }
+    }
 }

@@ -32,6 +32,7 @@ internal static unsafe partial class Native
     internal const int ErrTooLarge = 7;
     internal const int ErrChallengeExpired = 8;
     internal const int ErrChallengeReplayed = 9;
+    internal const int ErrChallengeAudience = 11;
 
     internal const int KeyRaw = 0;
     internal const int KeyProtected = 1;
@@ -415,7 +416,7 @@ internal static unsafe partial class Native
         SigningIdentityHandle identity, byte* challenge, nuint challengeLen, HideBuffer* @out);
 
     [LibraryImport(LibraryName)]
-    internal static partial IntPtr hide_spent_nonces_new();
+    internal static partial IntPtr hide_spent_nonces_new(byte* audience);
 
     [LibraryImport(LibraryName)]
     internal static partial void hide_spent_nonces_free(IntPtr spent);

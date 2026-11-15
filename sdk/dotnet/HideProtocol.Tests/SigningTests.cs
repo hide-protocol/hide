@@ -88,7 +88,7 @@ public class SigningTests
         byte[] challenge = Hide.NewChallenge("ssh://host.example", 1_000, 60);
         byte[] answer = prover.Answer(challenge);
 
-        using SpentNonces spent = new();
+        using SpentNonces spent = new("ssh://host.example");
         spent.Accept(challenge, answer, publicKey, 1_000);
 
         // The identical valid answer, presented again.
@@ -104,9 +104,44 @@ public class SigningTests
         byte[] challenge = Hide.NewChallenge("ssh://host.example", 1_000, 60);
         byte[] answer = prover.Answer(challenge);
 
-        using SpentNonces spent = new();
+        using SpentNonces spent = new("ssh://host.example");
         Assert.Throws<ChallengeExpiredException>(() =>
             spent.Accept(challenge, answer, publicKey, 1_100));
+    }
+
+    // The record knows which service it answers for, so a challenge relayed
+    // from elsewhere is refused even though the answer is a genuine signature
+    // that would verify on its own.
+    [Fact]
+    public void AnAnswerForAnotherAudienceIsRefused()
+    {
+        using SigningIdentity prover = Identity();
+        byte[] publicKey = prover.PublicKey();
+        byte[] relayed = Hide.NewChallenge("https://elsewhere.test", 1_000, 60);
+        byte[] answer = prover.Answer(relayed);
+
+        using SpentNonces spent = new("https://example.test");
+        Assert.Throws<ChallengeAudienceException>(() =>
+            spent.Accept(relayed, answer, publicKey, 1_010));
+
+        // The audience this record does answer to is unaffected.
+        byte[] ours = Hide.NewChallenge("https://example.test", 1_000, 60);
+        spent.Accept(ours, prover.Answer(ours), publicKey, 1_010);
+    }
+
+    // Failing closed: a verifier that forgot to name its audience refuses every
+    // answer rather than accepting one minted for anyone.
+    [Fact]
+    public void ARecordBuiltWithAnEmptyAudienceAcceptsNothing()
+    {
+        using SigningIdentity prover = Identity();
+        byte[] publicKey = prover.PublicKey();
+        byte[] challenge = Hide.NewChallenge("https://example.test", 1_000, 60);
+        byte[] answer = prover.Answer(challenge);
+
+        using SpentNonces spent = new("");
+        Assert.Throws<ChallengeAudienceException>(() =>
+            spent.Accept(challenge, answer, publicKey, 1_010));
     }
 
     [Fact]

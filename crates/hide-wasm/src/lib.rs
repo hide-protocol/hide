@@ -294,29 +294,26 @@ pub fn new_challenge(audience: &str, now: u64, valid_for: u64) -> Result<Vec<u8>
 ///
 /// Replay can only be caught here: a replayed answer is a genuine signature
 /// and nothing about it is invalid on its own. This must therefore outlive a
-/// single request.
+/// single request. It is constructed with the audience this verifier answers
+/// to, so an answer relayed from another service is refused rather than
+/// accepted.
 #[wasm_bindgen]
 pub struct SpentNonces {
     inner: hide_sign::SpentNonces,
 }
 
-impl Default for SpentNonces {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
 #[wasm_bindgen]
 impl SpentNonces {
     #[wasm_bindgen(constructor)]
-    pub fn new() -> SpentNonces {
+    pub fn new(audience: &str) -> SpentNonces {
         SpentNonces {
-            inner: hide_sign::SpentNonces::new(),
+            inner: hide_sign::SpentNonces::new(audience),
         }
     }
 
     /// Accepts an answer exactly once. Throws `"replayed"` the second time,
-    /// `"expired"` after the window, and a verification failure otherwise.
+    /// `"expired"` after the window, `"wrong audience"` for an answer minted
+    /// for another service, and a verification failure otherwise.
     pub fn accept(
         &mut self,
         challenge: &[u8],
@@ -333,6 +330,7 @@ impl SpentNonces {
                     ChallengeError::NotSigned => "signature verification failed",
                     ChallengeError::Expired => "expired",
                     ChallengeError::Replayed => "replayed",
+                    ChallengeError::WrongAudience => "wrong audience",
                 })
             })
     }
@@ -946,7 +944,7 @@ mod tests {
         let challenge = new_challenge("hide.example", 1_000, 60).expect("challenge");
         let answer = prover.answer(&challenge).expect("answer");
 
-        let mut spent = SpentNonces::new();
+        let mut spent = SpentNonces::new("hide.example");
         spent
             .accept(&challenge, &answer, &public, 1_010)
             .expect("first answer");
@@ -962,12 +960,29 @@ mod tests {
         let challenge = new_challenge("hide.example", 1_000, 60).expect("challenge");
         let answer = prover.answer(&challenge).expect("answer");
 
-        let mut spent = SpentNonces::new();
+        let mut spent = SpentNonces::new("hide.example");
         assert!(
             spent
                 .accept(&challenge, &answer, &prover.public_key(), 2_000)
                 .is_err(),
             "an expired answer was accepted"
+        );
+    }
+
+    /// A verifier that answers to one name must refuse an answer minted for
+    /// another, even though the signature over that challenge is perfect.
+    #[wasm_bindgen_test]
+    fn an_answer_for_another_audience_is_refused() {
+        let prover = identity("correct horse battery");
+        let elsewhere = new_challenge("somewhere.else", 1_000, 60).expect("challenge");
+        let answer = prover.answer(&elsewhere).expect("answer");
+
+        let mut spent = SpentNonces::new("hide.example");
+        assert!(
+            spent
+                .accept(&elsewhere, &answer, &prover.public_key(), 1_010)
+                .is_err(),
+            "an answer for another audience was accepted"
         );
     }
 }

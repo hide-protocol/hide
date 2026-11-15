@@ -62,6 +62,7 @@ internal static unsafe class Interop
             Native.ErrNoMatchingRecipient => new NoMatchingRecipientException(message),
             Native.ErrChallengeExpired => new ChallengeExpiredException(message),
             Native.ErrChallengeReplayed => new ChallengeReplayedException(message),
+            Native.ErrChallengeAudience => new ChallengeAudienceException(message),
             _ => (Exception)new HideException(message),
         };
     }

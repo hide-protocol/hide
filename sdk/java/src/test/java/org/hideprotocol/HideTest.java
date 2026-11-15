@@ -61,6 +61,7 @@ public final class HideTest {
         run("an encryption-only key cannot sign", HideTest::encryptionOnlyKey);
         run("a challenge is answered once", HideTest::challengeOnce);
         run("a late answer is expired", HideTest::challengeExpiry);
+        run("an answer for another audience is refused", HideTest::challengeAudience);
         run("an identity log reports the devices it trusts", HideTest::identityDevices);
         run("a revoked device is no longer trusted", HideTest::revokedDevice);
         run("a tampered log is refused", HideTest::tamperedLog);
@@ -150,7 +151,7 @@ public final class HideTest {
         // Without the lock roughly one round in ten goes wrong, so a handful
         // of rounds would pass by luck.
         final int rounds = 120;
-        try (SigningIdentity identity = newIdentity(); SpentNonces spent = new SpentNonces()) {
+        try (SigningIdentity identity = newIdentity(); SpentNonces spent = new SpentNonces("api.example")) {
             byte[] publicKey = identity.publicKey();
             for (int round = 0; round < rounds; round++) {
                 byte[] challenge = Hide.newChallenge("api.example", 1_000, 60);
@@ -865,7 +866,7 @@ public final class HideTest {
     }
 
     private static void challengeOnce() {
-        try (SigningIdentity identity = newIdentity(); SpentNonces spent = new SpentNonces()) {
+        try (SigningIdentity identity = newIdentity(); SpentNonces spent = new SpentNonces("api.example")) {
             byte[] publicKey = identity.publicKey();
             byte[] challenge = Hide.newChallenge("api.example", 1_000, 60);
             byte[] answer = identity.answer(challenge);
@@ -881,7 +882,7 @@ public final class HideTest {
     }
 
     private static void challengeExpiry() {
-        try (SigningIdentity identity = newIdentity(); SpentNonces spent = new SpentNonces()) {
+        try (SigningIdentity identity = newIdentity(); SpentNonces spent = new SpentNonces("api.example")) {
             byte[] publicKey = identity.publicKey();
             byte[] challenge = Hide.newChallenge("api.example", 1_000, 60);
             byte[] answer = identity.answer(challenge);
@@ -891,6 +892,35 @@ public final class HideTest {
             } catch (HideException.ChallengeExpired expected) {
                 // Correct.
             }
+        }
+    }
+
+    /**
+     * An answer is good only where it was minted for. A challenge relayed from
+     * another service can be answered — it is a genuine signature over a
+     * genuine challenge — and the answer must still be worthless here.
+     */
+    private static void challengeAudience() {
+        try (SigningIdentity identity = newIdentity();
+             SpentNonces spent = new SpentNonces("api.example")) {
+            byte[] publicKey = identity.publicKey();
+            byte[] challenge = Hide.newChallenge("other.example", 1_000, 60);
+            byte[] answer = identity.answer(challenge);
+            assertThrows(HideException.ChallengeAudience.class,
+                    () -> spent.accept(challenge, answer, publicKey, 1_010),
+                    "an answer minted for another audience");
+        }
+
+        // A verifier that forgot to name its audience accepts nothing, rather
+        // than accepting everything.
+        try (SigningIdentity identity = newIdentity();
+             SpentNonces unnamed = new SpentNonces("")) {
+            byte[] publicKey = identity.publicKey();
+            byte[] challenge = Hide.newChallenge("api.example", 1_000, 60);
+            byte[] answer = identity.answer(challenge);
+            assertThrows(HideException.ChallengeAudience.class,
+                    () -> unnamed.accept(challenge, answer, publicKey, 1_010),
+                    "an answer presented to a record built with no audience");
         }
     }
 

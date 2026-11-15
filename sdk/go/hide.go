@@ -93,6 +93,8 @@ func status(code C.int32_t) error {
 		return ErrChallengeExpired
 	case C.HIDE_ERR_CHALLENGE_REPLAYED:
 		return ErrChallengeReplayed
+	case C.HIDE_ERR_CHALLENGE_AUDIENCE:
+		return ErrChallengeAudience
 	default:
 		return fmt.Errorf("hide: %s", C.GoString(C.hide_error_message(code)))
 	}

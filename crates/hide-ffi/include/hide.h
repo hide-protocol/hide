@@ -42,6 +42,8 @@ extern "C" {
 /* Well-formed input using a version, suite or feature this build does not
   implement. Distinct from HIDE_ERR_MALFORMED and from HIDE_ERR_AUTHENTICATION. */
 #define HIDE_ERR_UNSUPPORTED          10
+/* The challenge names an audience this verifier does not answer to. */
+#define HIDE_ERR_CHALLENGE_AUDIENCE   11
 #define HIDE_ERR_PANIC                98
 #define HIDE_ERR_INTERNAL             99
 
@@ -121,7 +123,8 @@ int32_t hide_decrypt(const uint8_t *container, size_t container_len,
 typedef struct HideSigningIdentity HideSigningIdentity;
 
 /* The verifier's record of answered challenges. Replay is only detectable by
- * the verifier, so this must outlive a single request. */
+ * the verifier, so this must outlive a single request. One record may be
+ * shared by several threads: accept serialises on an internal lock. */
 typedef struct HideSpentNonces HideSpentNonces;
 
 /* Creates an identity sealed under a passphrase, ready to write to disk. One
@@ -163,12 +166,18 @@ int32_t hide_challenge_answer(const HideSigningIdentity *identity,
                               const uint8_t *challenge, size_t challenge_len,
                               HideBuffer *out);
 
-HideSpentNonces *hide_spent_nonces_new(void);
+/* `audience` is the name this verifier answers to, exactly as passed to
+ * hide_challenge_new. An answer minted for a different audience is refused, so
+ * a challenge relayed from another service cannot be answered here. Returns
+ * NULL for a NULL or non-UTF-8 audience; a record built with an empty audience
+ * accepts nothing. */
+HideSpentNonces *hide_spent_nonces_new(const char *audience);
 void hide_spent_nonces_free(HideSpentNonces *spent);
 
 /* Accepts an answer exactly once. A valid signature presented a second time
  * returns HIDE_ERR_CHALLENGE_REPLAYED, which is why this takes a record
- * rather than being a pure function. */
+ * rather than being a pure function. An answer for another audience returns
+ * HIDE_ERR_CHALLENGE_AUDIENCE. */
 int32_t hide_challenge_accept(HideSpentNonces *spent,
                               const uint8_t *challenge, size_t challenge_len,
                               const uint8_t *signature, size_t signature_len,

@@ -93,7 +93,9 @@ verify(identity.publicKey(), context, message, signature);          // undefined
 const now = BigInt(Math.floor(Date.now() / 1000));
 const challenge = newChallenge("app.example", now, 60n);
 const answer = identity.answer(challenge);
-const spent = new SpentNonces();                                    // must outlive one request
+// The record names the audience this verifier answers to, and must outlive one
+// request. An answer minted for another service is refused.
+const spent = new SpentNonces("app.example");
 spent.accept(challenge, answer, identity.publicKey(), now);
 spent.accept(challenge, answer, identity.publicKey(), now);         // throws: replayed
 

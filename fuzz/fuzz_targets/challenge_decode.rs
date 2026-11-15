@@ -6,6 +6,7 @@
 //! garbage signature rather than crash on it.
 
 use hide_sign::{Challenge, SigningIdentity, SpentNonces, VerifyingIdentity};
+use hide_sign::ChallengeError;
 use libfuzzer_sys::fuzz_target;
 use std::sync::LazyLock;
 
@@ -27,9 +28,25 @@ fuzz_target!(|data: &[u8]| {
     // Feed the same bytes back as the answer: wrong length or wrong content,
     // the verifier must return an error, never panic, and must not spend the
     // nonce for an answer it did not accept.
-    let mut spent = SpentNonces::new();
+    // The record answers to the challenge's own name, so the signature and
+    // replay paths stay reachable for every decodable challenge.
+    let mut spent = SpentNonces::new(challenge.audience());
     let now = challenge.expires_at();
     let _ = spent.accept(&challenge, data, &PROVER, now);
     assert!(spent.is_empty(), "unverified answer spent a nonce");
     let _ = spent.accept(&challenge, data, &PROVER, now.saturating_add(1));
+
+    // A record built for another name must refuse before the signature check,
+    // and must not spend the nonce either.
+    let other = if challenge.audience() == "fuzz.other.example" {
+        "fuzz.third.example"
+    } else {
+        "fuzz.other.example"
+    };
+    let mut mismatched = SpentNonces::new(other);
+    assert_eq!(
+        mismatched.accept(&challenge, data, &PROVER, now),
+        Err(ChallengeError::WrongAudience)
+    );
+    assert!(mismatched.is_empty(), "a wrong-audience answer spent a nonce");
 });

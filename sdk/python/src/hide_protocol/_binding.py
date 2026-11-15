@@ -24,6 +24,7 @@ ERR_MALFORMED = 6
 ERR_TOO_LARGE = 7
 ERR_CHALLENGE_EXPIRED = 8
 ERR_CHALLENGE_REPLAYED = 9
+ERR_CHALLENGE_AUDIENCE = 11
 
 KEY_RAW = 0
 KEY_PROTECTED = 1
@@ -264,7 +265,7 @@ _SIGNATURES = {
         [ctypes.c_void_p, ctypes.c_char_p, ctypes.c_size_t, ctypes.POINTER(Buffer)],
         ctypes.c_int32,
     ),
-    "hide_spent_nonces_new": ([], ctypes.c_void_p),
+    "hide_spent_nonces_new": ([ctypes.c_char_p], ctypes.c_void_p),
     "hide_spent_nonces_free": ([ctypes.c_void_p], None),
     "hide_challenge_accept": (
         [

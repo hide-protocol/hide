@@ -331,7 +331,7 @@ class TestHide < Minitest::Test
       challenge = Hide.new_challenge("ssh://host.example", 1_000, 60)
       answer = prover.answer(challenge)
 
-      Hide::SpentNonces.open do |spent|
+      Hide::SpentNonces.open("ssh://host.example") do |spent|
         assert_nil spent.accept(challenge, answer, public_key, 1_000)
         # The identical valid answer, presented again.
         assert_raises(Hide::ChallengeReplayedError) do
@@ -345,9 +345,44 @@ class TestHide < Minitest::Test
     identity do |prover|
       challenge = Hide.new_challenge("ssh://host.example", 1_000, 60)
       answer = prover.answer(challenge)
-      Hide::SpentNonces.open do |spent|
+      Hide::SpentNonces.open("ssh://host.example") do |spent|
         assert_raises(Hide::ChallengeExpiredError) do
           spent.accept(challenge, answer, prover.public_key, 1_100)
+        end
+      end
+    end
+  end
+
+  # The record knows which service it answers for, so a challenge relayed from
+  # elsewhere is refused even though the answer is a genuine signature that
+  # would verify on its own.
+  def test_an_answer_for_another_audience_is_refused
+    identity do |prover|
+      public_key = prover.public_key
+      relayed = Hide.new_challenge("https://elsewhere.test", 1_000, 60)
+      answer = prover.answer(relayed)
+
+      Hide::SpentNonces.open("https://example.test") do |spent|
+        assert_raises(Hide::ChallengeAudienceError) do
+          spent.accept(relayed, answer, public_key, 1_010)
+        end
+
+        # The audience this record does answer to is unaffected.
+        ours = Hide.new_challenge("https://example.test", 1_000, 60)
+        assert_nil spent.accept(ours, prover.answer(ours), public_key, 1_010)
+      end
+    end
+  end
+
+  # Failing closed: a verifier that forgot to name its audience refuses every
+  # answer rather than accepting one minted for anyone.
+  def test_a_record_built_with_an_empty_audience_accepts_nothing
+    identity do |prover|
+      public_key = prover.public_key
+      challenge = Hide.new_challenge("https://example.test", 1_000, 60)
+      Hide::SpentNonces.open("") do |spent|
+        assert_raises(Hide::ChallengeAudienceError) do
+          spent.accept(challenge, prover.answer(challenge), public_key, 1_010)
         end
       end
     end
@@ -527,7 +562,7 @@ class TestHide < Minitest::Test
   # A copy would hold the same native pointer, and whichever of the two was
   # closed first would free it under the other.
   def test_a_handle_cannot_be_copied_or_serialized
-    handles = [Hide::SecretKey.generate, identity, Hide::SpentNonces.new]
+    handles = [Hide::SecretKey.generate, identity, Hide::SpentNonces.new("ssh://host.example")]
     handles.each do |handle|
       error = assert_raises(TypeError, "#{handle.class}#dup") { handle.dup }
       assert_match(/cannot be copied/, error.message)
@@ -585,7 +620,7 @@ class TestHide < Minitest::Test
       challenge = Hide.new_challenge("ssh://host.example", 1_000, 60)
       answer = prover.answer(challenge)
 
-      Hide::SpentNonces.open do |spent|
+      Hide::SpentNonces.open("ssh://host.example") do |spent|
         lock = spent.instance_variable_get(:@lock)
         assert_instance_of Thread::Mutex, lock
 
@@ -620,7 +655,7 @@ class TestHide < Minitest::Test
         end
       end
 
-      Hide::SpentNonces.open do |spent|
+      Hide::SpentNonces.open("ssh://host.example") do |spent|
         failures = Queue.new
         start = Queue.new
         threads = work.map do |answers|
@@ -687,6 +722,9 @@ class TestHide < Minitest::Test
     end
     assert_raises(Hide::InvalidArgumentError) do
       Hide.new_challenge("app.example\x00.evil.example", 1_000, 60)
+    end
+    assert_raises(Hide::InvalidArgumentError) do
+      Hide::SpentNonces.new("app.example\x00.evil.example")
     end
     assert_raises(Hide::InvalidArgumentError) do
       Hide.verify_checkpoint("note", "log.example\x00/hide", "key")

@@ -16,9 +16,19 @@ public sealed unsafe class SpentNonces : IDisposable
     // The record is mutated by every Accept, and the core does not lock it.
     private readonly object _gate = new();
 
-    public SpentNonces()
+    /// <summary>
+    /// Creates a record for the audience <paramref name="audience"/>: the same
+    /// name that was passed to <see cref="Hide.NewChallenge"/>. An answer
+    /// minted for a different audience is refused with
+    /// <see cref="ChallengeAudienceException"/>, so a challenge relayed from
+    /// another service cannot be answered here. A record built with an empty
+    /// audience accepts nothing.
+    /// </summary>
+    public SpentNonces(string audience)
     {
-        IntPtr handle = Native.hide_spent_nonces_new();
+        ArgumentNullException.ThrowIfNull(audience);
+        using Utf8String target = Utf8String.Create(audience, nameof(audience));
+        IntPtr handle = Native.hide_spent_nonces_new(target.Pointer);
         if (handle == IntPtr.Zero)
         {
             throw new HideException("could not allocate the nonce record");
@@ -30,7 +40,9 @@ public sealed unsafe class SpentNonces : IDisposable
     /// <summary>
     /// Accepts an answer exactly once. Throws <see cref="ChallengeReplayedException"/>
     /// the second time, <see cref="ChallengeExpiredException"/> after the window,
-    /// and <see cref="AuthenticationException"/> if it does not verify.
+    /// <see cref="ChallengeAudienceException"/> when the challenge names another
+    /// audience or this record's audience is empty, and
+    /// <see cref="AuthenticationException"/> if it does not verify.
     /// </summary>
     public void Accept(
         ReadOnlySpan<byte> challenge,

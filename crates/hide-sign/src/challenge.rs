@@ -24,6 +24,11 @@ const CHALLENGE_CONTEXT: &[u8] = b"HIDE/0.5 challenge";
 /// Long enough that guessing or colliding is not a strategy.
 pub const NONCE_LENGTH: usize = 32;
 
+/// A challenge exists to prove liveness within one request. A lifetime longer
+/// than this keeps a nonce spendable for no reason, so it is refused as a
+/// mistake rather than accepted.
+pub const MAX_CHALLENGE_LIFETIME: u64 = 3600;
+
 /// A verifier's demand: prove you hold the key, to me, now.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Challenge {
@@ -35,13 +40,18 @@ pub struct Challenge {
 
 impl Challenge {
     /// `audience` names the verifier, and must be a name the prover can check
-    /// rather than one it is told at the time of proving.
+    /// rather than one it is told at the time of proving. An empty audience
+    /// names nobody, so it is refused.
     pub fn new(audience: impl Into<String>, now: u64, valid_for: u64) -> Result<Self, SignError> {
+        let audience = audience.into();
+        if audience.is_empty() || valid_for == 0 || valid_for > MAX_CHALLENGE_LIFETIME {
+            return Err(SignError::MalformedChallenge);
+        }
         let mut nonce = [0_u8; NONCE_LENGTH];
         getrandom::fill(&mut nonce).map_err(|_| SignError::Random)?;
         Ok(Self {
             nonce,
-            audience: audience.into(),
+            audience,
             issued_at: now,
             valid_for,
         })
@@ -90,6 +100,9 @@ pub enum ChallengeError {
     Expired,
     /// This nonce was already spent. Either a replay, or a duplicate delivery.
     Replayed,
+    /// The challenge names a different audience than this verifier. An answer
+    /// given to another service must be worthless here.
+    WrongAudience,
 }
 
 /// The nonces already spent. Kept by the verifier, because a prover has no
@@ -97,12 +110,26 @@ pub enum ChallengeError {
 /// still carry them, so this does not grow without bound.
 #[derive(Debug, Default)]
 pub struct SpentNonces {
+    audience: String,
     seen: Vec<([u8; NONCE_LENGTH], u64)>,
 }
 
 impl SpentNonces {
-    pub fn new() -> Self {
-        Self::default()
+    /// `audience` is the name this verifier answers to, exactly as it was used
+    /// to issue challenges. Binding it here rather than at each `accept` is
+    /// what makes the check impossible to forget: a verifier that takes the
+    /// challenge bytes back from the client still refuses an answer minted for
+    /// another service, because the record itself knows who it is.
+    pub fn new(audience: impl Into<String>) -> Self {
+        Self {
+            audience: audience.into(),
+            seen: Vec::new(),
+        }
+    }
+
+    /// The audience this record accepts answers for.
+    pub fn audience(&self) -> &str {
+        &self.audience
     }
 
     /// Accepts an answer once. A second call with the same nonce is a replay,
@@ -114,6 +141,13 @@ impl SpentNonces {
         prover: &VerifyingIdentity,
         now: u64,
     ) -> Result<(), ChallengeError> {
+        // Audience first: an answer minted for another service must never
+        // reach the signature check, and there is no reason to spend a nonce
+        // on it either. An empty expectation accepts nothing, so a caller that
+        // forgot to name its audience fails closed.
+        if self.audience.is_empty() || challenge.audience() != self.audience {
+            return Err(ChallengeError::WrongAudience);
+        }
         // Check freshness before spending the nonce, so an expired answer
         // cannot consume a nonce that a live challenge still needs.
         if now > challenge.expires_at() {
@@ -180,12 +214,19 @@ impl Challenge {
         if !rest.is_empty() {
             return Err(SignError::MalformedChallenge);
         }
+        let audience =
+            String::from_utf8(audience.to_vec()).map_err(|_| SignError::MalformedChallenge)?;
+        let valid_for = u64::from_be_bytes(valid_for.try_into().expect("split at eight"));
+        // The same bounds a freshly issued challenge must satisfy, so a decoded
+        // challenge is never one that `new` would have refused.
+        if audience.is_empty() || valid_for == 0 || valid_for > MAX_CHALLENGE_LIFETIME {
+            return Err(SignError::MalformedChallenge);
+        }
         Ok(Self {
             nonce: nonce.try_into().expect("split at the nonce length"),
-            audience: String::from_utf8(audience.to_vec())
-                .map_err(|_| SignError::MalformedChallenge)?,
+            audience,
             issued_at: u64::from_be_bytes(issued_at.try_into().expect("split at eight")),
-            valid_for: u64::from_be_bytes(valid_for.try_into().expect("split at eight")),
+            valid_for,
         })
     }
 }
@@ -206,6 +247,49 @@ mod tests {
         Challenge::new("ssh://host.example", NOW, WINDOW).expect("randomness is available")
     }
 
+    fn spent() -> SpentNonces {
+        SpentNonces::new("ssh://host.example")
+    }
+
+    /// A challenge that names nobody, or that lives longer than a request could
+    /// plausibly last, is a mistake and must not be issued.
+    #[test]
+    fn an_empty_audience_or_absurd_lifetime_is_refused() {
+        assert!(Challenge::new("", NOW, WINDOW).is_err());
+        assert!(Challenge::new("ssh://host.example", NOW, 0).is_err());
+        assert!(Challenge::new("ssh://host.example", NOW, MAX_CHALLENGE_LIFETIME + 1).is_err());
+        assert!(Challenge::new("ssh://host.example", NOW, MAX_CHALLENGE_LIFETIME).is_ok());
+    }
+
+    /// A verifier that takes the challenge back from the client still refuses
+    /// an answer minted for another service: the record knows its own audience.
+    #[test]
+    fn the_record_refuses_an_answer_for_another_audience() {
+        let identity = identity();
+        let elsewhere = Challenge::new("ssh://attacker.example", NOW, WINDOW).unwrap();
+        let answer = elsewhere.answer(&identity);
+        let mut spent = spent();
+        assert_eq!(
+            spent.accept(&elsewhere, &answer, &identity.verifying_key(), NOW),
+            Err(ChallengeError::WrongAudience)
+        );
+        // A wrong-audience answer must not spend the nonce either.
+        assert!(spent.is_empty());
+    }
+
+    /// A record with no audience accepts nothing rather than everything.
+    #[test]
+    fn a_record_without_an_audience_accepts_nothing() {
+        let identity = identity();
+        let challenge = challenge();
+        let answer = challenge.answer(&identity);
+        let mut spent = SpentNonces::new("");
+        assert_eq!(
+            spent.accept(&challenge, &answer, &identity.verifying_key(), NOW),
+            Err(ChallengeError::WrongAudience)
+        );
+    }
+
     /// A declared audience length above `usize::MAX` must be refused, not
     /// truncated by an `as usize` cast that would wrap on a 32-bit target.
     #[test]
@@ -224,7 +308,7 @@ mod tests {
         let identity = identity();
         let challenge = challenge();
         let answer = challenge.answer(&identity);
-        let mut spent = SpentNonces::new();
+        let mut spent = spent();
         assert_eq!(
             spent.accept(&challenge, &answer, &identity.verifying_key(), NOW),
             Ok(())
@@ -238,7 +322,7 @@ mod tests {
         let identity = identity();
         let challenge = challenge();
         let answer = challenge.answer(&identity);
-        let mut spent = SpentNonces::new();
+        let mut spent = spent();
         spent
             .accept(&challenge, &answer, &identity.verifying_key(), NOW)
             .expect("the first answer is honest");
@@ -253,7 +337,7 @@ mod tests {
         let identity = identity();
         let challenge = challenge();
         let answer = challenge.answer(&identity);
-        let mut spent = SpentNonces::new();
+        let mut spent = spent();
         assert_eq!(
             spent.accept(
                 &challenge,
@@ -266,7 +350,9 @@ mod tests {
     }
 
     /// An answer given to one service must be worthless at another, or a
-    /// malicious verifier could relay it to log in somewhere else.
+    /// malicious verifier could relay it to log in somewhere else. The
+    /// signature covers the audience, so even a verifier that names itself
+    /// after the other service cannot accept the relayed answer.
     #[test]
     fn an_answer_for_another_audience_does_not_verify() {
         let identity = identity();
@@ -276,7 +362,9 @@ mod tests {
         let mut elsewhere = asked.clone();
         elsewhere.audience = "ssh://attacker.example".to_string();
 
-        let mut spent = SpentNonces::new();
+        // Match the mutated audience, so the only thing left to fail is the
+        // signature: this is what proves the audience is signed, not just read.
+        let mut spent = SpentNonces::new("ssh://attacker.example");
         assert_eq!(
             spent.accept(&elsewhere, &answer, &identity.verifying_key(), NOW),
             Err(ChallengeError::NotSigned)
@@ -292,7 +380,7 @@ mod tests {
         let mut other = asked.clone();
         other.nonce = [0x11; NONCE_LENGTH];
 
-        let mut spent = SpentNonces::new();
+        let mut spent = spent();
         assert_eq!(
             spent.accept(&other, &answer, &identity.verifying_key(), NOW),
             Err(ChallengeError::NotSigned)
@@ -304,7 +392,7 @@ mod tests {
         let challenge = challenge();
         let impostor = SigningIdentity::from_bytes(&[0x07; SEED_LENGTH]).expect("valid seed");
         let answer = challenge.answer(&impostor);
-        let mut spent = SpentNonces::new();
+        let mut spent = spent();
         assert_eq!(
             spent.accept(&challenge, &answer, &identity().verifying_key(), NOW),
             Err(ChallengeError::NotSigned)
@@ -318,7 +406,7 @@ mod tests {
         let identity = identity();
         let challenge = challenge();
         let forged = identity.sign(b"HIDE/0.5 detached", &challenge.to_signed_bytes());
-        let mut spent = SpentNonces::new();
+        let mut spent = spent();
         assert_eq!(
             spent.accept(&challenge, &forged, &identity.verifying_key(), NOW),
             Err(ChallengeError::NotSigned)
@@ -352,7 +440,7 @@ mod tests {
         let identity = identity();
         let first = challenge();
         let answer = first.answer(&identity);
-        let mut spent = SpentNonces::new();
+        let mut spent = spent();
         spent
             .accept(&first, &answer, &identity.verifying_key(), NOW)
             .expect("honest");
@@ -378,7 +466,7 @@ mod tests {
         let identity = identity();
         let challenge = challenge();
         let answer = challenge.answer(&identity);
-        let mut spent = SpentNonces::new();
+        let mut spent = spent();
         assert_eq!(
             spent.accept(
                 &challenge,

@@ -449,6 +449,7 @@ public final class Hide {
                 case Native.ERR_MALFORMED -> new HideException.Malformed(message);
                 case Native.ERR_CHALLENGE_EXPIRED -> new HideException.ChallengeExpired(message);
                 case Native.ERR_CHALLENGE_REPLAYED -> new HideException.ChallengeReplayed(message);
+                case Native.ERR_CHALLENGE_AUDIENCE -> new HideException.ChallengeAudience(message);
             case Native.ERR_INVALID_ARGUMENT, Native.ERR_TOO_LARGE ->
                     new IllegalArgumentException(message);
             default -> new HideException(message);

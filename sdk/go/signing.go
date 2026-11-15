@@ -24,6 +24,10 @@ const (
 var (
 	ErrChallengeExpired  = errors.New("hide: this challenge is no longer valid")
 	ErrChallengeReplayed = errors.New("hide: this challenge has already been answered")
+	// ErrChallengeAudience means the answer was minted for a different
+	// audience, so it proves possession to some other verifier, not to this
+	// one. A record built with an empty audience refuses every answer this way.
+	ErrChallengeAudience = errors.New("hide: this challenge names another audience")
 )
 
 // SigningIdentity is a signing key. The seed stays inside the native library
@@ -204,6 +208,10 @@ func NewChallenge(audience string, now, validFor uint64) ([]byte, error) {
 // signature and nothing about it is invalid on its own. This must therefore
 // outlive a single request.
 //
+// The record is built for one audience, the name this verifier answers to, and
+// Accept refuses an answer minted for any other: a challenge relayed from
+// another service is worthless here.
+//
 // A SpentNonces is safe for concurrent use: Accept and Close serialise on an
 // internal mutex, so one record can be shared by every request handler. The
 // record itself is in-process memory; it is not shared across processes or
@@ -213,11 +221,25 @@ type SpentNonces struct {
 	handle *C.HideSpentNonces
 }
 
-// NewSpentNonces allocates an empty record.
-func NewSpentNonces() (*SpentNonces, error) {
-	handle := C.hide_spent_nonces_new()
+// NewSpentNonces allocates an empty record for the audience this verifier
+// answers to, which is the same name passed to NewChallenge.
+//
+// An empty audience is accepted by the core but then refuses every answer, so a
+// verifier that forgot to name itself fails closed rather than accepting
+// anything.
+func NewSpentNonces(audience string) (*SpentNonces, error) {
+	cAudience, err := cString(audience, "audience")
+	if err != nil {
+		return nil, err
+	}
+	defer C.free(unsafe.Pointer(cAudience))
+
+	handle := C.hide_spent_nonces_new(cAudience)
 	if handle == nil {
-		return nil, errors.New("hide: could not allocate the nonce record")
+		// The core returns NULL only for a NULL or non-UTF-8 audience, and Go
+		// cannot pass a NULL pointer, so the audience was not valid UTF-8: the
+		// caller's argument, which NewChallenge reports the same way.
+		return nil, errInvalid("the audience must be valid UTF-8")
 	}
 	record := &SpentNonces{handle: handle}
 	runtime.SetFinalizer(record, func(s *SpentNonces) { s.Close() })
@@ -227,7 +249,8 @@ func NewSpentNonces() (*SpentNonces, error) {
 // Accept accepts an answer exactly once.
 //
 // It returns ErrChallengeReplayed the second time, ErrChallengeExpired after
-// the window, and ErrAuthentication if the answer does not verify.
+// the window, ErrChallengeAudience if the answer was minted for another
+// audience, and ErrAuthentication if the answer does not verify.
 func (s *SpentNonces) Accept(challenge, signature, publicKey []byte, now uint64) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()

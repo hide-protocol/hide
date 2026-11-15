@@ -99,6 +99,17 @@ func TestEmbeddedNulIsRefusedInEveryCString(t *testing.T) {
 	}
 }
 
+// The native constructor returns NULL only for a NULL or non-UTF-8 audience.
+// Go cannot pass a NULL pointer, so a Go string holding invalid UTF-8 is the
+// one way to reach it, and the caller must be told it was their argument — the
+// same class of error the core reports for that audience to NewChallenge.
+func TestANonUTF8AudienceIsReportedAsAnArgument(t *testing.T) {
+	invalid := string([]byte{0xff, 0xfe, 'a'})
+	if _, err := NewSpentNonces(invalid); !errors.Is(err, ErrInvalidArgument) {
+		t.Fatalf("a non-UTF-8 audience gave %v, want ErrInvalidArgument", err)
+	}
+}
+
 // A check made in Go must report the same sentinel as one made by the core,
 // so errors.Is is the only test a caller needs.
 func TestPreChecksReturnSentinelErrors(t *testing.T) {
@@ -164,7 +175,7 @@ func TestSpentNoncesAcceptsOneAnswerOnceUnderConcurrency(t *testing.T) {
 		rounds = 24
 	}
 
-	spent, err := NewSpentNonces()
+	spent, err := NewSpentNonces("hide.example")
 	if err != nil {
 		t.Fatalf("spent nonces: %v", err)
 	}
@@ -302,7 +313,7 @@ func TestHandlesStayAliveForTheWholeNativeCall(t *testing.T) {
 			t.Fatalf("round %d: the signature is not this identity's: %v", round, err)
 		}
 
-		spent, err := NewSpentNonces()
+		spent, err := NewSpentNonces("hide.example")
 		if err != nil {
 			t.Fatalf("spent nonces: %v", err)
 		}

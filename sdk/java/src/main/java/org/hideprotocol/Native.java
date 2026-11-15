@@ -46,6 +46,7 @@ final class Native {
     static final int ERR_TOO_LARGE = 7;
         static final int ERR_CHALLENGE_EXPIRED = 8;
         static final int ERR_CHALLENGE_REPLAYED = 9;
+        static final int ERR_CHALLENGE_AUDIENCE = 11;
 
     static final int KEY_PROTECTED = 1;
 
@@ -153,7 +154,7 @@ final class Native {
             FunctionDescriptor.of(ValueLayout.JAVA_INT, ValueLayout.ADDRESS,
                     ValueLayout.ADDRESS, ValueLayout.JAVA_LONG, ValueLayout.ADDRESS));
     static final MethodHandle SPENT_NONCES_NEW = bind("hide_spent_nonces_new",
-            FunctionDescriptor.of(ValueLayout.ADDRESS));
+            FunctionDescriptor.of(ValueLayout.ADDRESS, ValueLayout.ADDRESS));
     static final MethodHandle SPENT_NONCES_FREE = bind("hide_spent_nonces_free",
             FunctionDescriptor.ofVoid(ValueLayout.ADDRESS));
     static final MethodHandle CHALLENGE_ACCEPT = bind("hide_challenge_accept",

@@ -20,6 +20,7 @@ module Hide
     ERR_MALFORMED = 6
     ERR_CHALLENGE_EXPIRED = 8
     ERR_CHALLENGE_REPLAYED = 9
+    ERR_CHALLENGE_AUDIENCE = 11
     ERR_PANIC = 98
     ERR_INTERNAL = 99
 
@@ -161,7 +162,7 @@ module Hide
       hide_verify_message: [[VOIDP, SIZE_T, VOIDP, SIZE_T, VOIDP, SIZE_T, VOIDP, SIZE_T], INT32],
       hide_challenge_new: [[VOIDP, UINT64, UINT64, VOIDP], INT32],
       hide_challenge_answer: [[VOIDP, VOIDP, SIZE_T, VOIDP], INT32],
-      hide_spent_nonces_new: [[], VOIDP],
+      hide_spent_nonces_new: [[VOIDP], VOIDP],
       hide_spent_nonces_free: [[VOIDP], VOID],
       hide_challenge_accept: [[VOIDP, VOIDP, SIZE_T, VOIDP, SIZE_T, VOIDP, SIZE_T, UINT64], INT32],
       hide_identity_verify: [[VOIDP, SIZE_T, VOIDP, SIZE_T, VOIDP], INT32],

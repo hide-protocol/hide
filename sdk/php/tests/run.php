@@ -36,6 +36,7 @@ require __DIR__ . '/fixtures.php';
 
 use HideProtocol\AuthenticationException;
 use HideProtocol\Binding;
+use HideProtocol\ChallengeAudienceException;
 use HideProtocol\ChallengeExpiredException;
 use HideProtocol\ChallengeReplayedException;
 use HideProtocol\Hide;
@@ -471,7 +472,7 @@ test('an encryption-only key file cannot sign', function (): void {
 
 test('a challenge is accepted once and refused when replayed', function (): void {
     [$identity] = newIdentity();
-    $spent = new SpentNonces();
+    $spent = new SpentNonces('https://example.test');
     try {
         $public = $identity->publicKey();
         $challenge = Hide::newChallenge('https://example.test', 1000, 60);
@@ -492,7 +493,7 @@ test('a challenge is accepted once and refused when replayed', function (): void
 
 test('an answer after the window has expired', function (): void {
     [$identity] = newIdentity();
-    $spent = new SpentNonces();
+    $spent = new SpentNonces('https://example.test');
     try {
         $challenge = Hide::newChallenge('https://example.test', 1000, 60);
         $answer = $identity->answer($challenge);
@@ -500,6 +501,53 @@ test('an answer after the window has expired', function (): void {
             ChallengeExpiredException::class,
             static fn () => $spent->accept($challenge, $answer, $identity->publicKey(), 2000),
             'an expired answer was accepted',
+        );
+    } finally {
+        $spent->close();
+        $identity->close();
+    }
+});
+
+test('an answer for another audience is refused', function (): void {
+    // The record knows which service it answers for, so a challenge relayed
+    // from elsewhere is refused even though the answer is a genuine signature
+    // and would verify on its own.
+    [$identity] = newIdentity();
+    $spent = new SpentNonces('https://example.test');
+    try {
+        $public = $identity->publicKey();
+
+        $relayed = Hide::newChallenge('https://elsewhere.test', 1000, 60);
+        $answer = $identity->answer($relayed);
+        // The same answer would be accepted by a record that answered to
+        // https://elsewhere.test, so the refusal is about the audience alone.
+        assertThrows(
+            ChallengeAudienceException::class,
+            static fn () => $spent->accept($relayed, $answer, $public, 1010),
+            'an answer minted for another audience was accepted',
+        );
+
+        // The audience this record does answer to is unaffected.
+        $ours = Hide::newChallenge('https://example.test', 1000, 60);
+        $spent->accept($ours, $identity->answer($ours), $public, 1010);
+    } finally {
+        $spent->close();
+        $identity->close();
+    }
+});
+
+test('a record built with an empty audience accepts nothing', function (): void {
+    // Failing closed: a verifier that forgot to name its audience refuses
+    // every answer rather than accepting one minted for anyone.
+    [$identity] = newIdentity();
+    $spent = new SpentNonces('');
+    try {
+        $public = $identity->publicKey();
+        $challenge = Hide::newChallenge('https://example.test', 1000, 60);
+        assertThrows(
+            ChallengeAudienceException::class,
+            static fn () => $spent->accept($challenge, $identity->answer($challenge), $public, 1010),
+            'an empty-audience record accepted an answer',
         );
     } finally {
         $spent->close();
@@ -800,6 +848,7 @@ test('an embedded NUL is refused in every C string', function (): void {
             'filename' => static fn () => Hide::encrypt('x', [$public], "safe.txt\0evil"),
             'media type' => static fn () => Hide::encrypt('x', [$public], null, "text/pl\0ain"),
             'audience' => static fn () => Hide::newChallenge("app.example\0.evil.example", 1000, 60),
+            'nonce record audience' => static fn () => new SpentNonces($withNul),
             'armored key' => static fn () => Hide::dearmorPublicKey($armored . "\0trailing"),
             'origin' => static fn () => Hide::verifyCheckpoint(
                 Fixtures::get('CHECKPOINT_3'),
@@ -829,7 +878,7 @@ test('a handle cannot be cloned', function (): void {
     // free it.
     $secret = SecretKey::generate();
     [$identity] = newIdentity();
-    $spent = new SpentNonces();
+    $spent = new SpentNonces('https://example.test');
     try {
         $public = $secret->publicKey();
         $handles = ['SecretKey' => $secret, 'SigningIdentity' => $identity, 'SpentNonces' => $spent];
@@ -864,7 +913,7 @@ test('a handle cannot be cloned', function (): void {
 test('a handle cannot be serialized or unserialized', function (): void {
     $secret = SecretKey::generate();
     [$identity] = newIdentity();
-    $spent = new SpentNonces();
+    $spent = new SpentNonces('https://example.test');
     try {
         $handles = ['SecretKey' => $secret, 'SigningIdentity' => $identity, 'SpentNonces' => $spent];
         foreach ($handles as $name => $handle) {

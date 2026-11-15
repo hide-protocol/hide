@@ -175,6 +175,9 @@ pub extern "C" fn hide_error_message(code: i32) -> *const c_char {
         HIDE_ERR_UNSUPPORTED => b"input uses an unsupported version, suite or feature\0",
         HIDE_ERR_CHALLENGE_EXPIRED => b"the challenge expired before it was answered\0",
         HIDE_ERR_CHALLENGE_REPLAYED => b"this challenge was already answered\0",
+        HIDE_ERR_CHALLENGE_AUDIENCE => {
+            b"the challenge names a different audience than this verifier\0"
+        }
         HIDE_ERR_PANIC => b"internal error (panic)\0",
         _ => b"internal error\0",
     };
@@ -537,6 +540,9 @@ pub const HIDE_NONCE_LEN: usize = hide_sign::NONCE_LENGTH;
 /// Reasons a challenge answer was refused, beyond the generic codes above.
 pub const HIDE_ERR_CHALLENGE_EXPIRED: i32 = 8;
 pub const HIDE_ERR_CHALLENGE_REPLAYED: i32 = 9;
+/// The challenge names an audience this verifier does not answer to, or the
+/// verifier was built without an audience and so accepts nothing.
+pub const HIDE_ERR_CHALLENGE_AUDIENCE: i32 = 11;
 
 /// An opaque signing identity. As with secret keys, no function exports the
 /// seed: a binding can sign, and cannot leak.
@@ -576,7 +582,12 @@ pub unsafe extern "C" fn hide_identity_generate(
 
 /// The verifier's record of answered challenges. Replay can only be detected
 /// by the verifier, so this must outlive a single request.
-pub struct HideSpentNonces(hide_sign::SpentNonces);
+///
+/// The record names the audience it accepts answers for, and is guarded by a
+/// mutex: bindings explicitly allow one record to be shared across requests,
+/// and two threads entering `hide_challenge_accept` at once would otherwise
+/// race on the list of spent nonces.
+pub struct HideSpentNonces(std::sync::Mutex<hide_sign::SpentNonces>);
 
 /// Loads a signing identity from a key file's bytes.
 ///
@@ -814,9 +825,23 @@ pub unsafe extern "C" fn hide_challenge_answer(
 }
 
 /// Creates the verifier's record of spent nonces.
+///
+/// `audience` is the name this verifier answers to, exactly as it is passed to
+/// [`hide_challenge_new`]. Answering a challenge minted for a different name is
+/// refused, so an answer relayed from another service cannot be replayed here.
+/// Returns null for a null or non-UTF-8 `audience`; a record built with an
+/// empty audience accepts nothing.
+///
+/// # Safety
+/// `audience` must be null or a valid NUL-terminated C string.
 #[unsafe(no_mangle)]
-pub extern "C" fn hide_spent_nonces_new() -> *mut HideSpentNonces {
-    Box::into_raw(Box::new(HideSpentNonces(hide_sign::SpentNonces::new())))
+pub unsafe extern "C" fn hide_spent_nonces_new(audience: *const c_char) -> *mut HideSpentNonces {
+    let Some(Some(audience)) = (unsafe { borrow_str(audience) }) else {
+        return ptr::null_mut();
+    };
+    Box::into_raw(Box::new(HideSpentNonces(std::sync::Mutex::new(
+        hide_sign::SpentNonces::new(audience),
+    ))))
 }
 
 /// Releases the record of spent nonces.
@@ -872,12 +897,19 @@ pub unsafe extern "C" fn hide_challenge_accept(
         let Ok(prover) = hide_sign::VerifyingIdentity::from_bytes(public_key) else {
             return HIDE_ERR_NOT_A_KEY;
         };
-        let spent = unsafe { &mut *spent };
-        match spent.0.accept(&challenge, signature, &prover, now) {
+        // A poisoned lock means another thread panicked inside `accept`, which
+        // is a logic error, not a reason to refuse every later honest answer.
+        let spent = unsafe { &*spent };
+        let mut spent = spent
+            .0
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        match spent.accept(&challenge, signature, &prover, now) {
             Ok(()) => HIDE_OK,
             Err(hide_sign::ChallengeError::Expired) => HIDE_ERR_CHALLENGE_EXPIRED,
             Err(hide_sign::ChallengeError::Replayed) => HIDE_ERR_CHALLENGE_REPLAYED,
             Err(hide_sign::ChallengeError::NotSigned) => HIDE_ERR_AUTHENTICATION,
+            Err(hide_sign::ChallengeError::WrongAudience) => HIDE_ERR_CHALLENGE_AUDIENCE,
         }
     })
 }
@@ -2046,7 +2078,7 @@ mod tests {
                 HIDE_OK
             );
 
-            let spent = hide_spent_nonces_new();
+            let spent = hide_spent_nonces_new(audience.as_ptr());
             assert_eq!(
                 hide_challenge_accept(
                     spent,
@@ -2105,7 +2137,7 @@ mod tests {
                 HIDE_OK
             );
 
-            let spent = hide_spent_nonces_new();
+            let spent = hide_spent_nonces_new(audience.as_ptr());
             assert_eq!(
                 hide_challenge_accept(
                     spent,

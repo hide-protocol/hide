@@ -829,8 +829,18 @@ answer    = HIDE-Sign(context = "HIDE/0.5 challenge", challenge)
 ```
 
 Decoding rejects truncation, trailing bytes and a non-UTF-8 audience. `expires_at = issued_at +
-valid_for` (saturating). A verifier rejects when `now > expires_at`, then verifies, then rejects a
-nonce it has already accepted.
+valid_for` (saturating). An empty audience, a zero `valid_for` and a `valid_for` above 3600 are
+refused at issue and at decode: a challenge that names nobody, or that outlives the request it
+belongs to, is a mistake rather than a stronger challenge.
+
+A verifier rejects when `now > expires_at`, then verifies, then rejects a nonce it has already
+accepted. Before any of those, it MUST reject a challenge whose audience is not the name it answers
+to. The audience is carried inside the signed bytes, so it proves what the prover believed it was
+answering; it does not by itself stop a verifier that accepts the challenge back from the client
+from relaying an answer minted for someone else. A verifier therefore records the audience it
+answers to when it creates its spent-nonce state, and refuses a mismatched answer — including every
+answer, if that record was built with an empty audience. The audience check runs before the
+signature check, so a wrong-audience answer cannot spend a nonce.
 
 ### 14.3 ASCII armor
 

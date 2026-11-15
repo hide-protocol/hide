@@ -81,9 +81,9 @@ $passphrase)` opens one; `Hide::inspectKey($bytes)` reports `"raw"` or
 Errors: every failure is a `HideProtocol\HideException` — `AuthenticationException`
 (altered, or not a container), its subclass `MalformedException` (did not
 decode at all), `WrongPassphraseException`, `NoMatchingRecipientException`,
-`NotAKeyException`, `ChallengeExpiredException`, `ChallengeReplayedException`.
-Arguments this binding rejects before calling the core throw
-`InvalidArgumentException`.
+`NotAKeyException`, `ChallengeExpiredException`, `ChallengeReplayedException`,
+`ChallengeAudienceException`. Arguments this binding rejects before calling the
+core throw `InvalidArgumentException`.
 
 ## Signing and verification
 
@@ -107,7 +107,7 @@ Hide::verify($signer->publicKey(), $context, $message, $signature); // void; thr
 $now = time();
 $challenge = Hide::newChallenge('app.example', $now, 60);
 $answer = $signer->answer($challenge);
-$spent = new SpentNonces();                                     // one process only: see "Replay protection"
+$spent = new SpentNonces('app.example');                        // answers only for this audience
 $spent->accept($challenge, $answer, $signer->publicKey(), $now);
 try {
     $spent->accept($challenge, $answer, $signer->publicKey(), $now);
@@ -117,6 +117,12 @@ try {
 $spent->close();
 $signer->close();
 ```
+
+`new SpentNonces($audience)` must be built with the name this verifier answers
+to — the same string passed to `Hide::newChallenge()`. An answer minted for a
+different audience is refused with `ChallengeAudienceException`, so a challenge
+relayed from another service cannot be answered here; a record built with an
+empty audience accepts nothing.
 
 `$context` separates uses of one identity so a signature made for one purpose
 cannot be replayed as another; never let a remote party choose it.

@@ -132,7 +132,7 @@ func TestChallengeIsAcceptedOnceThenReplayed(t *testing.T) {
 		t.Fatalf("answer: %v", err)
 	}
 
-	spent, err := NewSpentNonces()
+	spent, err := NewSpentNonces("hide.example")
 	if err != nil {
 		t.Fatalf("spent nonces: %v", err)
 	}
@@ -160,7 +160,7 @@ func TestAnswerAfterTheWindowIsExpired(t *testing.T) {
 		t.Fatalf("answer: %v", err)
 	}
 
-	spent, err := NewSpentNonces()
+	spent, err := NewSpentNonces("hide.example")
 	if err != nil {
 		t.Fatalf("spent nonces: %v", err)
 	}
@@ -168,6 +168,66 @@ func TestAnswerAfterTheWindowIsExpired(t *testing.T) {
 
 	if err := spent.Accept(challenge, answer, public, now+61); !errors.Is(err, ErrChallengeExpired) {
 		t.Fatalf("expected ErrChallengeExpired, got %v", err)
+	}
+}
+
+// An answer is good only where it was minted for. A challenge relayed from
+// another service can be answered by the identity — it is a genuine signature
+// over a genuine challenge — and the answer must still be worthless here.
+func TestAnswerForAnotherAudienceIsRefused(t *testing.T) {
+	identity := newIdentity(t)
+	public, _ := identity.PublicKey()
+
+	const now = 1_700_000_000
+	challenge, err := NewChallenge("other.example", now, 60)
+	if err != nil {
+		t.Fatalf("challenge: %v", err)
+	}
+	answer, err := identity.Answer(challenge)
+	if err != nil {
+		t.Fatalf("answer: %v", err)
+	}
+
+	spent, err := NewSpentNonces("hide.example")
+	if err != nil {
+		t.Fatalf("spent nonces: %v", err)
+	}
+	defer spent.Close()
+
+	if err := spent.Accept(challenge, answer, public, now+1); !errors.Is(err, ErrChallengeAudience) {
+		t.Fatalf("an answer minted for another audience gave %v, want ErrChallengeAudience", err)
+	}
+	// The refusal must not have spent the nonce: the same answer is refused for
+	// the same reason on a second attempt, not reported as a replay.
+	if err := spent.Accept(challenge, answer, public, now+1); !errors.Is(err, ErrChallengeAudience) {
+		t.Fatalf("the second attempt gave %v, want ErrChallengeAudience", err)
+	}
+}
+
+// A verifier that forgot to name its audience must accept nothing, rather than
+// accept everything.
+func TestAnEmptyAudienceAcceptsNothing(t *testing.T) {
+	identity := newIdentity(t)
+	public, _ := identity.PublicKey()
+
+	const now = 1_700_000_000
+	challenge, err := NewChallenge("hide.example", now, 60)
+	if err != nil {
+		t.Fatalf("challenge: %v", err)
+	}
+	answer, err := identity.Answer(challenge)
+	if err != nil {
+		t.Fatalf("answer: %v", err)
+	}
+
+	spent, err := NewSpentNonces("")
+	if err != nil {
+		t.Fatalf("spent nonces: %v", err)
+	}
+	defer spent.Close()
+
+	if err := spent.Accept(challenge, answer, public, now+1); !errors.Is(err, ErrChallengeAudience) {
+		t.Fatalf("a record with no audience gave %v, want ErrChallengeAudience", err)
 	}
 }
 

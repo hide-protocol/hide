@@ -57,6 +57,9 @@ module Hide
   # This challenge was already answered. Almost certainly a replay.
   class ChallengeReplayedError < Error; end
 
+  # The challenge names an audience this verifier does not answer to.
+  class ChallengeAudienceError < Error; end
+
   ERRORS = {
     Binding::ERR_INVALID_ARGUMENT => InvalidArgumentError,
     Binding::ERR_WRONG_PASSPHRASE => WrongPassphraseError,
@@ -66,7 +69,8 @@ module Hide
     Binding::ERR_MALFORMED => MalformedError,
     Binding::ERR_TOO_LARGE => TooLargeError,
     Binding::ERR_CHALLENGE_EXPIRED => ChallengeExpiredError,
-    Binding::ERR_CHALLENGE_REPLAYED => ChallengeReplayedError
+    Binding::ERR_CHALLENGE_REPLAYED => ChallengeReplayedError,
+    Binding::ERR_CHALLENGE_AUDIENCE => ChallengeAudienceError
   }.freeze
 
   class << self
@@ -609,8 +613,8 @@ module Hide
     include Bytes
     include Uncopyable
 
-    def self.open
-      record = new
+    def self.open(audience)
+      record = new(audience)
       return record unless block_given?
 
       begin
@@ -620,8 +624,13 @@ module Hide
       end
     end
 
-    def initialize
-      pointer = Binding.call(:hide_spent_nonces_new)
+    # `audience` is the name this verifier answers to: the same string passed
+    # to Hide.new_challenge. An answer minted for a different audience is
+    # refused with ChallengeAudienceError, so a challenge relayed from another
+    # service cannot be answered here. A record built with an empty audience
+    # accepts nothing.
+    def initialize(audience)
+      pointer = Binding.call(:hide_spent_nonces_new, Hide.cstring(audience, "audience"))
       raise Error, "could not allocate the nonce record" if pointer.null?
 
       @address = pointer.to_i
@@ -629,8 +638,9 @@ module Hide
     end
 
     # Accepts an answer exactly once: raises ChallengeReplayedError the second
-    # time, ChallengeExpiredError after the window, AuthenticationError if it
-    # does not verify.
+    # time, ChallengeExpiredError after the window, ChallengeAudienceError when
+    # the challenge names another audience or this record's audience is empty,
+    # and AuthenticationError if it does not verify.
     def accept(challenge, signature, public_key, now)
       chal = binary(challenge, "challenge")
       sig = binary(signature, "signature")

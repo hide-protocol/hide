@@ -192,7 +192,7 @@ def test_a_challenge_is_answered_once_and_then_refused() -> None:
         challenge = hide.new_challenge("ssh://host.example", 1_000, 60)
         answer = prover.answer(challenge)
 
-        with hide.SpentNonces() as spent:
+        with hide.SpentNonces("ssh://host.example") as spent:
             spent.accept(challenge, answer, public, 1_000)
             # The identical valid answer, presented again.
             with pytest.raises(hide.ChallengeReplayed):
@@ -204,9 +204,31 @@ def test_an_answer_after_the_window_is_refused() -> None:
         public = prover.public_key()
         challenge = hide.new_challenge("ssh://host.example", 1_000, 60)
         answer = prover.answer(challenge)
-        with hide.SpentNonces() as spent:
+        with hide.SpentNonces("ssh://host.example") as spent:
             with pytest.raises(hide.ChallengeExpired):
                 spent.accept(challenge, answer, public, 1_100)
+
+
+def test_an_answer_for_another_audience_is_refused() -> None:
+    # A challenge relayed from another service is a genuine challenge with a
+    # genuine answer; only the audience says it was not minted for us.
+    with identity() as prover:
+        public = prover.public_key()
+        challenge = hide.new_challenge("some.other.service", 1_000, 60)
+        answer = prover.answer(challenge)
+
+        with hide.SpentNonces("ssh://host.example") as spent:
+            with pytest.raises(hide.ChallengeAudience):
+                spent.accept(challenge, answer, public, 1_000)
+            # Refused, and not spent: our own answer for this audience still
+            # works, and the refusal did not consume anything.
+            ours = hide.new_challenge("ssh://host.example", 1_000, 60)
+            spent.accept(ours, prover.answer(ours), public, 1_000)
+
+        # A record that names no audience accepts nothing.
+        with hide.SpentNonces("") as unnamed:
+            with pytest.raises(hide.ChallengeAudience):
+                unnamed.accept(challenge, answer, public, 1_000)
 
 
 def test_a_closed_identity_cannot_sign_and_never_prints_key_material() -> None:

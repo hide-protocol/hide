@@ -152,6 +152,7 @@ export const ERR_MALFORMED = 6;
 export const ERR_TOO_LARGE = 7;
 export const ERR_CHALLENGE_EXPIRED = 8;
 export const ERR_CHALLENGE_REPLAYED = 9;
+export const ERR_CHALLENGE_AUDIENCE = 11;
 
 export const KEY_PROTECTED = 1;
 export const PUBLIC_KEY_LEN = 1216;
@@ -219,7 +220,7 @@ export const fns = {
   challengeAnswer: lib.func(
     "int32_t hide_challenge_answer(void *identity, const uint8_t *challenge, size_t challenge_len, _Out_ HideBuffer *out)",
   ),
-  spentNoncesNew: lib.func("void *hide_spent_nonces_new()"),
+  spentNoncesNew: lib.func("void *hide_spent_nonces_new(const char *audience)"),
   spentNoncesFree: lib.func("void hide_spent_nonces_free(void *spent)"),
   challengeAccept: lib.func(
     "int32_t hide_challenge_accept(void *spent, const uint8_t *challenge, size_t challenge_len, const uint8_t *signature, size_t signature_len, const uint8_t *public_key, size_t public_key_len, uint64_t now)",

@@ -87,9 +87,9 @@ passphrase)` opens one; `Hide.inspectKey(data)` reports `"raw"` or
 Errors: every failure is a `HideException` (unchecked) — nested subclasses
 `HideException.Authentication` (altered, or not a container), its subclass
 `HideException.Malformed` (did not decode at all), `WrongPassphrase`,
-`NoMatchingRecipient`, `NotAKey`, `ChallengeExpired`, `ChallengeReplayed`.
-Arguments this binding rejects before calling the core throw
-`IllegalArgumentException`.
+`NoMatchingRecipient`, `NotAKey`, `ChallengeExpired`, `ChallengeReplayed`,
+`ChallengeAudience`. Arguments this binding rejects before calling the core
+throw `IllegalArgumentException`.
 
 **Text arguments must not contain a NUL character.** Passphrases, the
 filename, the media type, the challenge audience, armored key text and the
@@ -108,7 +108,8 @@ up.
 byte[] sealed = SigningIdentity.generate("correct horse battery");   // store this
 
 try (SigningIdentity signer = SigningIdentity.load(sealed, "correct horse battery");
-     SpentNonces spent = new SpentNonces()) {                        // must outlive one request
+     // The record answers for this verifier's name, and must outlive one request.
+     SpentNonces spent = new SpentNonces("app.example")) {
     byte[] context = "myapp/v1 release".getBytes(StandardCharsets.UTF_8);
     byte[] message = "payload".getBytes(StandardCharsets.UTF_8);
     byte[] signature = signer.sign(context, message);                // 3373 bytes
@@ -130,6 +131,12 @@ failure rather than returning a boolean a caller could forget to check.
 `Hide.sign(identity, context, message)` is a static alias for `signer.sign`. A
 key file written before signatures existed carries no signing seed and throws
 `HideException.NotAKey`.
+
+The nonce record must be built with the name this verifier answers to — the
+same `audience` passed to `Hide.newChallenge` — because an answer minted for a
+different audience is refused with `HideException.ChallengeAudience`, so a
+challenge relayed from another service cannot be answered here. A record built
+with an empty audience accepts nothing.
 
 ## Identity logs, epoch chains, transparency proofs
 

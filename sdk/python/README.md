@@ -70,10 +70,10 @@ key a pasteable text form.
 Errors: every failure is a subclass of `hide.HideError` — `AuthenticationError`
 (altered, or not a container), its subclass `Malformed` (did not decode at
 all), `WrongPassphrase`, `NoMatchingRecipient`, `NotAKeyFile`,
-`ChallengeExpired`, `ChallengeReplayed`. Arguments this binding rejects before
-calling the core raise `ValueError`, or `TypeError` when the argument is the
-wrong type (text that is not a `str`, a `decrypt` key that is not a
-`SecretKey`).
+`ChallengeExpired`, `ChallengeReplayed`, `ChallengeAudience`. Arguments this
+binding rejects before calling the core raise `ValueError`, or `TypeError` when
+the argument is the wrong type (text that is not a `str`, a `decrypt` key that
+is not a `SecretKey`).
 
 Text arguments must not contain a NUL character. Passphrases, filenames,
 media types, audiences, origins and armored keys cross into the core as C
@@ -98,10 +98,15 @@ with hide.SigningIdentity.load(sealed, "correct horse battery") as signer:
     now = int(time.time())
     challenge = hide.new_challenge("app.example", now, 60)
     answer = signer.answer(challenge)
-    with hide.SpentNonces() as spent:               # must outlive one request
+    with hide.SpentNonces("app.example") as spent:                # must outlive one request
         spent.accept(challenge, answer, signer.public_key(), now)
         spent.accept(challenge, answer, signer.public_key(), now)  # ChallengeReplayed
 ```
+
+A record must be built with the name this verifier answers to, exactly the
+audience the challenge was issued for: an answer minted for another audience —
+a challenge relayed from another service — is refused with
+`ChallengeAudience`, and a record built with an empty audience accepts nothing.
 
 `context` separates uses of one identity so a signature made for one purpose
 cannot be replayed as another; never let a remote party choose it. Contexts

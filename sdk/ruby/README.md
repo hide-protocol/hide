@@ -65,8 +65,8 @@ Errors: everything raises a subclass of `Hide::Error` — `AuthenticationError`
 (altered, or not a container), its subclass `MalformedError` (did not decode at
 all), `WrongPassphraseError`, `NoMatchingRecipientError`, `NotAKeyError`,
 `TooLargeError`, `ClosedKeyError`, `ChallengeExpiredError`,
-`ChallengeReplayedError`, and `InvalidArgumentError` for arguments this binding
-rejects before calling the core.
+`ChallengeReplayedError`, `ChallengeAudienceError`, and `InvalidArgumentError`
+for arguments this binding rejects before calling the core.
 
 Text arguments must not contain a NUL character. Passphrases, filenames,
 media types, audiences, origins and armored keys cross into the core as C
@@ -93,12 +93,18 @@ Hide::SigningIdentity.open(sealed, "correct horse battery") do |signer|
   now = Time.now.to_i
   challenge = Hide.new_challenge("app.example", now, 60)
   answer = signer.answer(challenge)
-  Hide::SpentNonces.open do |spent|                                # must outlive one request
+  Hide::SpentNonces.open("app.example") do |spent|                 # must outlive one request
     spent.accept(challenge, answer, signer.public_key, now)
     spent.accept(challenge, answer, signer.public_key, now)        # Hide::ChallengeReplayedError
   end
 end
 ```
+
+`Hide::SpentNonces.open(audience)` must be built with the name this verifier
+answers to — the same string passed to `Hide.new_challenge`. An answer minted
+for a different audience is refused with `Hide::ChallengeAudienceError`, so a
+challenge relayed from another service cannot be answered here; a record built
+with an empty audience accepts nothing.
 
 `context` separates uses of one identity so a signature made for one purpose
 cannot be replayed as another; never let a remote party choose it. Contexts

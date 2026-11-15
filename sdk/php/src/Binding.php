@@ -31,6 +31,7 @@ final class Binding
     public const ERR_TOO_LARGE = 7;
     public const ERR_CHALLENGE_EXPIRED = 8;
     public const ERR_CHALLENGE_REPLAYED = 9;
+    public const ERR_CHALLENGE_AUDIENCE = 11;
 
     public const KEY_RAW = 0;
     public const KEY_PROTECTED = 1;
@@ -101,7 +102,7 @@ final class Binding
                                       const uint8_t *challenge, size_t challenge_len,
                                       HideBuffer *out);
 
-        void *hide_spent_nonces_new(void);
+        void *hide_spent_nonces_new(const char *audience);
         void hide_spent_nonces_free(void *spent);
         int32_t hide_challenge_accept(void *spent,
                                       const uint8_t *challenge, size_t challenge_len,
@@ -432,6 +433,7 @@ final class Binding
             self::ERR_NO_MATCHING_RECIPIENT => new NoMatchingRecipientException($message),
             self::ERR_CHALLENGE_EXPIRED => new ChallengeExpiredException($message),
             self::ERR_CHALLENGE_REPLAYED => new ChallengeReplayedException($message),
+            self::ERR_CHALLENGE_AUDIENCE => new ChallengeAudienceException($message),
             default => new HideException($message),
         };
     }

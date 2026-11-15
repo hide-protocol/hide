@@ -33,6 +33,7 @@ __all__ = [
     "SpentNonces",
     "ChallengeExpired",
     "ChallengeReplayed",
+    "ChallengeAudience",
     "sign",
     "verify",
     "new_challenge",
@@ -99,6 +100,15 @@ class ChallengeReplayed(HideError):
     """This challenge was already answered. Almost certainly a replay."""
 
 
+class ChallengeAudience(HideError):
+    """The challenge names an audience this verifier does not answer to.
+
+    An answer minted for another service cannot be presented here, which is
+    what stops a challenge relayed from somewhere else from being answered.
+    A record built with an empty audience raises this for every answer.
+    """
+
+
 _ERRORS = {
     _b.ERR_INVALID_ARGUMENT: ValueError,
     _b.ERR_WRONG_PASSPHRASE: WrongPassphrase,
@@ -109,6 +119,7 @@ _ERRORS = {
     _b.ERR_TOO_LARGE: ValueError,
     _b.ERR_CHALLENGE_EXPIRED: ChallengeExpired,
     _b.ERR_CHALLENGE_REPLAYED: ChallengeReplayed,
+    _b.ERR_CHALLENGE_AUDIENCE: ChallengeAudience,
 }
 
 
@@ -500,6 +511,11 @@ class SpentNonces(_Handle):
     genuine signature and nothing about it is invalid on its own. This must
     therefore outlive a single request.
 
+    It is built with ``audience``, the name this verifier answers to: exactly
+    the string passed to :func:`new_challenge`. An answer minted for another
+    audience is refused with :class:`ChallengeAudience`, and a record built
+    with an empty audience accepts nothing.
+
     One record may be shared between threads: ``accept`` holds a per-object
     lock around the native call, which mutates the record and is not
     synchronised on the native side. ctypes releases the GIL during the call,
@@ -508,9 +524,11 @@ class SpentNonces(_Handle):
 
     __slots__ = ("_handle", "_lock")
 
-    def __init__(self) -> None:
+    def __init__(self, audience: str) -> None:
         self._lock = threading.Lock()
-        self._handle = ctypes.c_void_p(_b.lib.hide_spent_nonces_new())
+        self._handle = ctypes.c_void_p(
+            _b.lib.hide_spent_nonces_new(_cstring(audience, "audience"))
+        )
         if not self._handle:
             raise HideError("could not allocate the nonce record")
 
@@ -520,7 +538,9 @@ class SpentNonces(_Handle):
         """Accepts an answer exactly once.
 
         Raises :class:`ChallengeReplayed` the second time, :class:`ChallengeExpired`
-        after the window, and :class:`AuthenticationError` if it does not verify.
+        after the window, :class:`ChallengeAudience` when the challenge names
+        another audience, and :class:`AuthenticationError` if it does not
+        verify.
         """
         with self._lock:
             if not getattr(self, "_handle", None):

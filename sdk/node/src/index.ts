@@ -23,6 +23,7 @@
 
 import {
   ERR_AUTHENTICATION,
+  ERR_CHALLENGE_AUDIENCE,
   ERR_CHALLENGE_EXPIRED,
   ERR_CHALLENGE_REPLAYED,
   ERR_INVALID_ARGUMENT,
@@ -75,6 +76,13 @@ export class NotAKeyError extends HideError {}
 export class ChallengeExpiredError extends HideError {}
 /** This challenge was already answered. Almost certainly a replay. */
 export class ChallengeReplayedError extends HideError {}
+/**
+ * The challenge names an audience this verifier does not answer to. An answer
+ * minted for another service cannot be presented here, which is what stops a
+ * challenge relayed from somewhere else from being answered; a record built
+ * with an empty audience throws this for every answer.
+ */
+export class ChallengeAudienceError extends HideError {}
 
 function check(code: number): void {
   if (code === OK) return;
@@ -94,6 +102,8 @@ function check(code: number): void {
       throw new ChallengeExpiredError(message);
     case ERR_CHALLENGE_REPLAYED:
       throw new ChallengeReplayedError(message);
+    case ERR_CHALLENGE_AUDIENCE:
+      throw new ChallengeAudienceError(message);
     case ERR_INVALID_ARGUMENT:
     case ERR_TOO_LARGE:
       throw new RangeError(message);
@@ -489,6 +499,11 @@ export function newChallenge(
  * signature and nothing about it is invalid on its own, so only the verifier
  * can detect it: this must outlive a single request.
  *
+ * It is built with `audience`, the name this verifier answers to: exactly the
+ * string passed to `newChallenge`. An answer minted for another audience
+ * throws `ChallengeAudienceError`, and a record built with an empty audience
+ * accepts nothing.
+ *
  * Every call into the core is synchronous on the calling thread, so within
  * one JavaScript thread two `accept` calls can never overlap and no lock is
  * needed. A record cannot be passed to a worker: each worker thread loads its
@@ -500,8 +515,8 @@ export class SpentNonces {
     fns.spentNoncesFree(handle);
   });
 
-  constructor() {
-    const handle = fns.spentNoncesNew();
+  constructor(audience: string) {
+    const handle = fns.spentNoncesNew(cstring(audience, "audience"));
     if (!handle) throw new HideError("could not allocate the nonce record");
     this.#handle = handle;
     SpentNonces.#registry.register(this, handle, this);
@@ -509,8 +524,9 @@ export class SpentNonces {
 
   /**
    * Accepts an answer exactly once. Throws `ChallengeReplayedError` the second
-   * time, `ChallengeExpiredError` after the window, and `AuthenticationError`
-   * if it does not verify.
+  * time, `ChallengeExpiredError` after the window, `ChallengeAudienceError`
+  * when the challenge names another audience, and `AuthenticationError` if it
+  * does not verify.
    */
   accept(
     challenge: Uint8Array,

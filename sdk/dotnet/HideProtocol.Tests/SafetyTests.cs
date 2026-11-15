@@ -32,6 +32,7 @@ public class SafetyTests
         Assert.Throws<ArgumentException>(() => Hide.Encrypt("x"u8, [publicKey], "safe.txt\0evil"));
         Assert.Throws<ArgumentException>(() => Hide.Encrypt("x"u8, [publicKey], null, "text/pl\0ain"));
         Assert.Throws<ArgumentException>(() => Hide.NewChallenge("app.example\0.evil.example", 1_000, 60));
+        Assert.Throws<ArgumentException>(() => new SpentNonces("app.example\0.evil.example"));
         Assert.Throws<ArgumentException>(() => Hide.DearmorPublicKey(armored + "\0trailing"));
         Assert.Throws<ArgumentException>(() =>
             Hide.VerifyCheckpoint(Fixtures.Checkpoint3, "log.example/hide\0", Fixtures.CheckpointLogKey));
@@ -55,7 +56,7 @@ public class SafetyTests
 
         using SigningIdentity prover = SigningIdentity.Load(SigningIdentity.Generate(Passphrase), Passphrase);
         byte[] publicKey = prover.PublicKey();
-        using SpentNonces spent = new();
+        using SpentNonces spent = new("api.example");
 
         for (int round = 0; round < rounds; round++)
         {
@@ -176,7 +177,7 @@ public class SafetyTests
         byte[] challenge = Hide.NewChallenge("api.example", 1_000, 60);
         byte[] answer = prover.Answer(challenge);
 
-        SpentNonces spent = new();
+        SpentNonces spent = new("api.example");
         spent.Accept(challenge, answer, publicKey, 1_010);
     }
 
@@ -229,7 +230,7 @@ public class SafetyTests
         byte[] challenge = Hide.NewChallenge("api.example", 1_000, 60);
         byte[] answer = prover.Answer(challenge);
 
-        SpentNonces spent = new();
+        SpentNonces spent = new("api.example");
         spent.Dispose();
         spent.Dispose();
 

@@ -111,7 +111,11 @@ def _checkout(root: Path, version: str | None = None) -> Path:
 
 
 def _handles() -> list[object]:
-    return [hide.SecretKey.generate(), _identity(), hide.SpentNonces()]
+    return [
+        hide.SecretKey.generate(),
+        _identity(),
+        hide.SpentNonces("ssh://host.example"),
+    ]
 
 
 @pytest.mark.parametrize("index", [0, 1, 2], ids=["SecretKey", "SigningIdentity", "SpentNonces"])
@@ -150,7 +154,7 @@ def test_accept_holds_the_record_lock_for_the_native_call() -> None:
     # The native record is mutated without synchronisation and ctypes releases
     # the GIL during the call, so the lock is what makes sharing a record safe.
     # Holding it here must therefore hold back a call made on another thread.
-    with _identity() as prover, hide.SpentNonces() as spent:
+    with _identity() as prover, hide.SpentNonces("ssh://host.example") as spent:
         public = prover.public_key()
         challenge = hide.new_challenge("ssh://host.example", 1_000, 60)
         answer = prover.answer(challenge)
@@ -174,7 +178,7 @@ def test_one_record_shared_between_threads_accepts_each_answer_once() -> None:
     # Before the lock, a run of this size ended with a few dozen replays
     # accepted: two threads pushing at once lost entries from the record.
     threads, each = 8, 60
-    with _identity() as prover, hide.SpentNonces() as spent:
+    with _identity() as prover, hide.SpentNonces("ssh://host.example") as spent:
         public = prover.public_key()
         work = []
         for _ in range(threads):
@@ -214,7 +218,7 @@ def test_one_record_shared_between_threads_accepts_each_answer_once() -> None:
 
 
 def test_a_closed_record_refuses_and_closing_twice_is_harmless() -> None:
-    spent = hide.SpentNonces()
+    spent = hide.SpentNonces("ssh://host.example")
     spent.close()
     spent.close()
     with pytest.raises(ValueError):
@@ -280,6 +284,8 @@ def test_every_other_text_argument_refuses_an_embedded_nul() -> None:
             hide.dearmor_public_key(hide.armor_public_key(public) + "\0trailing")
     with pytest.raises(ValueError, match="audience"):
         hide.new_challenge("app.example\0.evil.example", 1_000, 60)
+    with pytest.raises(ValueError, match="audience"):
+        hide.SpentNonces("app.example\0.evil.example")
     with pytest.raises(ValueError, match="origin"):
         hide.verify_checkpoint(b"note", "log.example\0/hide", b"key")
 
@@ -292,6 +298,8 @@ def test_text_arguments_must_be_text() -> None:
             hide.encrypt(b"x", [secret.public_key()], filename=b"a.txt")  # type: ignore[arg-type]
     with pytest.raises(TypeError):
         hide.new_challenge(b"app.example", 1_000, 60)  # type: ignore[arg-type]
+    with pytest.raises(TypeError):
+        hide.SpentNonces(b"app.example")  # type: ignore[arg-type]
 
 
 @pytest.mark.parametrize(

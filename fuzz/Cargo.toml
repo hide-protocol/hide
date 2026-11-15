@@ -12,7 +12,9 @@ cargo-fuzz = true
 [workspace]
 
 [dependencies]
-libfuzzer-sys = "0.4"
+# Pinned exactly: the fuzzed dependency set has to be the committed one, or a
+# finding (or its absence) may belong to a transitive version nobody ships.
+libfuzzer-sys = "=0.4.13"
 hide-format = { path = "../crates/hide-format" }
 hide-object = { path = "../crates/hide-object" }
 hide-crypto = { path = "../crates/hide-crypto" }

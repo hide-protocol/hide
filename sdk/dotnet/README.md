@@ -69,9 +69,9 @@ passphrase)` opens one; `Hide.InspectKey(bytes)` reports `KeyKind.Raw` or
 Errors: every failure is a `HideException` — `AuthenticationException`
 (altered, or not a container), its subclass `MalformedException` (did not
 decode at all), `WrongPassphraseException`, `NoMatchingRecipientException`,
-`NotAKeyException`, `ChallengeExpiredException`, `ChallengeReplayedException`.
-Arguments this binding rejects before calling the core throw
-`ArgumentException`.
+`NotAKeyException`, `ChallengeExpiredException`, `ChallengeReplayedException`,
+`ChallengeAudienceException`. Arguments this binding rejects before calling the
+core throw `ArgumentException`.
 
 ## Signing and verification
 
@@ -82,7 +82,7 @@ up.
 byte[] sealedKey = SigningIdentity.Generate("correct horse battery");   // store this
 
 using (SigningIdentity signer = SigningIdentity.Load(sealedKey, "correct horse battery"))
-using (SpentNonces spent = new())                                        // must outlive one request
+using (SpentNonces spent = new("app.example"))                           // must outlive one request
 {
     byte[] context = "myapp/v1 release"u8.ToArray();
     byte[] message = "payload"u8.ToArray();
@@ -97,6 +97,12 @@ using (SpentNonces spent = new())                                        // must
     spent.Accept(challenge, answer, signer.PublicKey(), now);            // ChallengeReplayedException
 }
 ```
+
+`new SpentNonces(audience)` must be built with the name this verifier answers
+to — the same string passed to `Hide.NewChallenge`. An answer minted for a
+different audience is refused with `ChallengeAudienceException`, so a challenge
+relayed from another service cannot be answered here; a record built with an
+empty audience accepts nothing.
 
 `context` separates uses of one identity so a signature made for one purpose
 cannot be replayed as another; never let a remote party choose it.

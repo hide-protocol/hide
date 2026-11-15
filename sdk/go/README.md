@@ -116,9 +116,9 @@ Errors are sentinel values for `errors.Is`: `ErrAuthentication` (altered, or not
 a container), `ErrMalformed` (did not decode at all — wraps
 `ErrAuthentication`), `ErrInvalidArgument`, `ErrWrongPassphrase`,
 `ErrNoMatchingRecipient`, `ErrNotAKey`, `ErrClosed`, `ErrChallengeExpired`,
-`ErrChallengeReplayed`. Arguments this package rejects before calling the core
-(recipient count, key length, a short passphrase, a nil key, a NUL in text)
-are `ErrInvalidArgument` too.
+`ErrChallengeReplayed`, `ErrChallengeAudience`. Arguments this package rejects
+before calling the core (recipient count, key length, a short passphrase, a nil
+key, a NUL in text) are `ErrInvalidArgument` too.
 
 **Text arguments must not contain a NUL byte.** Passphrases, `Options.Filename`,
 `Options.MediaType`, the challenge audience, armored key text and the
@@ -152,8 +152,8 @@ if err := hide.Verify(verifying, context, message, signature); err != nil {
 now := uint64(time.Now().Unix())
 challenge, _ := hide.NewChallenge("app.example", now, 60)
 answer, _ := signer.Answer(challenge)
-spent, _ := hide.NewSpentNonces() // must outlive one request
-defer spent.Close()
+spent, _ := hide.NewSpentNonces("app.example") // the name this verifier answers to
+defer spent.Close()                            // the record must outlive one request
 _ = spent.Accept(challenge, answer, verifying, now)
 err = spent.Accept(challenge, answer, verifying, now)
 fmt.Println(errors.Is(err, hide.ErrChallengeReplayed)) // true
@@ -163,6 +163,12 @@ fmt.Println(errors.Is(err, hide.ErrChallengeReplayed)) // true
 cannot be replayed as another; never let a remote party choose it. `Verify`
 returns an `error`, never a `bool`. A key file written before signatures
 existed carries no signing seed and returns `ErrNotAKey`.
+
+The nonce record must be built with the name this verifier answers to — the
+same `audience` passed to `NewChallenge` — because an answer minted for a
+different audience is refused with `ErrChallengeAudience`, so a challenge
+relayed from another service cannot be answered here. A record built with an
+empty audience accepts nothing.
 
 ## Identity logs, epoch chains, transparency proofs
 

@@ -20,6 +20,7 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import { BINDING_VERSION, checkVersion, libraryPath } from "./binding.js";
 import {
   AuthenticationError,
+  ChallengeAudienceError,
   ChallengeExpiredError,
   ChallengeReplayedError,
   MalformedError,
@@ -329,7 +330,7 @@ test("an encryption-only key cannot sign", () => {
 
 test("a challenge is answered once and then refused", () => {
   const prover = identity();
-  const spent = new SpentNonces();
+  const spent = new SpentNonces("ssh://host.example");
   try {
     const publicKey = prover.publicKey();
     const challenge = newChallenge("ssh://host.example", 1000, 60);
@@ -349,7 +350,7 @@ test("a challenge is answered once and then refused", () => {
 
 test("an answer after the window is refused", () => {
   const prover = identity();
-  const spent = new SpentNonces();
+  const spent = new SpentNonces("ssh://host.example");
   try {
     const challenge = newChallenge("ssh://host.example", 1000, 60);
     const answer = prover.answer(challenge);
@@ -359,6 +360,43 @@ test("an answer after the window is refused", () => {
     );
   } finally {
     spent.close();
+    prover.close();
+  }
+});
+
+test("an answer for another audience is refused", () => {
+  // A challenge relayed from another service is a genuine challenge with a
+  // genuine answer; only the audience says it was not minted for us.
+  const prover = identity();
+  try {
+    const publicKey = prover.publicKey();
+    const challenge = newChallenge("some.other.service", 1000, 60);
+    const answer = prover.answer(challenge);
+
+    const spent = new SpentNonces("ssh://host.example");
+    try {
+      assert.throws(
+        () => spent.accept(challenge, answer, publicKey, 1000),
+        ChallengeAudienceError,
+      );
+      // Refused, and not spent: our own answer for this audience still works.
+      const ours = newChallenge("ssh://host.example", 1000, 60);
+      spent.accept(ours, prover.answer(ours), publicKey, 1000);
+    } finally {
+      spent.close();
+    }
+
+    // A record that names no audience accepts nothing.
+    const unnamed = new SpentNonces("");
+    try {
+      assert.throws(
+        () => unnamed.accept(challenge, answer, publicKey, 1000),
+        ChallengeAudienceError,
+      );
+    } finally {
+      unnamed.close();
+    }
+  } finally {
     prover.close();
   }
 });
@@ -604,6 +642,7 @@ test("every other text argument refuses an embedded NUL", () => {
     secret.close();
   }
   assert.throws(() => newChallenge("app.example\0.evil.example", 1000, 60), RangeError);
+  assert.throws(() => new SpentNonces("app.example\0.evil.example"), RangeError);
   assert.throws(
     () => verifyCheckpoint(checkpoint3, "log.example\0/hide", checkpointLogKey),
     RangeError,
@@ -643,6 +682,7 @@ test("text arguments must be strings", () => {
     const notText = Buffer.from("a buffer passphrase") as unknown as string;
     assert.throws(() => secret.protect(notText), TypeError);
     assert.throws(() => newChallenge(notText, 1000, 60), TypeError);
+    assert.throws(() => new SpentNonces(notText), TypeError);
   } finally {
     secret.close();
   }
@@ -679,7 +719,7 @@ test("a handle does not survive cloning, so it cannot reach another thread", () 
   // why SpentNonces needs no lock here. The structured clone algorithm is what
   // postMessage uses to send a value to a worker: it carries no native pointer.
   const secret = SecretKey.generate();
-  const spent = new SpentNonces();
+  const spent = new SpentNonces("ssh://host.example");
   try {
     for (const handle of [secret, spent]) {
       const clone = structuredClone(handle) as unknown as Record<string, unknown>;
