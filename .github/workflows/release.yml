@@ -410,9 +410,14 @@ jobs:
             Linux)
               deb="$(one "$bundle/deb" '*.deb')"
               listing="$(dpkg-deb -c "$deb")"
+              # Assert the file is installed, not one exact directory for it:
+              # the resource layout under /usr/lib is the bundler's to choose
+              # and differs between the .deb and the AppImage. On failure the
+              # listing is printed, so the next reader sees the layout instead
+              # of having to rebuild it.
               for file in "$notices" LICENSE; do
-                grep -Eq "/usr/lib/[^/]+/$file\$" <<<"$listing" \
-                  || { echo "::error::$deb does not install $file"; exit 1; }
+                grep -Eq "/$file\$" <<<"$listing" \
+                  || { echo "::error::$deb does not install $file"; printf '%s\n' "$listing" | grep -E "$notices|/LICENSE" || true; exit 1; }
               done
 
               appimage="$PWD/$(one "$bundle/appimage" '*.AppImage')"
