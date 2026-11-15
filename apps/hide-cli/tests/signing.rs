@@ -529,3 +529,202 @@ fn info_recognises_signing_keys_signatures_and_signed_containers() -> Result<(),
     assert!(text.contains("format version: 0.1, flags 0x01"), "{text}");
     Ok(())
 }
+
+/// `--armor` prints the same pasteable text `share` does, and that text has to be
+/// usable wherever a public key file is: a recipient who has only the pasted
+/// block must be able to send to it.
+#[test]
+fn keygen_armor_prints_a_public_key_a_recipient_can_use() -> Result<(), Box<dyn Error>> {
+    let directory = tempfile::tempdir()?;
+    let keygen = hide(
+        directory.path(),
+        &[
+            "--experimental",
+            "--quiet",
+            "keygen",
+            "--insecure-plaintext",
+            "--armor",
+            "--secret",
+            "me.test-secret",
+            "--public",
+            "me.test-public",
+        ],
+    );
+    assert!(keygen.status.success(), "{}", stderr(&keygen));
+    let armored = String::from_utf8(keygen.stdout)?;
+    assert!(armored.starts_with("hide-public-key:"), "{armored}");
+
+    let shared = hide(
+        directory.path(),
+        &["--experimental", "--quiet", "share", "me.test-public"],
+    );
+    assert_eq!(
+        String::from_utf8(shared.stdout)?,
+        armored,
+        "armor and share must print the same block"
+    );
+
+    fs::write(directory.path().join("me.pub.txt"), &armored)?;
+    fs::write(directory.path().join("memo.txt"), b"armored")?;
+    let encrypted = hide(
+        directory.path(),
+        &[
+            "--experimental",
+            "--quiet",
+            "encrypt",
+            "memo.txt",
+            "--recipient",
+            "me.pub.txt",
+            "--output",
+            "memo.hide",
+        ],
+    );
+    assert!(encrypted.status.success(), "{}", stderr(&encrypted));
+    let opened = hide(
+        directory.path(),
+        &[
+            "--experimental",
+            "--quiet",
+            "open",
+            "memo.hide",
+            "--secret",
+            "me.test-secret",
+            "--output",
+            "memo.out",
+        ],
+    );
+    assert!(opened.status.success(), "{}", stderr(&opened));
+    assert_eq!(fs::read(directory.path().join("memo.out"))?, b"armored");
+    Ok(())
+}
+
+/// The signing public key normally lands beside the encryption key as
+/// `<public>.sign`. `--signing-public` has to move it, and the derivation has to
+/// be the *only* thing that changes: signing and verifying still work.
+#[test]
+fn keygen_writes_the_signing_public_key_where_it_is_told() -> Result<(), Box<dyn Error>> {
+    let directory = tempfile::tempdir()?;
+    fs::create_dir(directory.path().join("elsewhere"))?;
+    let keygen = hide(
+        directory.path(),
+        &[
+            "--experimental",
+            "--quiet",
+            "keygen",
+            "--insecure-plaintext",
+            "--signing-public",
+            "elsewhere/signer.pub",
+            "--secret",
+            "me.test-secret",
+            "--public",
+            "me.test-public",
+        ],
+    );
+    assert!(keygen.status.success(), "{}", stderr(&keygen));
+    assert!(
+        directory.path().join("elsewhere/signer.pub").exists(),
+        "the signing public key was not written where it was asked for"
+    );
+    assert!(
+        !directory.path().join("me.test-public.sign").exists(),
+        "the default path was written as well"
+    );
+
+    fs::write(directory.path().join("memo.txt"), b"sign me")?;
+    let signed = hide(
+        directory.path(),
+        &[
+            "--experimental",
+            "--quiet",
+            "sign",
+            "memo.txt",
+            "--secret",
+            "me.test-secret",
+            "--output",
+            "memo.sig",
+        ],
+    );
+    assert!(signed.status.success(), "{}", stderr(&signed));
+    let verified = hide(
+        directory.path(),
+        &[
+            "--experimental",
+            "--quiet",
+            "verify",
+            "memo.txt",
+            "--signer",
+            "elsewhere/signer.pub",
+            "--signature",
+            "memo.sig",
+        ],
+    );
+    assert!(verified.status.success(), "{}", stderr(&verified));
+    Ok(())
+}
+
+/// `--signature` must be the file that is checked. Both candidate signatures
+/// exist here, so using the default would accept the wrong one and be invisible
+/// if the flag were ignored.
+#[test]
+fn verify_uses_the_signature_file_it_is_given() -> Result<(), Box<dyn Error>> {
+    let directory = tempfile::tempdir()?;
+    identity(directory.path(), "me");
+    fs::write(directory.path().join("signed.txt"), b"signed")?;
+    fs::write(directory.path().join("other.txt"), b"other")?;
+    for (input, signature) in [("signed.txt", "signed.sig"), ("other.txt", "other.sig")] {
+        let result = hide(
+            directory.path(),
+            &[
+                "--experimental",
+                "--quiet",
+                "sign",
+                input,
+                "--secret",
+                "me.test-secret",
+                "--output",
+                signature,
+            ],
+        );
+        assert!(result.status.success(), "{}", stderr(&result));
+    }
+    assert_ne!(
+        fs::read(directory.path().join("signed.sig"))?,
+        fs::read(directory.path().join("other.sig"))?,
+        "the two files must have different signatures for this test to mean anything"
+    );
+
+    let matching = hide(
+        directory.path(),
+        &[
+            "--experimental",
+            "--quiet",
+            "verify",
+            "signed.txt",
+            "--signer",
+            "me.test-public.sign",
+            "--signature",
+            "signed.sig",
+        ],
+    );
+    assert!(matching.status.success(), "{}", stderr(&matching));
+
+    let mismatched = hide(
+        directory.path(),
+        &[
+            "--experimental",
+            "--quiet",
+            "verify",
+            "signed.txt",
+            "--signer",
+            "me.test-public.sign",
+            "--signature",
+            "other.sig",
+        ],
+    );
+    assert!(
+        !mismatched.status.success(),
+        "the signature of another file verified"
+    );
+    assert!(!directory.path().join("signed.txt.hide-sig").exists());
+    Ok(())
+}

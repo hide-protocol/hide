@@ -32,6 +32,56 @@ fn keys(directory: &Path) {
     );
 }
 
+/// A disposable key pair under `name`.
+fn keypair(directory: &Path, name: &str) {
+    let result = hide(
+        directory,
+        &[
+            "--experimental",
+            "--quiet",
+            "test-keygen",
+            "--secret",
+            &format!("{name}.test-secret"),
+            "--public",
+            &format!("{name}.test-public"),
+        ],
+    );
+    assert!(
+        result.status.success(),
+        "{}",
+        String::from_utf8_lossy(&result.stderr)
+    );
+}
+
+/// Runs `hide` with `input` on standard input, as a shell pipeline would.
+///
+/// The write happens on its own thread: for a message larger than a pipe buffer,
+/// writing from this thread while the child fills its own output pipe would
+/// deadlock both sides.
+fn hide_with_stdin(directory: &Path, args: &[&str], input: &[u8]) -> Output {
+    use std::io::Write;
+    use std::process::Stdio;
+
+    let mut child = Command::new(env!("CARGO_BIN_EXE_hide"))
+        .current_dir(directory)
+        .args(args)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("test binary runs");
+    let mut pipe = child.stdin.take().expect("standard input is piped");
+    let owned = input.to_vec();
+    let writer = std::thread::spawn(move || {
+        // A child that stops reading (it has everything it needs, or it refused)
+        // makes this fail; that is not the test's business.
+        let _ = pipe.write_all(&owned);
+    });
+    let output = child.wait_with_output().expect("waits for the child");
+    writer.join().expect("the writing thread finishes");
+    output
+}
+
 #[test]
 fn encrypt_and_open_in_separate_processes() -> Result<(), Box<dyn Error>> {
     let directory = tempfile::tempdir()?;
@@ -78,6 +128,277 @@ fn encrypt_and_open_in_separate_processes() -> Result<(), Box<dyn Error>> {
 }
 
 #[test]
+fn seal_and_unseal_both_work_from_standard_input() -> Result<(), Box<dyn Error>> {
+    let directory = tempfile::tempdir()?;
+    keys(directory.path());
+    let message = "transfer 100 RON to Ana\nsecond line, no trailing newline";
+
+    let sealed = hide_with_stdin(
+        directory.path(),
+        &[
+            "--experimental",
+            "--quiet",
+            "seal",
+            "--recipient",
+            "alice.test-public",
+        ],
+        message.as_bytes(),
+    );
+    assert!(
+        sealed.status.success(),
+        "{}",
+        String::from_utf8_lossy(&sealed.stderr)
+    );
+    let armored = String::from_utf8(sealed.stdout)?;
+    assert!(armored.starts_with("----- BEGIN HIDE MESSAGE -----"));
+    assert!(armored.trim_end().ends_with("----- END HIDE MESSAGE -----"));
+    assert!(!armored.contains("transfer"), "plaintext leaked into armor");
+
+    let opened = hide_with_stdin(
+        directory.path(),
+        &[
+            "--experimental",
+            "--quiet",
+            "unseal",
+            "--secret",
+            "alice.test-secret",
+        ],
+        armored.as_bytes(),
+    );
+    assert!(
+        opened.status.success(),
+        "{}",
+        String::from_utf8_lossy(&opened.stderr)
+    );
+    assert_eq!(String::from_utf8(opened.stdout)?.trim_end(), message);
+    Ok(())
+}
+
+#[test]
+fn seal_writes_to_a_file_with_output_and_refuses_to_overwrite_it() -> Result<(), Box<dyn Error>> {
+    let directory = tempfile::tempdir()?;
+    keys(directory.path());
+
+    let sealed = hide(
+        directory.path(),
+        &[
+            "--experimental",
+            "--quiet",
+            "seal",
+            "hello",
+            "--recipient",
+            "alice.test-public",
+            "--output",
+            "note.armored",
+        ],
+    );
+    assert!(
+        sealed.status.success(),
+        "{}",
+        String::from_utf8_lossy(&sealed.stderr)
+    );
+    assert!(
+        sealed.stdout.is_empty(),
+        "seal wrote the message to standard output as well"
+    );
+    let armored = fs::read_to_string(directory.path().join("note.armored"))?;
+    assert!(armored.starts_with("----- BEGIN HIDE MESSAGE -----"));
+
+    let again = hide(
+        directory.path(),
+        &[
+            "--experimental",
+            "--quiet",
+            "seal",
+            "different",
+            "--recipient",
+            "alice.test-public",
+            "--output",
+            "note.armored",
+        ],
+    );
+    assert!(!again.status.success(), "seal overwrote an existing file");
+    assert_eq!(
+        fs::read_to_string(directory.path().join("note.armored"))?,
+        armored,
+        "the existing message was modified"
+    );
+
+    let opened = hide(
+        directory.path(),
+        &[
+            "--experimental",
+            "--quiet",
+            "unseal",
+            "note.armored",
+            "--secret",
+            "alice.test-secret",
+        ],
+    );
+    assert!(opened.status.success());
+    assert_eq!(String::from_utf8(opened.stdout)?.trim_end(), "hello");
+    Ok(())
+}
+
+/// The reader caps an armored message at 1 MiB, because one is meant to be
+/// pasted into a chat window. `seal` has no such ceiling, so this is how an
+/// over-sized one comes to exist; it must be refused from a file and from a
+/// pipe, without publishing anything.
+#[test]
+fn an_armored_message_over_one_mib_is_refused() -> Result<(), Box<dyn Error>> {
+    let directory = tempfile::tempdir()?;
+    keys(directory.path());
+
+    let sealed = hide_with_stdin(
+        directory.path(),
+        &[
+            "--experimental",
+            "--quiet",
+            "seal",
+            "--recipient",
+            "alice.test-public",
+            "--output",
+            "big.armored",
+        ],
+        &vec![b'a'; 1_200_000],
+    );
+    assert!(
+        sealed.status.success(),
+        "{}",
+        String::from_utf8_lossy(&sealed.stderr)
+    );
+    let armored = fs::read(directory.path().join("big.armored"))?;
+    assert!(
+        armored.len() > 1024 * 1024,
+        "the message is not over the cap: {} bytes",
+        armored.len()
+    );
+
+    let from_file = hide(
+        directory.path(),
+        &[
+            "--experimental",
+            "--quiet",
+            "unseal",
+            "big.armored",
+            "--secret",
+            "alice.test-secret",
+        ],
+    );
+    assert!(
+        !from_file.status.success(),
+        "an over-sized armored message was accepted"
+    );
+    assert!(
+        from_file.stdout.is_empty(),
+        "published unauthenticated output"
+    );
+    assert!(
+        String::from_utf8_lossy(&from_file.stderr).contains("larger than 1 MiB"),
+        "{}",
+        String::from_utf8_lossy(&from_file.stderr)
+    );
+
+    let from_pipe = hide_with_stdin(
+        directory.path(),
+        &[
+            "--experimental",
+            "--quiet",
+            "unseal",
+            "--secret",
+            "alice.test-secret",
+        ],
+        &armored,
+    );
+    assert!(
+        !from_pipe.status.success(),
+        "an over-sized message on the pipe was accepted"
+    );
+    assert!(from_pipe.stdout.is_empty());
+    Ok(())
+}
+
+#[test]
+fn encrypt_to_several_recipients_opens_for_each_of_them() -> Result<(), Box<dyn Error>> {
+    let directory = tempfile::tempdir()?;
+    for name in ["alice", "bob", "carol"] {
+        keypair(directory.path(), name);
+    }
+    fs::write(directory.path().join("memo.txt"), b"shared")?;
+
+    let encrypted = hide(
+        directory.path(),
+        &[
+            "--experimental",
+            "--quiet",
+            "encrypt",
+            "memo.txt",
+            "--recipient",
+            "alice.test-public",
+            "--recipient",
+            "bob.test-public",
+            "--output",
+            "memo.hide",
+        ],
+    );
+    assert!(
+        encrypted.status.success(),
+        "{}",
+        String::from_utf8_lossy(&encrypted.stderr)
+    );
+    assert!(
+        String::from_utf8_lossy(&encrypted.stderr).contains("2 recipient(s)"),
+        "{}",
+        String::from_utf8_lossy(&encrypted.stderr)
+    );
+
+    for name in ["alice", "bob"] {
+        let output = format!("{name}.out");
+        let opened = hide(
+            directory.path(),
+            &[
+                "--experimental",
+                "--quiet",
+                "open",
+                "memo.hide",
+                "--secret",
+                &format!("{name}.test-secret"),
+                "--output",
+                &output,
+            ],
+        );
+        assert!(
+            opened.status.success(),
+            "{name}: {}",
+            String::from_utf8_lossy(&opened.stderr)
+        );
+        assert_eq!(fs::read(directory.path().join(&output))?, b"shared");
+    }
+
+    // A key the container was not addressed to must not open it, and must not
+    // leave an output behind.
+    let stranger = hide(
+        directory.path(),
+        &[
+            "--experimental",
+            "--quiet",
+            "open",
+            "memo.hide",
+            "--secret",
+            "carol.test-secret",
+            "--output",
+            "carol.out",
+        ],
+    );
+    assert!(
+        !stranger.status.success(),
+        "a stranger opened the container"
+    );
+    assert!(!directory.path().join("carol.out").exists());
+    Ok(())
+}
+
+#[test]
 fn corrupt_final_does_not_publish_plaintext_or_leave_staging() -> Result<(), Box<dyn Error>> {
     let directory = tempfile::tempdir()?;
     keys(directory.path());
@@ -86,6 +407,8 @@ fn corrupt_final_does_not_publish_plaintext_or_leave_staging() -> Result<(), Box
         hide(
             directory.path(),
             &[
+                // A key the container was not addressed to must not open it, and must not
+                // leave an output behind.
                 "--experimental",
                 "encrypt",
                 "report.txt",

@@ -17,6 +17,12 @@ description = "Experimental, unaudited command-line tool for the HIDE encrypted-
 name = "hide"
 path = "src/main.rs"
 
+# The agent's request decoder is untrusted-input code, and `fuzz/` cannot reach a
+# binary target, so the same modules are also exposed as a library.
+[lib]
+name = "hide_cli"
+path = "src/lib.rs"
+
 [dependencies]
 hide-crypto = { path = "../../crates/hide-crypto", version = "0.9.1" }
 hide-keyring = { path = "../../crates/hide-keyring", version = "0.9.1" }

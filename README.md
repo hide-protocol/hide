@@ -47,7 +47,7 @@ Every claim below was produced by a command in this repository, on Rust 1.99.0 (
   opens an issue when a target fails. Two nightly jobs in October 2026 (`identity_log` on the 5th,
   `object_open` on the 21st) lost their hosted runner before any step ran, so they left no
   reproducer and no issue; the list of workflow runs, not the issue list, is the complete record.
-- `unsafe_code = "forbid"` in every crate except `hide-ffi`, where the C ABI needs it; 397 tests
+- `unsafe_code = "forbid"` in every crate except `hide-ffi`, where the C ABI needs it; 411 tests
   (`cargo test --workspace --all-features`).
 - **Independent interoperability**: a separate Node implementation (`@hpke/hybridkem-x-wing`, `cbor`,
   Node `crypto`) decrypts the Rust vectors (`node conformance/node/verify.mjs`), and the

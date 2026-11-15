@@ -48,6 +48,51 @@ hide --experimental info report.pdf.hide
 terminal, never from a pipe. `--insecure-plaintext` writes the key unencrypted
 and is meant for disposable test keys. `hide --help` lists every command.
 
+## Identity logs, recovery and epoch keys
+
+An identity is not a key: it is an append-only, hash-linked log of devices, so a
+device can be added or removed without changing the identity everyone already
+knows by its root.
+
+```
+hide --experimental identity-create --secret alice.hide-key \
+    --recovery recovery.hide-pub.sign --label laptop --output alice.id.log
+hide --experimental identity-enrol --log alice.id.log --secret alice.hide-key \
+    --device phone.hide-pub.sign --label phone --recovery recovery.hide-pub.sign
+hide --experimental identity-revoke --log alice.id.log --secret alice.hide-key \
+    --device phone.hide-pub.sign --recovery recovery.hide-pub.sign
+hide --experimental identity-show --log alice.id.log \
+    --recovery recovery.hide-pub.sign --root --binding alice.id.log.binding
+hide --experimental identity-recover --log alice.id.log \
+    --secret recovery.hide-key --device new.hide-pub.sign --label new-phone
+```
+
+`identity-create` refuses to run when the log already exists, and writes a second
+file beside it — `<log>.binding` — which it refuses to overwrite for the same
+reason. That binding is spec §16.1: the founding device's signed statement of
+which recovery key is genuine. The log cannot say it (its first entry names only
+the founding device), so without the binding anyone holding a copy of the log can
+append a `Recover` entry signed by a key of their own and claim the identity. The
+root it binds is printed by `identity-create` and by `identity-show --root`; that
+32-byte value is what a relying party pins, and `identity-show --binding <path>`
+checks a binding against the log it claims.
+
+`identity-recover` replaces every device with one new device, which is what the
+offline recovery key is for. It requires the binding and refuses a recovery key
+the binding does not name, so the hijack above is not reachable through the CLI.
+Losing the binding means losing the ability to recover: the log alone cannot
+authenticate a recovery key.
+
+An epoch chain, which makes old files unreadable once their epoch key is erased,
+is attributable only when a trusted device vouches for it. `epoch-bind` produces
+that statement (§16.4) and `epoch-public` exports a key for a sender to encrypt
+to.
+
+Every command also removes staged plaintext an interrupted run left behind: a
+`.hide-staging-*` file in the directory it is about to write into, untouched for
+an hour. A killed process cannot clean up after itself, and what it leaves is
+partial, unauthenticated plaintext. Nothing else is touched.
+
 ## What it does not give you
 
 - A signed container authenticates a key, not a person. There is no directory:

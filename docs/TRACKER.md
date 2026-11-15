@@ -40,7 +40,7 @@ done.
   identity-*, epoch-*, ssh-key and an ssh-agent that confirms on the tty.
 - **Desktop** (`apps/hide-desktop`): Tauri app and portable build over the same
   crates; `interop.rs` proves it opens CLI output and vice versa.
-- **Assurance**: 397 workspace tests, eleven libFuzzer targets — one per parser of
+- **Assurance**: 411 workspace tests, twelve libFuzzer targets — one per parser of
   untrusted bytes — run 45 s on every push and four hours nightly with a
   corpus carried forward (`fuzz-nightly.yml`; a finding files an issue).
   Three real bugs in the first three runs: P11.3, P11.4, P12.1. `cargo audit` and `cargo deny`
@@ -53,6 +53,67 @@ done.
   checkpoints with witness thresholds, transparency leaves and proof encoding,
   epoch binding (spec §16) in Rust, C ABI, WASM and all seven SDKs; every
   spec §15 limitation closed or decided without a wire change.
+
+## In flight: desktop app P1 audit (2026-11-15, phase 15, unreleased)
+
+## Reality check 2026-11-15 (phase 15, unreleased)
+
+The full audit and its numbers are in
+[`reality-check-2026-11-15.md`](reality-check-2026-11-15.md); the rows are
+`RC-01`…`RC-08` and `DSK-01`…`DSK-09`, `FE-03` in
+[`tracker.csv`](tracker.csv). Every surface was read by a separate reader
+(container, identity/epoch/transparency/MLS, applications, SDK/FFI,
+supply-chain), nothing was compiled during the audit, and every fix was
+verified by someone other than its author through the gates in the report.
+
+Four security defects worth naming, all fixed and tested: a challenge answer
+carried no binding to the verifier that issued it, so a verifier that took the
+challenge back from the client accepted an answer minted for another service;
+a device revoked in the identity log could still commit into an MLS group it
+was already in; the ssh-agent would sign a HIDE-shaped payload with the Ed25519
+half of the hybrid key, quietly reducing it to ML-DSA; and `passwd` on an
+unprotected key resealed a master seed as an encryption-only key, changing the
+identity. All eight surfaces and all eight SDKs were moved together for the
+first one, and the cross-surface check proves the refusal rather than the claim.
+
+Security hardening in the same round: `identity-create` is no-clobber, an
+interrupted run no longer leaves plaintext staging behind, `identity-recover`
+and the spec §16 binding commands exist, the ssh-agent framing is reachable as
+a library so it has a fuzz target, and a user-supplied unix endpoint is removed
+only when it is a stale socket.
+
+CI: the minimum-supported-rust job now actually runs 1.88 (it ran `stable`
+because `rust-toolchain.toml` overrode the action, so the gate could never
+fail), every cargo invocation is `--locked`, the fuzz workspace has a committed
+lockfile that CI checks, the desktop lockfile is audited with its own attributed
+ignore list, a weekly supply-chain job runs between pushes, and a `report` job
+classifies a fuzz-nightly loss as infrastructure instead of leaving no record at
+all — which is what the two unexplained failures of 2026-10-05 and 2026-10-21
+were.
+
+Rebalanced: the WASM test suite runs in CI (it ran zero tests on the host
+before), the desktop frontend is built in CI (a TypeScript error used to first
+appear on tag day), and every measurable claim in the documentation was
+corrected against a command, including the notification that HIDE does sign its
+release assets with Sigstore provenance and that an earlier claim about age's
+audit had no source.
+
+## Desktop app P1 audit (part of the round above)
+
+Rows `DSK-01`…`DSK-09` and `FE-03` in
+[`tracker.csv`](tracker.csv). The window can no longer name a file: the
+operating-system dialogs run in Rust, which keeps the path the user picked and
+hands the webview an opaque id, and the JavaScript dialog permission is
+withdrawn with the imports. Decryption is no-clobber like encryption, through
+the same publish the CLI performs; the secret key file and the decrypted output
+are 0600 on unix; a signature that verified is reported by key fingerprint
+instead of "the sender is not authenticated"; the commands run off the UI thread
+and their buttons are disabled while one is in flight; and the app states its
+version, that the build is unsigned, and how to check a download.
+
+`interop.rs` now covers encrypted files in both directions, signed containers in
+both placements, every positive frozen container through `decrypt_file`, and a
+passphrase-protected key file — and fails rather than skips when `CI` is set.
 
 ## What does not exist
 

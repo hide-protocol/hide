@@ -1,8 +1,15 @@
 import { useState } from "react";
-import { open, save } from "@tauri-apps/plugin-dialog";
 
-import { decryptFile, encryptFile, messageOf } from "../core";
-import { Card, Field, PathPicker, StatusLine } from "../ui";
+import {
+  chooseFile,
+  chooseFiles,
+  chooseSavePath,
+  decryptFile,
+  encryptFile,
+  messageOf,
+} from "../core";
+import type { Opened, Selection } from "../core";
+import { Card, Field, PathPicker, SignerLine, StatusLine } from "../ui";
 import type { Status } from "../ui";
 
 function basename(path: string): string {
@@ -11,28 +18,32 @@ function basename(path: string): string {
 }
 
 export function Files() {
-  const [input, setInput] = useState<string | null>(null);
-  const [recipients, setRecipients] = useState<string[]>([]);
+  const [input, setInput] = useState<Selection | null>(null);
+  const [recipients, setRecipients] = useState<Selection[]>([]);
   const [encryptStatus, setEncryptStatus] = useState<Status>({ kind: "idle" });
 
-  const [container, setContainer] = useState<string | null>(null);
-  const [secret, setSecret] = useState<string | null>(null);
+  const [container, setContainer] = useState<Selection | null>(null);
+  const [secret, setSecret] = useState<Selection | null>(null);
   const [passphrase, setPassphrase] = useState("");
   const [decryptStatus, setDecryptStatus] = useState<Status>({ kind: "idle" });
+  const [opened, setOpened] = useState<Opened | null>(null);
+
+  const encrypting = encryptStatus.kind === "busy";
+  const decrypting = decryptStatus.kind === "busy";
 
   async function pickInput() {
-    const chosen = await open({ multiple: false });
-    if (typeof chosen === "string") setInput(chosen);
+    const chosen = await chooseFile("any");
+    if (chosen) setInput(chosen);
   }
 
   async function addRecipients() {
-    const chosen = await open({
-      multiple: true,
-      filters: [{ name: "HIDE public key", extensions: ["hide-pub", "txt"] }],
+    const added = await chooseFiles("public", true);
+    // Keyed by the path the user actually chose, so the same person is not
+    // added twice even though every pick gets its own id.
+    setRecipients((current) => {
+      const seen = new Set(current.map((entry) => entry.path));
+      return [...current, ...added.filter((entry) => !seen.has(entry.path))];
     });
-    const added = Array.isArray(chosen) ? chosen : typeof chosen === "string" ? [chosen] : [];
-    // Keep the list unique so the same person is not added twice.
-    setRecipients((current) => [...new Set([...current, ...added])]);
   }
 
   async function runEncrypt() {
@@ -44,34 +55,35 @@ export function Files() {
       setEncryptStatus({ kind: "error", text: "Add at least one recipient." });
       return;
     }
-    const output = await save({
-      defaultPath: `${basename(input)}.hide`,
-      filters: [{ name: "HIDE container", extensions: ["hide"] }],
-    });
+    const output = await chooseSavePath(
+      "container",
+      `${basename(input.path)}.hide`,
+    );
     if (!output) return;
 
     setEncryptStatus({ kind: "busy", text: "Encrypting." });
     try {
-      setEncryptStatus({ kind: "ok", text: await encryptFile(input, recipients, output) });
+      setEncryptStatus({
+        kind: "ok",
+        text: await encryptFile(
+          input.id,
+          recipients.map((entry) => entry.id),
+          output.id,
+        ),
+      });
     } catch (error) {
       setEncryptStatus({ kind: "error", text: messageOf(error) });
     }
   }
 
   async function pickContainer() {
-    const chosen = await open({
-      multiple: false,
-      filters: [{ name: "HIDE container", extensions: ["hide"] }],
-    });
-    if (typeof chosen === "string") setContainer(chosen);
+    const chosen = await chooseFile("container");
+    if (chosen) setContainer(chosen);
   }
 
   async function pickSecret() {
-    const chosen = await open({
-      multiple: false,
-      filters: [{ name: "HIDE secret key", extensions: ["hide-key"] }],
-    });
-    if (typeof chosen === "string") setSecret(chosen);
+    const chosen = await chooseFile("secret");
+    if (chosen) setSecret(chosen);
   }
 
   async function runDecrypt() {
@@ -82,16 +94,27 @@ export function Files() {
       });
       return;
     }
-    const suggested = basename(container).replace(/\.hide$/i, "");
-    const output = await save({ defaultPath: suggested || "decrypted" });
+    const suggested = basename(container.path).replace(/\.hide$/i, "");
+    const output = await chooseSavePath("any", suggested || "decrypted");
     if (!output) return;
 
     setDecryptStatus({ kind: "busy", text: "Decrypting and verifying." });
+    setOpened(null);
     try {
-      const text = await decryptFile(container, secret, passphrase || null, output);
+      const result = await decryptFile(
+        container.id,
+        secret.id,
+        passphrase || null,
+        output.id,
+      );
       setPassphrase("");
-      setDecryptStatus({ kind: "ok", text });
+      setOpened(result);
+      setDecryptStatus({
+        kind: "ok",
+        text: `Integrity verified; ${result.plaintext_len} bytes written.`,
+      });
     } catch (error) {
+      setOpened(null);
       setDecryptStatus({ kind: "error", text: messageOf(error) });
     }
   }
@@ -104,7 +127,7 @@ export function Files() {
       >
         <PathPicker
           label="File"
-          value={input}
+          value={input?.path ?? null}
           buttonText="Choose file"
           onPick={pickInput}
         />
@@ -115,7 +138,7 @@ export function Files() {
               value={
                 recipients.length === 0
                   ? ""
-                  : recipients.map(basename).join(", ")
+                  : recipients.map((entry) => basename(entry.path)).join(", ")
               }
               placeholder="Nobody yet"
             />
@@ -129,7 +152,12 @@ export function Files() {
             ) : null}
           </span>
         </Field>
-        <button type="button" className="primary" onClick={runEncrypt}>
+        <button
+          type="button"
+          className="primary"
+          onClick={runEncrypt}
+          disabled={encrypting}
+        >
           Encrypt
         </button>
         <StatusLine status={encryptStatus} />
@@ -141,13 +169,13 @@ export function Files() {
       >
         <PathPicker
           label="Encrypted file"
-          value={container}
+          value={container?.path ?? null}
           buttonText="Choose file"
           onPick={pickContainer}
         />
         <PathPicker
           label="Your secret key"
-          value={secret}
+          value={secret?.path ?? null}
           buttonText="Choose key"
           onPick={pickSecret}
         />
@@ -161,10 +189,25 @@ export function Files() {
             onChange={(event) => setPassphrase(event.target.value)}
           />
         </Field>
-        <button type="button" className="primary" onClick={runDecrypt}>
+        <button
+          type="button"
+          className="primary"
+          onClick={runDecrypt}
+          disabled={decrypting}
+        >
           Decrypt
         </button>
         <StatusLine status={decryptStatus} />
+        {opened ? (
+          <div className="result">
+            {opened.filename ? (
+              <p>
+                Original name: <code>{opened.filename}</code>
+              </p>
+            ) : null}
+            <SignerLine signer={opened.signer} />
+          </div>
+        ) : null}
       </Card>
     </>
   );

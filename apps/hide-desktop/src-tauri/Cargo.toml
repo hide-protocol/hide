@@ -27,10 +27,11 @@ tauri-plugin-dialog = "=2.7.3"
 serde = { version = "=1.0.229", features = ["derive"] }
 serde_json = "=1.0.154"
 base64 = "=0.23.1"
-zeroize = { version = "=1.9.1", features = ["zeroize_derive"] }
-
-[dev-dependencies]
+# A normal dependency, not a test-only one: the decryption path publishes its
+# output with `NamedTempFile::persist_noclobber`, the same no-clobber publish
+# the CLI performs, instead of a hand-rolled claim-then-rename.
 tempfile = "=3.27.0"
+zeroize = { version = "=1.9.1", features = ["zeroize_derive"] }
 
 [profile.release]
 lto = "thin"

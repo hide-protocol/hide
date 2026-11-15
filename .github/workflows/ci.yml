@@ -38,7 +38,7 @@ jobs:
       # graph nobody committed, and the first `--locked` build to notice is
       # the release, on tag day.
       - run: cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
-      # The version lives in 22 files across seven ecosystems. A missed manifest
+      # The version lives in 23 files across seven ecosystems. A missed manifest
       # publishes a package whose metadata and contents disagree, and nothing
       # else in CI would notice.
       - run: pwsh -File scripts/set-version.ps1 -Check

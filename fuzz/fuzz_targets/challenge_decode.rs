@@ -5,8 +5,8 @@
 //! prover cannot answer a re-encoded twin), and the replay guard must reject a
 //! garbage signature rather than crash on it.
 
-use hide_sign::{Challenge, SigningIdentity, SpentNonces, VerifyingIdentity};
 use hide_sign::ChallengeError;
+use hide_sign::{Challenge, SigningIdentity, SpentNonces, VerifyingIdentity};
 use libfuzzer_sys::fuzz_target;
 use std::sync::LazyLock;
 
@@ -48,5 +48,8 @@ fuzz_target!(|data: &[u8]| {
         mismatched.accept(&challenge, data, &PROVER, now),
         Err(ChallengeError::WrongAudience)
     );
-    assert!(mismatched.is_empty(), "a wrong-audience answer spent a nonce");
+    assert!(
+        mismatched.is_empty(),
+        "a wrong-audience answer spent a nonce"
+    );
 });

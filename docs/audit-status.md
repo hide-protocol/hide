@@ -13,7 +13,7 @@ The only reviews are internal — performed by the maintainers on their own code
 | Date | Reviewer | Scope | Findings | Status |
 | --- | --- | --- | --- | --- |
 | 2026-09 | maintainers (internal) + fuzzing | Untrusted-input bounds across every decoder (tracker P12.1–P12.9) | 1 released-version defect, hardening elsewhere | fixed in 0.8.0; the defect is [HIDE-2026-001](advisories.md) |
-| 2026-09 | maintainers (internal) | Identity-log transport CBOR | 1 | open, scheduled for 0.9.0 (interoperability, not security) |
+| 2026-09 | maintainers (internal) | Identity-log transport CBOR | 1 | fixed in 0.9.0 (`array(7)`; the 0.6–0.8 form is still read) — interoperability, not security |
 | 2026-09-08 | maintainers (internal) | MLS credential binding, signature stanza handling, confidential-signature metadata path, identity-log encoding, C ABI panic handling, SDK library loading, ssh-agent confirmation and Windows pipe ACL, Argon2id parameter floor | 7 | all fixed in 0.7.0; each fix has a test that fails on the previous code |
 | 2026-09-06 | maintainers (internal) | X25519 small-order points in recipient keys; chunk AAD/nonce byte layout | 2 | fixed in 0.3.0; AAD/nonce bytes now pinned exactly in tests |
 | 2026-09-06 | maintainers (internal) | Signature transcript: header-only signing forgeable by any recipient | 1 | design changed before 0.5.0 shipped; transcript binds `SHA-256(plaintext)` |
@@ -37,19 +37,19 @@ From [../SECURITY.md](../SECURITY.md) and [../CHANGELOG.md](../CHANGELOG.md):
 - A length that would truncate when converted to `usize` on a 32-bit target is refused.
 - MLS messages are capped at 1 MiB; `hide unseal` caps armored input at 1 MiB.
 
-### Open: identity-log transport CBOR
+### Fixed in 0.9.0: identity-log transport CBOR
 
-The identity-log transport encoding declares `array(6)` per entry but writes seven items ([../crates/hide-identity/src/lib.rs](../crates/hide-identity/src/lib.rs), encode and decode). The Rust encoder and decoder agree with each other, so HIDE reads its own logs; a generic CBOR decoder misparses them. This is an interoperability defect, not a security one. Scheduled for 0.9.0 (`array(7)`, a format change).
+Until 0.9.0 the identity-log transport encoding declared `array(6)` per entry but wrote seven items ([../crates/hide-identity/src/lib.rs](../crates/hide-identity/src/lib.rs), encode and decode). The Rust encoder and decoder agreed with each other, so HIDE read its own logs, but a generic CBOR decoder misparsed them. That was an interoperability defect, not a security one. 0.9.0 writes `array(7)` and still reads the 0.6–0.8 form, per log and never mixed ([../spec/hide-1.md](../spec/hide-1.md) §10.3).
 
 ## Automated evidence that exists
 
 These are not audits. They constrain what a bug can look like; they do not show its absence.
 
-- 360 tests, run on Linux, Windows and macOS in CI.
+- 411 tests, run on Linux, Windows and macOS in CI.
 - Property tests (`proptest`): the parser never panics on arbitrary input; any single-byte mutation of a container fails to decrypt; truncation and appended bytes always fail.
-- Eight libFuzzer targets under [../fuzz/fuzz_targets](../fuzz/fuzz_targets) (`format_header`, `object_open`, `keyring_open`, `identity_log`, `epoch_chain`, `transparency_proofs`, `challenge_decode`, `mls_message`), run briefly in CI on every push and for four hours per target every night, in parallel, with the corpus carried forward ([fuzz-nightly.yml](../.github/workflows/fuzz-nightly.yml)). A crash or hang opens an issue labelled `fuzz` + `security`. A manual four-hour run of all eight in 2026-09 was clean (tracker P12.9). Three bugs found so far: two fixed in 0.7.0, the third (a key file requesting 2.4 GiB of Argon2 memory, [#6](https://github.com/hide-protocol/hide/issues/6)) released in 0.8.0 as [HIDE-2026-001](advisories.md).
+- Eleven libFuzzer targets under [../fuzz/fuzz_targets](../fuzz/fuzz_targets) (`format_header`, `object_open`, `keyring_open`, `identity_log`, `epoch_chain`, `transparency_proofs`, `challenge_decode`, `mls_message`, `epoch_store`, `checkpoint_note`, `identity_bindings`), run 45 seconds each in CI on every push and for four hours per target every night, in parallel, with the corpus carried forward ([fuzz-nightly.yml](../.github/workflows/fuzz-nightly.yml)). A crash or hang opens an issue labelled `fuzz` + `security`. A manual four-hour run of all eight targets that existed in 2026-09 was clean (tracker P12.9). Three bugs found so far: two fixed in 0.7.0, the third (a key file requesting 2.4 GiB of Argon2 memory, [#6](https://github.com/hide-protocol/hide/issues/6)) released in 0.8.0 as [HIDE-2026-001](advisories.md).
 - Supply chain, CI job `supply-chain`: `cargo audit --deny warnings`, and `cargo deny check` ([../deny.toml](../deny.toml)) — licence allow-list, a ban on a second cryptographic stack (`openssl`, `ring`), unknown registries refused, and every duplicated dependency version attributed to its cause so a new one is visible. Every dependency is pinned to an exact version.
-- Frozen vectors under [../conformance/vectors](../conformance/vectors), including 30 rejection vectors and a `manifest.json` over every vector; flipping every byte position of the frozen containers is asserted to fail.
+- Frozen vectors under [../conformance/vectors](../conformance/vectors), including 32 rejection vectors and a `manifest.json` over all 84 vectors; flipping every byte position of the frozen containers is asserted to fail.
 - An independent Node implementation ([../conformance/node/verify.mjs](../conformance/node/verify.mjs)) decrypts the Rust vectors and refuses the rejection vectors.
 - Mutation testing was applied by hand to the signing and keyring code during development; results are recorded in commit messages, not in a report.
 
@@ -63,12 +63,12 @@ In priority order. File references are the entry points; the normative text is [
 | 2 | Authenticated streaming and the FINAL rule | Truncation, reordering, and early plaintext release | spec §5; [../crates/hide-object/src/lib.rs](../crates/hide-object/src/lib.rs) |
 | 3 | Header parsing and limits | Untrusted input; bounded canonical CBOR | spec §1–2; [../crates/hide-format/src/lib.rs](../crates/hide-format/src/lib.rs) |
 | 4 | Signature transcript and what a recipient can forge | Recipients hold the CEK; the transcript is the only thing that stops them re-encrypting under a valid signature | spec §7; [../crates/hide-sign/src/lib.rs](../crates/hide-sign/src/lib.rs), `transcript()` in hide-object |
-| 5 | Identity log: authority-at-position | Revocation is meaningless if a revoked device can author a later entry | spec §12; [../crates/hide-identity/src/lib.rs](../crates/hide-identity/src/lib.rs) |
+| 5 | Identity log: authority-at-position | Revocation is meaningless if a revoked device can author a later entry | spec §10; [../crates/hide-identity/src/lib.rs](../crates/hide-identity/src/lib.rs) |
 | 6 | C ABI: memory ownership, panic catching, error codes | Nine SDKs sit on it; a bug is a bug in all of them | [../crates/hide-ffi/src/lib.rs](../crates/hide-ffi/src/lib.rs), [../crates/hide-ffi/include/hide.h](../crates/hide-ffi/include/hide.h) |
 | 7 | Key files: Argon2id parameters (floor and the 0.8.0 ceilings: memory 8–256 MiB, parallelism ≤ 4, passes 1–64), purpose byte, seed derivation | The at-rest protection of every secret, and an untrusted header that sets the cost of opening it | [../crates/hide-keyring/src/lib.rs](../crates/hide-keyring/src/lib.rs) |
 | 8 | Epoch chain: what "erased" guarantees | Independent random keys, no derivation | spec §11; [../crates/hide-epoch/src/lib.rs](../crates/hide-epoch/src/lib.rs) |
 | 9 | RFC 6962 proofs | Consistency-proof forgery would make history rewriting undetectable | spec §12; [../crates/hide-transparency/src/lib.rs](../crates/hide-transparency/src/lib.rs) |
-| 10 | MLS credential binding and message size limit (1 MiB since 0.8.0) | New in 0.7.0, parsed by no other implementation | spec §11; [../crates/hide-mls/src/lib.rs](../crates/hide-mls/src/lib.rs) |
+| 10 | MLS credential binding and message size limit (1 MiB since 0.8.0) | New in 0.7.0, parsed by no other implementation | spec §13; [../crates/hide-mls/src/lib.rs](../crates/hide-mls/src/lib.rs) |
 | 11 | ssh-agent confirmation path and endpoint permissions | A signing oracle reachable by local processes | [../apps/hide-cli/src](../apps/hide-cli/src) |
 | 12 | SDK library loading and handle lifetimes | Injection and use-after-free at the language boundary | [../sdk](../sdk) |
 

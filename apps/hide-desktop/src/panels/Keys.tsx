@@ -1,20 +1,21 @@
 import { useEffect, useState } from "react";
-import { open } from "@tauri-apps/plugin-dialog";
 
 import {
+  chooseDirectory,
+  chooseFile,
   defaultKeyDirectory,
   generateKeys,
   messageOf,
   readPublicArmor,
 } from "../core";
-import type { KeyPair } from "../core";
+import type { KeyPair, Selection } from "../core";
 import { Card, Field, PathPicker, StatusLine } from "../ui";
 import type { Status } from "../ui";
 
 const MIN_PASSPHRASE = 8;
 
 export function Keys() {
-  const [directory, setDirectory] = useState<string | null>(null);
+  const [directory, setDirectory] = useState<Selection | null>(null);
   const [name, setName] = useState("my-key");
   const [passphrase, setPassphrase] = useState("");
   const [confirmation, setConfirmation] = useState("");
@@ -25,11 +26,13 @@ export function Keys() {
   const [shared, setShared] = useState<string | null>(null);
   const [shareStatus, setShareStatus] = useState<Status>({ kind: "idle" });
 
+  const creating = status.kind === "busy";
+
   // A portable build offers its own folder, so keys travel with the program.
   useEffect(() => {
     void defaultKeyDirectory()
-      .then((path) => {
-        if (path) setDirectory((current) => current ?? path);
+      .then((folder) => {
+        if (folder) setDirectory((current) => current ?? folder);
       })
       .catch(() => {
         /* Not portable; the user picks a folder. */
@@ -37,8 +40,8 @@ export function Keys() {
   }, []);
 
   async function pickDirectory() {
-    const chosen = await open({ directory: true, multiple: false });
-    if (typeof chosen === "string") setDirectory(chosen);
+    const chosen = await chooseDirectory();
+    if (chosen) setDirectory(chosen);
   }
 
   async function create() {
@@ -63,7 +66,7 @@ export function Keys() {
     setStatus({ kind: "busy", text: "Generating a key pair." });
     try {
       const pair = await generateKeys(
-        directory,
+        directory.id,
         name,
         unprotected ? null : passphrase,
       );
@@ -82,13 +85,10 @@ export function Keys() {
   }
 
   async function share() {
-    const chosen = await open({
-      multiple: false,
-      filters: [{ name: "HIDE public key", extensions: ["hide-pub"] }],
-    });
-    if (typeof chosen !== "string") return;
+    const chosen = await chooseFile("public");
+    if (!chosen) return;
     try {
-      setShared(await readPublicArmor(chosen));
+      setShared(await readPublicArmor(chosen.id));
       setShareStatus({ kind: "idle" });
     } catch (error) {
       setShared(null);
@@ -104,7 +104,7 @@ export function Keys() {
       >
         <PathPicker
           label="Save in"
-          value={directory}
+          value={directory?.path ?? null}
           buttonText="Choose folder"
           onPick={pickDirectory}
         />
@@ -146,7 +146,12 @@ export function Keys() {
           </span>
         </label>
 
-        <button type="button" className="primary" onClick={create}>
+        <button
+          type="button"
+          className="primary"
+          onClick={create}
+          disabled={creating}
+        >
           Create key
         </button>
         <StatusLine status={status} />

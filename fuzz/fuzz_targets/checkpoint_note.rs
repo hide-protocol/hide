@@ -15,14 +15,26 @@ fn log_key() -> &'static SigningIdentity {
 
 fuzz_target!(|data: &[u8]| {
     if let Ok(note) = SignedNote::decode(data) {
-        assert_eq!(note.encode().as_bytes(), data, "non-canonical note accepted");
+        assert_eq!(
+            note.encode().as_bytes(),
+            data,
+            "non-canonical note accepted"
+        );
     }
     let _ = Checkpoint::verify(data, "log.example/hide", &log_key().verifying_key());
 
     if let Ok(proof) = InclusionProof::decode(data) {
-        assert_eq!(proof.encode().as_deref().ok(), Some(data), "non-canonical inclusion proof");
+        assert_eq!(
+            proof.encode().as_deref().ok(),
+            Some(data),
+            "non-canonical inclusion proof"
+        );
     }
     if let Ok(proof) = ConsistencyProof::decode(data) {
-        assert_eq!(proof.encode().as_deref().ok(), Some(data), "non-canonical consistency proof");
+        assert_eq!(
+            proof.encode().as_deref().ok(),
+            Some(data),
+            "non-canonical consistency proof"
+        );
     }
 });

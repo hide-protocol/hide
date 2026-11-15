@@ -31,7 +31,6 @@ pub fn advice(endpoint: &str) -> String {
     }
 }
 
-/// The endpoint used when the caller does not name one.
 pub fn default_endpoint() -> String {
     if cfg!(windows) {
         r"\\.\pipe\hide-agent".to_string()
@@ -100,8 +99,9 @@ pub fn listen(agent: &Agent, endpoint: &str, approver: &mut dyn Approver) -> Res
         .filter(|parent| !parent.as_os_str().is_empty())
         .unwrap_or(Path::new("."));
     create_private_dir(parent)?;
-    // A stale socket from a crashed run would otherwise make bind fail forever.
-    let _ = std::fs::remove_file(endpoint);
+    // A stale socket from a crashed run would otherwise make bind fail forever;
+    // anything else at this path belongs to someone else and is refused.
+    remove_stale_socket(endpoint_path)?;
     let listener = UnixListener::bind(endpoint)?;
     std::fs::set_permissions(endpoint, std::fs::Permissions::from_mode(0o600))?;
 
@@ -112,6 +112,56 @@ pub fn listen(agent: &Agent, endpoint: &str, approver: &mut dyn Approver) -> Res
         }
     }
     Ok(())
+}
+
+/// Clears the way for `bind`, and only when the path is genuinely dead.
+///
+/// A socket left behind by a crashed run would make `bind` fail forever, so it
+/// has to go. Two other things at that path must not go: a *regular file*, which
+/// the caller chose to name and which was never ours to delete, and a socket a
+/// live agent is still answering on, removing which would let this process steal
+/// its endpoint. Both are refused with an error instead.
+#[cfg(unix)]
+fn remove_stale_socket(endpoint: &std::path::Path) -> Result<()> {
+    use std::io::ErrorKind;
+    use std::os::unix::fs::FileTypeExt;
+    use std::os::unix::net::UnixStream;
+
+    let metadata = match std::fs::symlink_metadata(endpoint) {
+        Ok(metadata) => metadata,
+        Err(error) if error.kind() == ErrorKind::NotFound => return Ok(()),
+        Err(error) => return Err(error.into()),
+    };
+    if !metadata.file_type().is_socket() {
+        // A directory, a symlink, a regular file: all of them are someone
+        // else's, and a symlink in particular would let the path point at a file
+        // we would then unlink.
+        return Err(format!(
+            "{} already exists and is not a socket; refusing to remove it",
+            endpoint.display()
+        )
+        .into());
+    }
+    match UnixStream::connect(endpoint) {
+        Ok(_) => Err(format!(
+            "another agent is already listening on {}",
+            endpoint.display()
+        )
+        .into()),
+        // Nobody accepts on it, so it is a leftover from a run that died.
+        Err(error) if error.kind() == ErrorKind::ConnectionRefused => {
+            std::fs::remove_file(endpoint)?;
+            Ok(())
+        }
+        // Anything else leaves the question open (permissions, a race with an
+        // owner removing it, a socket of the wrong type). Guessing here could
+        // delete a live endpoint, so refuse and say so.
+        Err(error) => Err(format!(
+            "cannot tell whether {} still has an agent on it: {error}",
+            endpoint.display()
+        )
+        .into()),
+    }
 }
 
 #[cfg(windows)]
@@ -171,5 +221,53 @@ mod tests {
         let not_a_directory = root.path().join("hide-agent");
         std::fs::write(&not_a_directory, b"").expect("written");
         assert!(create_private_dir(&not_a_directory).is_err());
+    }
+
+    #[test]
+    fn a_missing_endpoint_needs_no_removal() {
+        let root = tempfile::tempdir().expect("tempdir");
+        remove_stale_socket(&root.path().join("nothing-here.sock")).expect("nothing to do");
+    }
+
+    /// The endpoint path is chosen by the caller, so a regular file that happens
+    /// to sit there is not ours to delete. It used to be removed unconditionally.
+    #[test]
+    fn a_regular_file_at_the_endpoint_is_refused_and_left_alone() {
+        let root = tempfile::tempdir().expect("tempdir");
+        let path = root.path().join("important.txt");
+        std::fs::write(&path, b"not a socket").expect("written");
+
+        let error = remove_stale_socket(&path)
+            .expect_err("a regular file must not be treated as a stale socket")
+            .to_string();
+        assert!(error.contains("not a socket"), "{error}");
+        assert_eq!(
+            std::fs::read(&path).expect("the file must still be there"),
+            b"not a socket"
+        );
+    }
+
+    /// Both halves of the decision: a socket nobody answers on is a leftover and
+    /// must go, or `bind` can never succeed again; a socket a live agent holds
+    /// must stay, or this process would take over its endpoint.
+    #[test]
+    fn a_dead_socket_is_removed_and_a_live_one_is_kept() {
+        let root = tempfile::tempdir().expect("tempdir");
+
+        let dead = root.path().join("dead.sock");
+        // Dropping the listener closes the socket but leaves its name behind,
+        // which is exactly what a killed agent leaves.
+        drop(std::os::unix::net::UnixListener::bind(&dead).expect("bind"));
+        assert!(dead.exists());
+        remove_stale_socket(&dead).expect("a socket nobody answers on is stale");
+        assert!(!dead.exists(), "the stale socket was not cleared");
+
+        let live = root.path().join("live.sock");
+        let _listener = std::os::unix::net::UnixListener::bind(&live).expect("bind");
+        let error = remove_stale_socket(&live)
+            .expect_err("a socket that answers must not be removed")
+            .to_string();
+        assert!(error.contains("already listening"), "{error}");
+        assert!(live.exists(), "a live agent's endpoint was removed");
     }
 }

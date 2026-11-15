@@ -53,7 +53,7 @@ Described in spec §14 so other tools can interoperate with the reference implem
 | `hide-identity` | evolving | The log's bytes are frozen (spec §10); the Rust event types and `Membership` may still change shape |
 | `hide-epoch` | evolving | The chain's bytes are frozen (spec §11); the in-memory `EpochChain` API may change. Epoch secrets persist in `hide-keyring`'s implementation-defined `EpochStore` |
 | `hide-transparency` | evolving | Proof types follow RFC 6962 and are unlikely to change; the checkpoint format may gain a signature |
-| `hide-mls` | evolving | New in 0.6/0.7; follows `mls-rs` 0.56, whose own API is 0.x |
+| `hide-mls` | evolving | New in 0.6/0.7; follows `mls-rs` 0.57, whose own API is 0.x |
 | `hide-wasm` | evolving | Browser surface; not published to crates.io |
 | `hide-cli` | internal | The binary is the interface; the crate has no library API. Command names and flags are stable-intent (below) |
 
@@ -70,7 +70,7 @@ All crates in the workspace share one version (`Cargo.toml` `[workspace.package]
 
 ## Minimum supported Rust version
 
-MSRV is **1.85** (`rust-version` in `Cargo.toml`), verified in CI by the `minimum-supported-rust` job. Raising it is a **minor** bump and is listed in the changelog. The toolchain used for development is whatever `rust-toolchain.toml` pins.
+MSRV is **1.88** (`rust-version` in `Cargo.toml`), verified in CI by the `minimum-supported-rust` job. Raising it is a **minor** bump and is listed in the changelog. The toolchain used for development is whatever `rust-toolchain.toml` pins.
 
 ## Deprecation
 

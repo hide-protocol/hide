@@ -45,6 +45,7 @@ jobs:
       fail-fast: false
       matrix:
         target:
+          - agent_request
           - challenge_decode
           - checkpoint_note
           - epoch_chain
@@ -108,8 +109,9 @@ jobs:
             checkpoint_note) cp conformance/vectors/subsystems/checkpoint-*.note conformance/vectors/subsystems/checkpoint-inclusion.bin conformance/vectors/subsystems/checkpoint-consistency.bin "$d/" ;;
             identity_bindings) cp conformance/vectors/subsystems/binding-recovery*.bin conformance/vectors/subsystems/binding-epoch*.bin "$d/" ;;
             # No frozen vectors: challenges carry a fresh nonce and MLS messages a
-            # fresh group state, so neither is a stable artifact. Empty start.
-            challenge_decode|mls_message|epoch_store) ;;
+            # fresh group state, an agent request carries a session identifier, so
+            # none of them is a stable artifact. Empty start.
+            agent_request|challenge_decode|mls_message|epoch_store) ;;
             *) echo "::notice::no frozen vectors are mapped to $TARGET; it starts from last night's corpus only" ;;
           esac
           echo "corpus entries: $(find "$d" -type f | wc -l)"

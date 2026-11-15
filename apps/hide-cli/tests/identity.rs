@@ -131,6 +131,7 @@ fn creating_an_identity_does_not_overwrite_an_existing_log() -> Result<(), Box<d
     let directory = tempfile::tempdir()?;
     identity(directory.path());
     let before = fs::read(directory.path().join("id.log"))?;
+    let binding_before = fs::read(directory.path().join("id.log.binding"))?;
 
     let again = hide(
         directory.path(),
@@ -153,6 +154,11 @@ fn creating_an_identity_does_not_overwrite_an_existing_log() -> Result<(), Box<d
         "identity-create overwrote an existing log"
     );
     assert_eq!(fs::read(directory.path().join("id.log"))?, before);
+    assert_eq!(
+        fs::read(directory.path().join("id.log.binding"))?,
+        binding_before,
+        "identity-create overwrote the recovery binding"
+    );
     Ok(())
 }
 
@@ -475,6 +481,30 @@ fn the_new_commands_require_experimental() -> Result<(), Box<dyn Error>> {
         vec!["epoch-advance", "--chain", "x", "--store", "y"],
         vec!["epoch-erase", "0", "--chain", "x", "--store", "y"],
         vec!["epoch-public", "--chain", "x", "--output", "y"],
+        vec![
+            "epoch-bind",
+            "--chain",
+            "x",
+            "--log",
+            "y",
+            "--secret",
+            "z",
+            "--recovery",
+            "r",
+            "--output",
+            "b",
+        ],
+        vec![
+            "identity-recover",
+            "--log",
+            "x",
+            "--secret",
+            "y",
+            "--device",
+            "z",
+            "--label",
+            "l",
+        ],
     ] {
         let result = hide(directory.path(), &args);
         assert!(
@@ -483,5 +513,255 @@ fn the_new_commands_require_experimental() -> Result<(), Box<dyn Error>> {
             args
         );
     }
+    Ok(())
+}
+
+fn hex(bytes: &[u8]) -> String {
+    bytes.iter().map(|byte| format!("{byte:02x}")).collect()
+}
+
+/// §16.1: `identity create` writes the recovery binding beside the log, and
+/// `identity show --root --binding` checks it. The binding is the only statement
+/// that names the genuine recovery key — the log itself does not — so a doctored
+/// one has to be refused rather than preferred.
+#[test]
+fn the_recovery_binding_is_written_with_the_log_and_checked_by_show() -> Result<(), Box<dyn Error>>
+{
+    let directory = tempfile::tempdir()?;
+    identity(directory.path());
+
+    let bytes = fs::read(directory.path().join("id.log.binding"))?;
+    let binding = hide_identity::RecoveryBinding::decode(&bytes)?;
+    let entries = hide_identity::decode(&fs::read(directory.path().join("id.log"))?)?;
+    // What a sender does before encrypting to the identity: pin the root, then
+    // check the binding that claims to name the recovery key for it.
+    let log = binding.verify_pinned(entries, &binding.root)?;
+    assert_eq!(log.membership().len(), 2);
+
+    let shown = hide(
+        directory.path(),
+        &[
+            "--experimental",
+            "--quiet",
+            "identity-show",
+            "--log",
+            "id.log",
+            "--recovery",
+            "recovery.pub.sign",
+            "--root",
+            "--binding",
+            "id.log.binding",
+        ],
+    );
+    assert!(
+        shown.status.success(),
+        "{}",
+        String::from_utf8_lossy(&shown.stderr)
+    );
+    let text = String::from_utf8(shown.stdout)?;
+    assert!(
+        text.contains(&hex(&binding.root)),
+        "the root was not printed in full: {text}"
+    );
+    assert!(text.contains("binding recovery key"), "{text}");
+    assert!(text.contains("binding devices      2"), "{text}");
+
+    // A binding whose root was altered no longer describes this log.
+    let mut forged = bytes.clone();
+    forged[0] ^= 1;
+    fs::write(directory.path().join("forged.binding"), &forged)?;
+    let before = fs::read(directory.path().join("id.log"))?;
+    let refused = hide(
+        directory.path(),
+        &[
+            "--experimental",
+            "--quiet",
+            "identity-show",
+            "--log",
+            "id.log",
+            "--recovery",
+            "recovery.pub.sign",
+            "--binding",
+            "forged.binding",
+        ],
+    );
+    assert!(
+        !refused.status.success(),
+        "a binding for a different root was accepted"
+    );
+    assert_eq!(fs::read(directory.path().join("id.log"))?, before);
+    Ok(())
+}
+
+/// Losing every device is what the offline recovery key is for. It is also the
+/// event an attacker with a stolen copy of the log would append, signing it with
+/// a key of their own, so the key must be the one the founder bound and the
+/// binding must not be skippable by deleting it.
+#[test]
+fn recovery_replaces_the_device_set_only_for_the_bound_recovery_key() -> Result<(), Box<dyn Error>>
+{
+    let directory = tempfile::tempdir()?;
+    identity(directory.path());
+    keypair(directory.path(), "tablet");
+    keypair(directory.path(), "attacker");
+    let before = fs::read(directory.path().join("id.log"))?;
+
+    let recover = |secret: &str| {
+        hide(
+            directory.path(),
+            &[
+                "--experimental",
+                "--quiet",
+                "identity-recover",
+                "--log",
+                "id.log",
+                "--secret",
+                secret,
+                "--device",
+                "tablet.pub.sign",
+                "--label",
+                "tablet",
+            ],
+        )
+    };
+
+    let stolen = recover("attacker.sec");
+    assert!(
+        !stolen.status.success(),
+        "a stranger's recovery key replaced the device set: {}",
+        String::from_utf8_lossy(&stolen.stderr)
+    );
+    assert_eq!(
+        fs::read(directory.path().join("id.log"))?,
+        before,
+        "the log was modified by a refused recovery"
+    );
+
+    fs::rename(
+        directory.path().join("id.log.binding"),
+        directory.path().join("hidden.binding"),
+    )?;
+    let unbound = recover("recovery.sec");
+    assert!(
+        !unbound.status.success(),
+        "recovery ran without the binding that names the key"
+    );
+    assert_eq!(fs::read(directory.path().join("id.log"))?, before);
+    fs::rename(
+        directory.path().join("hidden.binding"),
+        directory.path().join("id.log.binding"),
+    )?;
+
+    let recovered = recover("recovery.sec");
+    assert!(
+        recovered.status.success(),
+        "{}",
+        String::from_utf8_lossy(&recovered.stderr)
+    );
+    let listing = show(directory.path());
+    assert!(listing.contains("devices 1"), "{listing}");
+    assert!(listing.contains("tablet"), "{listing}");
+    assert!(
+        !listing.contains("laptop"),
+        "the replaced device is still trusted: {listing}"
+    );
+
+    // Replaced means replaced: the old device cannot author anything now.
+    let laptop_again = hide(
+        directory.path(),
+        &[
+            "--experimental",
+            "--quiet",
+            "identity-enrol",
+            "--log",
+            "id.log",
+            "--secret",
+            "laptop.sec",
+            "--device",
+            "recovery.pub.sign",
+            "--label",
+            "laptop",
+            "--recovery",
+            "recovery.pub.sign",
+        ],
+    );
+    assert!(
+        !laptop_again.status.success(),
+        "a replaced device enrolled another one"
+    );
+    Ok(())
+}
+
+/// §16.4: without a binding anyone can publish an epoch chain and claim it is
+/// yours; with one, only a device the log trusts can vouch for it.
+#[test]
+fn an_epoch_chain_can_be_bound_to_the_identity_and_a_stranger_cannot() -> Result<(), Box<dyn Error>>
+{
+    let directory = tempfile::tempdir()?;
+    identity(directory.path());
+    keypair(directory.path(), "stranger");
+    published_chain(directory.path(), 2)?;
+
+    let bound = hide(
+        directory.path(),
+        &[
+            "--experimental",
+            "--quiet",
+            "epoch-bind",
+            "--chain",
+            "epochs.bin",
+            "--log",
+            "id.log",
+            "--secret",
+            "laptop.sec",
+            "--recovery",
+            "recovery.pub.sign",
+            "--output",
+            "epochs.binding",
+        ],
+    );
+    assert!(
+        bound.status.success(),
+        "{}",
+        String::from_utf8_lossy(&bound.stderr)
+    );
+    let binding =
+        hide_identity::EpochBinding::decode(&fs::read(directory.path().join("epochs.binding"))?)?;
+    assert_eq!(binding.epochs, 2);
+
+    // The receiver's whole path: a verified log, then the chain it names.
+    let recovery = hide_identity::RecoveryBinding::decode(&fs::read(
+        directory.path().join("id.log.binding"),
+    )?)?;
+    let log = recovery.verify_pinned(
+        hide_identity::decode(&fs::read(directory.path().join("id.log"))?)?,
+        &recovery.root,
+    )?;
+    let records = hide_epoch::decode_records(&fs::read(directory.path().join("epochs.bin"))?)?;
+    binding.verify(&log, &records)?;
+
+    let stranger = hide(
+        directory.path(),
+        &[
+            "--experimental",
+            "--quiet",
+            "epoch-bind",
+            "--chain",
+            "epochs.bin",
+            "--log",
+            "id.log",
+            "--secret",
+            "stranger.sec",
+            "--recovery",
+            "recovery.pub.sign",
+            "--output",
+            "stranger.binding",
+        ],
+    );
+    assert!(
+        !stranger.status.success(),
+        "a device the log does not trust vouched for the chain"
+    );
+    assert!(!directory.path().join("stranger.binding").exists());
     Ok(())
 }

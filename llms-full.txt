@@ -49,7 +49,7 @@ Every claim below was produced by a command in this repository, on Rust 1.99.0 (
   opens an issue when a target fails. Two nightly jobs in October 2026 (`identity_log` on the 5th,
   `object_open` on the 21st) lost their hosted runner before any step ran, so they left no
   reproducer and no issue; the list of workflow runs, not the issue list, is the complete record.
-- `unsafe_code = "forbid"` in every crate except `hide-ffi`, where the C ABI needs it; 397 tests
+- `unsafe_code = "forbid"` in every crate except `hide-ffi`, where the C ABI needs it; 411 tests
   (`cargo test --workspace --all-features`).
 - **Independent interoperability**: a separate Node implementation (`@hpke/hybridkem-x-wing`, `cbor`,
   Node `crypto`) decrypts the Rust vectors (`node conformance/node/verify.mjs`), and the
@@ -565,7 +565,7 @@ open-source components compiled into them.
 
 *HIDE is experimental and has not been audited by a third party. See [audit-status.md](audit-status.md).*
 
-Short factual answers. Each links to the document that carries the detail. "HIDE" here means version 0.6.x of the crates, CLI and SDKs in this repository.
+Short factual answers. Each links to the document that carries the detail. "HIDE" here means version 0.9.x of the crates, CLI and SDKs in this repository.
 
 ## What is HIDE?
 
@@ -605,7 +605,7 @@ X-Wing is a specified, analysed combiner of X25519 and ML-KEM-768 with an IANA-a
 
 ## Why 64 KiB chunks?
 
-64 KiB is large enough that per-chunk overhead (16-byte tag, 5-byte record header) is 0.03 %, and small enough that a decryptor holds two fixed buffers — measured peak RSS is 7 MB for a 256 MB file. It is also the chunk size age's STREAM uses, so the trade-off is well understood. Each chunk's AAD binds object id, header hash, counter, kind and length ([../spec/hide-1.md](../spec/hide-1.md) §5).
+64 KiB is large enough that per-chunk overhead (16-byte tag, 5-byte record header) is 0.03 %, and small enough that a decryptor holds two fixed 64 KiB buffers however large the file is. It is also the chunk size age's STREAM uses, so the trade-off is well understood. Each chunk's AAD binds object id, header hash, counter, kind and length ([../spec/hide-1.md](../spec/hide-1.md) §5).
 
 ## Can HIDE stream large files?
 
@@ -683,7 +683,7 @@ No. It calls the same Rust crates as the CLI, key material never reaches the web
 
 ## Is there a formal specification and are there test vectors?
 
-Yes: [../spec/hide-1.md](../spec/hide-1.md) is normative, and `conformance/vectors/` holds frozen containers, GREASE vectors that exercise the extension points, subsystem vectors and thirty rejection vectors, all listed with expected outcome and SHA-256 in `manifest.json` ([../conformance/vectors/README.md](../conformance/vectors/README.md)). An independent Node implementation (`conformance/node/verify.mjs`) decrypts the vectors and refuses the rejections, so two implementations agree on what is invalid, not only on what is valid. Both are maintained in this repository; an outside implementation would be worth more.
+Yes: [../spec/hide-1.md](../spec/hide-1.md) is normative, and `conformance/vectors/` holds frozen containers, GREASE vectors that exercise the extension points, subsystem vectors and thirty-two rejection vectors, all listed with expected outcome and SHA-256 in `manifest.json` ([../conformance/vectors/README.md](../conformance/vectors/README.md)). An independent Node implementation (`conformance/node/verify.mjs`) decrypts the vectors and refuses the rejections, so two implementations agree on what is invalid, not only on what is valid. Both are maintained in this repository; an outside implementation would be worth more.
 
 ## How can I help, audit or fund?
 
@@ -699,6 +699,8 @@ Apache-2.0, for the code, the specification and the vectors. There is no require
 
 # ===== docs/comparison.md =====
 
+**What age does that HIDE does not.** age is far more widely deployed, has survived formal review of its design papers, and HIDE is not; no public third-party audit report for age could be located as of 2026-11-11, and an earlier claim in this repository that age had one was withdrawn ([README](../README.md)). age is packaged in nearly every distribution and has a plugin ecosystem (YubiKey/PIV via `age-plugin-yubikey`, `age-plugin-pq`, and others). age encrypts to existing `ssh-ed25519` and `ssh-rsa` public keys, including a GitHub user's published keys; HIDE's `ssh-key` and `agent` commands are for SSH *login*, not for encrypting to SSH keys. age's format is deliberately small and has three interoperable implementations (Go, Rust, TypeScript). age v1.3.0 added hybrid ML-KEM-768 + X25519 recipients, so "age has no post-quantum option" is no longer true; it is opt-in and recipients are ~2000 characters long.
+| **age** (Go reference) | ML-KEM-768 + X25519 hybrid recipients since v1.3.0 (`age-keygen -pq`); not default | Yes for PQ recipients | Yes, 64 KiB STREAM | Yes | No (integrity only) | No — one key per recipient | No | No | See the project; no public audit report located as of 2026-11-11 | Go; Rust (rage); TypeScript (typage) | BSD-3-Clause |
 # HIDE compared with other encryption tools
 
 *HIDE is experimental and has not been audited by a third party. See [audit-status.md](audit-status.md).*
@@ -709,7 +711,7 @@ This is a comparison on properties, not a ranking. Several tools below are audit
 
 | Tool | PQ KEM | Hybrid | Streaming | Multi-recipient | Signatures | Multi-device identity | Forward secrecy | Group messaging | Third-party audit | Language bindings | License |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| **HIDE 0.6.x** | X-Wing (X25519 + ML-KEM-768, FIPS 203) | Yes, KEM and signature | Yes, 64 KiB chunks, constant memory (unsigned) | Yes, ≤64 | Ed25519 + ML-DSA-65 (FIPS 204); both must verify | Hash-linked device log with revocation and recovery | By epoch erasure only; no ratchet | MLS via `mls-rs`, **classical suite only** | **None** | 9 over one C ABI: C, Python, Node, WASM, Go, Java, Ruby, PHP, .NET | Apache-2.0 |
+| **HIDE 0.9.x** | X-Wing (X25519 + ML-KEM-768, FIPS 203) | Yes, KEM and signature | Yes, 64 KiB chunks, constant memory (unsigned) | Yes, ≤64 | Ed25519 + ML-DSA-65 (FIPS 204); both must verify | Hash-linked device log with revocation and recovery | By epoch erasure only; no ratchet | MLS via `mls-rs`, **classical suite only** | **None** | 9 over one C ABI: C, Python, Node, WASM, Go, Java, Ruby, PHP, .NET | Apache-2.0 |
 | **age** (Go reference) | ML-KEM-768 + X25519 hybrid recipients since v1.3.0 (`age-keygen -pq`); not default | Yes for PQ recipients | Yes, 64 KiB STREAM | Yes | No (integrity only) | No — one key per recipient | No | No | Yes — Trail of Bits; findings fixed in v1.3.2 (Aug 2026) | Go; Rust (rage); TypeScript (typage) | BSD-3-Clause |
 | **rage** (Rust) | Via age plugin system (`age-plugin-pq`); built-in PQ status: see project | As age | As age | As age | No | No | No | No | Not known to us | Rust crate `age` | Apache-2.0 OR MIT |
 | **GPG / OpenPGP** | No in RFC 9580; PQ composite drafts in progress | Drafts only | Yes | Yes | Yes, classical | Keyring with subkeys; web of trust | No | No | Long public review history; no single audit to cite | Many via GPGME | GPL-3.0 (GnuPG) |
@@ -916,7 +918,7 @@ The only reviews are internal — performed by the maintainers on their own code
 | Date | Reviewer | Scope | Findings | Status |
 | --- | --- | --- | --- | --- |
 | 2026-09 | maintainers (internal) + fuzzing | Untrusted-input bounds across every decoder (tracker P12.1–P12.9) | 1 released-version defect, hardening elsewhere | fixed in 0.8.0; the defect is [HIDE-2026-001](advisories.md) |
-| 2026-09 | maintainers (internal) | Identity-log transport CBOR | 1 | open, scheduled for 0.9.0 (interoperability, not security) |
+| 2026-09 | maintainers (internal) | Identity-log transport CBOR | 1 | fixed in 0.9.0 (`array(7)`; the 0.6–0.8 form is still read) — interoperability, not security |
 | 2026-09-08 | maintainers (internal) | MLS credential binding, signature stanza handling, confidential-signature metadata path, identity-log encoding, C ABI panic handling, SDK library loading, ssh-agent confirmation and Windows pipe ACL, Argon2id parameter floor | 7 | all fixed in 0.7.0; each fix has a test that fails on the previous code |
 | 2026-09-06 | maintainers (internal) | X25519 small-order points in recipient keys; chunk AAD/nonce byte layout | 2 | fixed in 0.3.0; AAD/nonce bytes now pinned exactly in tests |
 | 2026-09-06 | maintainers (internal) | Signature transcript: header-only signing forgeable by any recipient | 1 | design changed before 0.5.0 shipped; transcript binds `SHA-256(plaintext)` |
@@ -940,19 +942,19 @@ From [../SECURITY.md](../SECURITY.md) and [../CHANGELOG.md](../CHANGELOG.md):
 - A length that would truncate when converted to `usize` on a 32-bit target is refused.
 - MLS messages are capped at 1 MiB; `hide unseal` caps armored input at 1 MiB.
 
-### Open: identity-log transport CBOR
+### Fixed in 0.9.0: identity-log transport CBOR
 
-The identity-log transport encoding declares `array(6)` per entry but writes seven items ([../crates/hide-identity/src/lib.rs](../crates/hide-identity/src/lib.rs), encode and decode). The Rust encoder and decoder agree with each other, so HIDE reads its own logs; a generic CBOR decoder misparses them. This is an interoperability defect, not a security one. Scheduled for 0.9.0 (`array(7)`, a format change).
+Until 0.9.0 the identity-log transport encoding declared `array(6)` per entry but wrote seven items ([../crates/hide-identity/src/lib.rs](../crates/hide-identity/src/lib.rs), encode and decode). The Rust encoder and decoder agreed with each other, so HIDE read its own logs, but a generic CBOR decoder misparsed them. That was an interoperability defect, not a security one. 0.9.0 writes `array(7)` and still reads the 0.6–0.8 form, per log and never mixed ([../spec/hide-1.md](../spec/hide-1.md) §10.3).
 
 ## Automated evidence that exists
 
 These are not audits. They constrain what a bug can look like; they do not show its absence.
 
-- 360 tests, run on Linux, Windows and macOS in CI.
+- 411 tests, run on Linux, Windows and macOS in CI.
 - Property tests (`proptest`): the parser never panics on arbitrary input; any single-byte mutation of a container fails to decrypt; truncation and appended bytes always fail.
-- Eight libFuzzer targets under [../fuzz/fuzz_targets](../fuzz/fuzz_targets) (`format_header`, `object_open`, `keyring_open`, `identity_log`, `epoch_chain`, `transparency_proofs`, `challenge_decode`, `mls_message`), run briefly in CI on every push and for four hours per target every night, in parallel, with the corpus carried forward ([fuzz-nightly.yml](../.github/workflows/fuzz-nightly.yml)). A crash or hang opens an issue labelled `fuzz` + `security`. A manual four-hour run of all eight in 2026-09 was clean (tracker P12.9). Three bugs found so far: two fixed in 0.7.0, the third (a key file requesting 2.4 GiB of Argon2 memory, [#6](https://github.com/hide-protocol/hide/issues/6)) released in 0.8.0 as [HIDE-2026-001](advisories.md).
+- Eleven libFuzzer targets under [../fuzz/fuzz_targets](../fuzz/fuzz_targets) (`format_header`, `object_open`, `keyring_open`, `identity_log`, `epoch_chain`, `transparency_proofs`, `challenge_decode`, `mls_message`, `epoch_store`, `checkpoint_note`, `identity_bindings`), run 45 seconds each in CI on every push and for four hours per target every night, in parallel, with the corpus carried forward ([fuzz-nightly.yml](../.github/workflows/fuzz-nightly.yml)). A crash or hang opens an issue labelled `fuzz` + `security`. A manual four-hour run of all eight targets that existed in 2026-09 was clean (tracker P12.9). Three bugs found so far: two fixed in 0.7.0, the third (a key file requesting 2.4 GiB of Argon2 memory, [#6](https://github.com/hide-protocol/hide/issues/6)) released in 0.8.0 as [HIDE-2026-001](advisories.md).
 - Supply chain, CI job `supply-chain`: `cargo audit --deny warnings`, and `cargo deny check` ([../deny.toml](../deny.toml)) — licence allow-list, a ban on a second cryptographic stack (`openssl`, `ring`), unknown registries refused, and every duplicated dependency version attributed to its cause so a new one is visible. Every dependency is pinned to an exact version.
-- Frozen vectors under [../conformance/vectors](../conformance/vectors), including 30 rejection vectors and a `manifest.json` over every vector; flipping every byte position of the frozen containers is asserted to fail.
+- Frozen vectors under [../conformance/vectors](../conformance/vectors), including 32 rejection vectors and a `manifest.json` over all 84 vectors; flipping every byte position of the frozen containers is asserted to fail.
 - An independent Node implementation ([../conformance/node/verify.mjs](../conformance/node/verify.mjs)) decrypts the Rust vectors and refuses the rejection vectors.
 - Mutation testing was applied by hand to the signing and keyring code during development; results are recorded in commit messages, not in a report.
 
@@ -966,12 +968,12 @@ In priority order. File references are the entry points; the normative text is [
 | 2 | Authenticated streaming and the FINAL rule | Truncation, reordering, and early plaintext release | spec §5; [../crates/hide-object/src/lib.rs](../crates/hide-object/src/lib.rs) |
 | 3 | Header parsing and limits | Untrusted input; bounded canonical CBOR | spec §1–2; [../crates/hide-format/src/lib.rs](../crates/hide-format/src/lib.rs) |
 | 4 | Signature transcript and what a recipient can forge | Recipients hold the CEK; the transcript is the only thing that stops them re-encrypting under a valid signature | spec §7; [../crates/hide-sign/src/lib.rs](../crates/hide-sign/src/lib.rs), `transcript()` in hide-object |
-| 5 | Identity log: authority-at-position | Revocation is meaningless if a revoked device can author a later entry | spec §12; [../crates/hide-identity/src/lib.rs](../crates/hide-identity/src/lib.rs) |
+| 5 | Identity log: authority-at-position | Revocation is meaningless if a revoked device can author a later entry | spec §10; [../crates/hide-identity/src/lib.rs](../crates/hide-identity/src/lib.rs) |
 | 6 | C ABI: memory ownership, panic catching, error codes | Nine SDKs sit on it; a bug is a bug in all of them | [../crates/hide-ffi/src/lib.rs](../crates/hide-ffi/src/lib.rs), [../crates/hide-ffi/include/hide.h](../crates/hide-ffi/include/hide.h) |
 | 7 | Key files: Argon2id parameters (floor and the 0.8.0 ceilings: memory 8–256 MiB, parallelism ≤ 4, passes 1–64), purpose byte, seed derivation | The at-rest protection of every secret, and an untrusted header that sets the cost of opening it | [../crates/hide-keyring/src/lib.rs](../crates/hide-keyring/src/lib.rs) |
 | 8 | Epoch chain: what "erased" guarantees | Independent random keys, no derivation | spec §11; [../crates/hide-epoch/src/lib.rs](../crates/hide-epoch/src/lib.rs) |
 | 9 | RFC 6962 proofs | Consistency-proof forgery would make history rewriting undetectable | spec §12; [../crates/hide-transparency/src/lib.rs](../crates/hide-transparency/src/lib.rs) |
-| 10 | MLS credential binding and message size limit (1 MiB since 0.8.0) | New in 0.7.0, parsed by no other implementation | spec §11; [../crates/hide-mls/src/lib.rs](../crates/hide-mls/src/lib.rs) |
+| 10 | MLS credential binding and message size limit (1 MiB since 0.8.0) | New in 0.7.0, parsed by no other implementation | spec §13; [../crates/hide-mls/src/lib.rs](../crates/hide-mls/src/lib.rs) |
 | 11 | ssh-agent confirmation path and endpoint permissions | A signing oracle reachable by local processes | [../apps/hide-cli/src](../apps/hide-cli/src) |
 | 12 | SDK library loading and handle lifetimes | Injection and use-after-free at the language boundary | [../sdk](../sdk) |
 
@@ -1083,7 +1085,7 @@ Described in spec §14 so other tools can interoperate with the reference implem
 | `hide-identity` | evolving | The log's bytes are frozen (spec §10); the Rust event types and `Membership` may still change shape |
 | `hide-epoch` | evolving | The chain's bytes are frozen (spec §11); the in-memory `EpochChain` API may change. Epoch secrets persist in `hide-keyring`'s implementation-defined `EpochStore` |
 | `hide-transparency` | evolving | Proof types follow RFC 6962 and are unlikely to change; the checkpoint format may gain a signature |
-| `hide-mls` | evolving | New in 0.6/0.7; follows `mls-rs` 0.56, whose own API is 0.x |
+| `hide-mls` | evolving | New in 0.6/0.7; follows `mls-rs` 0.57, whose own API is 0.x |
 | `hide-wasm` | evolving | Browser surface; not published to crates.io |
 | `hide-cli` | internal | The binary is the interface; the crate has no library API. Command names and flags are stable-intent (below) |
 
@@ -1100,7 +1102,7 @@ All crates in the workspace share one version (`Cargo.toml` `[workspace.package]
 
 ## Minimum supported Rust version
 
-MSRV is **1.85** (`rust-version` in `Cargo.toml`), verified in CI by the `minimum-supported-rust` job. Raising it is a **minor** bump and is listed in the changelog. The toolchain used for development is whatever `rust-toolchain.toml` pins.
+MSRV is **1.88** (`rust-version` in `Cargo.toml`), verified in CI by the `minimum-supported-rust` job. Raising it is a **minor** bump and is listed in the changelog. The toolchain used for development is whatever `rust-toolchain.toml` pins.
 
 ## Deprecation
 

@@ -80,3 +80,25 @@ export function Card({
     </section>
   );
 }
+
+/**
+ * Who signed what just opened, in the words the CLI uses. A verified signature
+ * is reported as a fingerprint and never as a name: nothing ties a key to a
+ * person, so the reader is told to check the key against one they trust.
+ */
+export function SignerLine({ signer }: { signer: string | null }) {
+  if (!signer) {
+    return (
+      <p className="status status-muted">
+        Integrity verified, but the sender is <strong>not authenticated</strong>:
+        anyone holding your public key could have encrypted this.
+      </p>
+    );
+  }
+  return (
+    <p className="status status-ok">
+      Signed by key <code>{signer}</code>. Check that key against one you
+      already trust; HIDE does not.
+    </p>
+  );
+}

@@ -8,7 +8,11 @@ use libfuzzer_sys::fuzz_target;
 
 fuzz_target!(|data: &[u8]| {
     if let Ok(records) = decode_records(data) {
-        assert_eq!(encode_records(&records).unwrap(), data, "non-canonical chain accepted");
+        assert_eq!(
+            encode_records(&records).unwrap(),
+            data,
+            "non-canonical chain accepted"
+        );
         let _ = EpochChain::verify(&records);
     }
 });

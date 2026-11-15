@@ -169,7 +169,7 @@ Revocation is not retroactive: signatures the device made while trusted stay val
 
 **Fits when** you want a detached hybrid signature (Ed25519 + ML-DSA-65; both must verify) on a release tarball, and your consumers can run `hide verify` or an SDK.
 
-**Does not fit when** consumers expect minisign/signify/cosign, or when you need transparency-log-backed signing today. **HIDE cannot yet verify its own releases with HIDE**: release binaries are checked against `SHA256SUMS` only. Sigstore-based signing of releases is planned but not implemented. A 5357-byte `.hide-sig` beside each artifact is the cost of ML-DSA-65.
+**Does not fit when** consumers expect minisign/signify/cosign, or when you need transparency-log-backed signing today. **HIDE does not sign its own releases with HIDE**: each release asset carries `SHA256SUMS` and, for every asset, a keyless Sigstore-signed SLSA provenance attestation produced by `.github/workflows/release.yml` (`gh attestation verify <file> --repo hide-protocol/hide`), not a HIDE signature. A 5357-byte `.hide-sig` beside each artifact is what signing a release with a HIDE key yourself costs (below).
 
 ```powershell
 hide --experimental sign hide-0.6.2-x86_64-unknown-linux-musl.tar.gz --secret release.hide-key

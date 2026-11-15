@@ -10,7 +10,10 @@ use hide_transparency::{
 use libfuzzer_sys::fuzz_target;
 
 fn hashes(bytes: &[u8]) -> Vec<Hash> {
-    bytes.chunks_exact(32).map(|c| c.try_into().unwrap()).collect()
+    bytes
+        .chunks_exact(32)
+        .map(|c| c.try_into().unwrap())
+        .collect()
 }
 
 fuzz_target!(|data: &[u8]| {
@@ -40,6 +43,10 @@ fuzz_target!(|data: &[u8]| {
     let _ = verify_consistency(&consistency, &root_a, &root_b);
 
     if let Ok((size, root)) = decode_checkpoint(data) {
-        assert_eq!(encode_checkpoint(size, &root), data, "non-canonical checkpoint accepted");
+        assert_eq!(
+            encode_checkpoint(size, &root),
+            data,
+            "non-canonical checkpoint accepted"
+        );
     }
 });

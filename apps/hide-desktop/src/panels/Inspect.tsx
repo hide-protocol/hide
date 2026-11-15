@@ -1,7 +1,6 @@
 import { useState } from "react";
-import { open } from "@tauri-apps/plugin-dialog";
 
-import { describe, messageOf } from "../core";
+import { chooseFile, describe, messageOf } from "../core";
 import type { Description } from "../core";
 import { Card, StatusLine } from "../ui";
 import type { Status } from "../ui";
@@ -11,10 +10,10 @@ export function Inspect() {
   const [status, setStatus] = useState<Status>({ kind: "idle" });
 
   async function choose() {
-    const chosen = await open({ multiple: false });
-    if (typeof chosen !== "string") return;
+    const chosen = await chooseFile("any");
+    if (!chosen) return;
     try {
-      setResult(await describe(chosen));
+      setResult(await describe(chosen.id));
       setStatus({ kind: "idle" });
     } catch (error) {
       setResult(null);

@@ -4,20 +4,22 @@ use std::{
     io::{self, BufReader, BufWriter, IsTerminal, Read, Write},
     path::{Path, PathBuf},
     process::ExitCode,
+    time::{Duration, SystemTime},
 };
 
 use clap::{Parser, Subcommand};
 use hide_crypto::{RecipientPublic, RecipientSecret};
 use hide_epoch::EpochChain;
-use hide_identity::IdentityLog;
+use hide_identity::{EpochBinding, IdentityLog, RecoveryBinding};
 use hide_keyring::{EpochStore, Identity, KeyFormat, KeyPurpose, MIN_PASSPHRASE_LEN};
 use hide_object::{Metadata, ObjectError, SignaturePlacement};
 use hide_sign::{SigningIdentity, VerifyingIdentity};
 use tempfile::NamedTempFile;
 use zeroize::Zeroizing;
 
-mod agent;
-mod transport;
+// The same modules, exposed by the library target as well so a fuzz target can
+// reach the agent's request decoder (see `src/lib.rs`).
+use hide_cli::{agent, transport};
 
 type Result<T> = std::result::Result<T, Box<dyn Error>>;
 
@@ -195,6 +197,11 @@ enum Command {
         label: String,
         #[arg(long, help = "Where to write the log")]
         output: PathBuf,
+        #[arg(
+            long,
+            help = "Where to write the recovery binding; defaults to <log>.binding"
+        )]
+        binding: Option<PathBuf>,
     },
     #[command(about = "Add a device to an identity log")]
     IdentityEnrol {
@@ -220,12 +227,38 @@ enum Command {
         #[arg(long, help = "The offline recovery key's public half")]
         recovery: PathBuf,
     },
+    #[command(about = "Replace every device using the offline recovery key, after losing them all")]
+    IdentityRecover {
+        #[arg(long, help = "The log to append to")]
+        log: PathBuf,
+        #[arg(long, help = "The offline recovery key itself")]
+        secret: PathBuf,
+        #[arg(long, help = "The new device's signing public key")]
+        device: PathBuf,
+        #[arg(long, help = "A label for the new device")]
+        label: String,
+        #[arg(
+            long,
+            help = "The recovery binding to check the log and the key against; defaults to <log>.binding"
+        )]
+        binding: Option<PathBuf>,
+    },
     #[command(about = "Replay an identity log and list the devices it trusts now")]
     IdentityShow {
         #[arg(long, help = "The log to replay")]
         log: PathBuf,
         #[arg(long, help = "The offline recovery key's public half")]
         recovery: PathBuf,
+        #[arg(
+            long,
+            help = "Also print the identity root: the value a relying party pins"
+        )]
+        root: bool,
+        #[arg(
+            long,
+            help = "Also check the recovery binding at this path against the log"
+        )]
+        binding: Option<PathBuf>,
     },
     #[command(
         about = "Create an epoch chain: rotating keys you can erase to make old files unreadable"
@@ -268,6 +301,19 @@ enum Command {
         #[arg(short, long, help = "Where to write the public key")]
         output: PathBuf,
     },
+    #[command(about = "Vouch for an epoch chain with the identity, so one chain can be attributed")]
+    EpochBind {
+        #[arg(long, help = "The identity log that vouches for the chain")]
+        log: PathBuf,
+        #[arg(long, help = "An already-trusted device's identity key")]
+        secret: PathBuf,
+        #[arg(long, help = "The offline recovery key's public half")]
+        recovery: PathBuf,
+        #[arg(long, help = "The published epoch history")]
+        chain: PathBuf,
+        #[arg(short, long, help = "Where to write the binding")]
+        output: PathBuf,
+    },
 }
 
 fn main() -> ExitCode {
@@ -288,6 +334,12 @@ fn run(arguments: Arguments) -> Result<()> {
         eprintln!(
             "WARNING: experimental, unaudited HIDE/0.5. A signature attests to a key, not to a person."
         );
+    }
+    // Staged plaintext from an interrupted run is removed before this command
+    // can add more of it; see `sweep_stale_staging` for why a signal handler is
+    // not the mechanism.
+    for directory in write_directories(&arguments.command) {
+        sweep_stale_staging(directory, STALE_STAGING_AGE);
     }
     match arguments.command {
         Command::Keygen {
@@ -325,7 +377,8 @@ fn run(arguments: Arguments) -> Result<()> {
             recovery,
             label,
             output,
-        } => identity_create(&secret, &recovery, &label, &output),
+            binding,
+        } => identity_create(&secret, &recovery, &label, &output, binding.as_deref()),
         Command::IdentityEnrol {
             log,
             secret,
@@ -339,7 +392,19 @@ fn run(arguments: Arguments) -> Result<()> {
             device,
             recovery,
         } => identity_revoke(&log, &secret, &device, &recovery),
-        Command::IdentityShow { log, recovery } => identity_show(&log, &recovery),
+        Command::IdentityRecover {
+            log,
+            secret,
+            device,
+            label,
+            binding,
+        } => identity_recover(&log, &secret, &device, &label, binding.as_deref()),
+        Command::IdentityShow {
+            log,
+            recovery,
+            root,
+            binding,
+        } => identity_show(&log, &recovery, root, binding.as_deref()),
         Command::EpochInit { output, store } => epoch_init(&output, &store),
         Command::EpochAdvance { chain, store } => epoch_advance(&chain, &store),
         Command::EpochErase {
@@ -353,6 +418,13 @@ fn run(arguments: Arguments) -> Result<()> {
             chain,
             output,
         } => epoch_public(epoch, &chain, &output),
+        Command::EpochBind {
+            log,
+            secret,
+            recovery,
+            chain,
+            output,
+        } => epoch_bind(&chain, &log, &secret, &recovery, &output),
         Command::Open {
             input,
             secret,
@@ -427,6 +499,141 @@ fn read_armored_message(input: Option<&Path>) -> Result<String> {
         return Err("that armored message is larger than 1 MiB; use `open` instead".into());
     }
     String::from_utf8(bytes).map_err(|_| "an armored message must be valid UTF-8".into())
+}
+
+/// Every publish path stages into a same-directory temporary file whose name
+/// starts with this.
+const STAGING_PREFIX: &str = ".hide-staging-";
+
+/// How long a staging file must have gone untouched before it counts as
+/// abandoned. A run that is still writing one refreshes its modification time,
+/// so a concurrent `hide` working in the same directory is never swept.
+const STALE_STAGING_AGE: Duration = Duration::from_secs(60 * 60);
+
+/// Removes staged plaintext that an interrupted run left behind.
+///
+/// A staging file is deleted by `NamedTempFile`'s `Drop`, and no destructor
+/// runs when a process is interrupted: a SIGINT on Unix, a terminated process
+/// on either platform. `tempfile`'s *named* files carry `FILE_ATTRIBUTE_TEMPORARY`
+/// rather than `FILE_FLAG_DELETE_ON_CLOSE` on Windows, so they survive there
+/// too. What is left behind is partial, unauthenticated plaintext — the FINAL
+/// record may never have been seen.
+///
+/// A signal handler is deliberately *not* the mechanism. It could only make
+/// async-signal-safe calls (`remove_file` is not one), it cannot be installed
+/// without a dependency this build forbids (`unsafe_code = "forbid"`), and it
+/// would not fire for `SIGKILL` or `TerminateProcess` anyway. Sweeping at
+/// start-up covers every one of those cases with one mechanism.
+///
+/// It stays narrow on purpose: only the exact staging prefix, only regular
+/// files, only in a directory the command is about to write to, and only files
+/// nothing has touched for `age`. Nothing this process holds can match, because
+/// the sweep runs before any command has staged anything.
+fn sweep_stale_staging(directory: &Path, age: Duration) {
+    let Ok(entries) = std::fs::read_dir(directory) else {
+        // A directory that does not exist yet has nothing to sweep.
+        return;
+    };
+    for entry in entries.flatten() {
+        let Ok(name) = entry.file_name().into_string() else {
+            continue;
+        };
+        if !name.starts_with(STAGING_PREFIX) {
+            continue;
+        }
+        let Ok(metadata) = entry.metadata() else {
+            continue;
+        };
+        if !metadata.is_file() {
+            continue;
+        }
+        let Ok(modified) = metadata.modified() else {
+            continue;
+        };
+        let abandoned = SystemTime::now()
+            .duration_since(modified)
+            .is_ok_and(|elapsed| elapsed >= age);
+        if !abandoned {
+            continue;
+        }
+        // Best effort: this clears someone else's leftovers, so a failure must
+        // not turn a working command into a failing one. A file another process
+        // still holds open simply stays, and is reported.
+        match std::fs::remove_file(entry.path()) {
+            Ok(()) => eprintln!(
+                "hide: removed staged plaintext left behind by an interrupted run: {}",
+                entry.path().display()
+            ),
+            Err(error) => eprintln!(
+                "hide: could not remove staged plaintext {}: {error}",
+                entry.path().display()
+            ),
+        }
+    }
+}
+
+/// The directory a path is created in, resolved exactly as `new_output` does.
+fn output_directory(path: &Path) -> &Path {
+    path.parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+        .unwrap_or(Path::new("."))
+}
+
+/// The directories this command is about to stage into. The sweep is limited to
+/// these: a directory the command only reads from may hold another run's live
+/// staging file, and touching it can only do harm. Where a default output path
+/// is derived from another argument (`<public>.sign`, `<input>.hide-sig`,
+/// `<log>.binding`) it lands in that argument's own directory, so only an
+/// explicit override can add a directory.
+fn write_directories(command: &Command) -> Vec<&Path> {
+    let paths: Vec<&Path> = match command {
+        Command::Keygen {
+            secret,
+            public,
+            signing_public,
+            ..
+        } => {
+            let mut paths = vec![secret.as_path(), public.as_path()];
+            if let Some(signing_public) = signing_public.as_deref() {
+                paths.push(signing_public);
+            }
+            paths
+        }
+        Command::TestKeygen { secret, public } => vec![secret, public],
+        Command::Encrypt { output, .. } | Command::Open { output, .. } => vec![output],
+        Command::Seal { output, .. } => output.iter().map(PathBuf::as_path).collect(),
+        Command::Passwd { secret } => vec![secret],
+        Command::Sign { input, output, .. } => vec![output.as_deref().unwrap_or(input)],
+        Command::IdentityCreate {
+            output, binding, ..
+        } => {
+            let mut paths = vec![output.as_path()];
+            if let Some(binding) = binding.as_deref() {
+                paths.push(binding);
+            }
+            paths
+        }
+        Command::IdentityEnrol { log, .. }
+        | Command::IdentityRevoke { log, .. }
+        | Command::IdentityRecover { log, .. } => vec![log],
+        Command::EpochInit { output, store } => vec![output, store],
+        Command::EpochAdvance { chain, store } => vec![chain, store],
+        Command::EpochErase { store, .. } => vec![store],
+        Command::EpochPublic { output, .. } | Command::EpochBind { output, .. } => vec![output],
+        // Commands with no staged output: they read, print, or open a socket.
+        Command::Unseal { .. }
+        | Command::Info { .. }
+        | Command::Share { .. }
+        | Command::Verify { .. }
+        | Command::SshKey { .. }
+        | Command::Agent { .. }
+        | Command::IdentityShow { .. }
+        | Command::EpochShow { .. } => Vec::new(),
+    };
+    let mut directories: Vec<&Path> = paths.into_iter().map(output_directory).collect();
+    directories.sort_unstable();
+    directories.dedup();
+    directories
 }
 
 fn new_output(path: &Path) -> Result<NamedTempFile> {
@@ -1197,19 +1404,49 @@ fn load_identity_log(log: &Path, recovery: &Path) -> Result<(IdentityLog, Verify
     ))
 }
 
-fn identity_create(secret: &Path, recovery: &Path, label: &str, output: &Path) -> Result<()> {
+fn identity_create(
+    secret: &Path,
+    recovery: &Path,
+    label: &str,
+    output: &Path,
+    binding_path: Option<&Path>,
+) -> Result<()> {
     let founder = load_signing_identity(secret)?;
     let recovery_key = load_verifying_identity(recovery)?;
     let log = IdentityLog::create(&founder, label, &recovery_key)?;
+    // §16.1. The Create entry names only the founding device, so the log alone
+    // cannot say which recovery key is genuine: anyone can append a Recover
+    // signed by their own key and claim it. This statement, signed by the
+    // founder while it certainly holds its key, is what a sender checks before
+    // encrypting to the identity, and what it pins the root against.
+    let binding = RecoveryBinding::create(&log, &founder)?;
+    let binding_path = binding_path
+        .map(PathBuf::from)
+        .unwrap_or_else(|| append_extension(output, "binding"));
+    if binding_path == output {
+        return Err("the recovery binding must not be written over the log".into());
+    }
     // A fresh identity replaces the whole device history and its root, so it
     // must not clobber an existing log by accident (README: never overwrite).
-    // Later entries (enrol, revoke) intentionally grow the log in place.
+    // The same goes for the binding, which names that root. Later entries
+    // (enrol, revoke, recover) intentionally grow the log in place; the binding
+    // names only the root, which never changes, so it is not rewritten.
     let mut staging = new_output(output)?;
+    let mut binding_staging = new_output(&binding_path)?;
     staging.write_all(&hide_identity::encode(log.entries())?)?;
+    binding_staging.write_all(&binding.encode())?;
+    // The binding first: the log is the identity, and an orphan binding is
+    // easier to explain than a log whose recovery key nobody can check.
+    commit_output(binding_staging, &binding_path)?;
     commit_output(staging, output)?;
     eprintln!(
         "Identity created with one device. Head {}.",
         short_hex(&log.head())
+    );
+    eprintln!("Root {}.", full_hex(&log.root()));
+    eprintln!(
+        "Recovery binding written to {}. Senders check it against the root before they encrypt.",
+        binding_path.display()
     );
     Ok(())
 }
@@ -1240,10 +1477,82 @@ fn identity_revoke(log_path: &Path, secret: &Path, device: &Path, recovery: &Pat
     Ok(())
 }
 
-fn identity_show(log_path: &Path, recovery: &Path) -> Result<()> {
+/// Replaces every device, signed by the offline recovery key. This is the way
+/// back in after losing every device, and the only event that key can author.
+///
+/// The recovery key is passed as `--secret` rather than as `--recovery`: the
+/// secret half is the only thing that can sign the entry, so a public half could
+/// only restate it.
+///
+/// The recovery binding is what makes this safe to do at all. A log says nothing
+/// about which recovery key is genuine — the founding entry names only the first
+/// device — so anyone holding a copy of the log can append a Recover signed by a
+/// key of their own and claim the identity (spec §15.1). The founder's binding is
+/// the statement that names the real key, so it is checked, and the replacement
+/// is refused when it does not name the key being used.
+fn identity_recover(
+    log_path: &Path,
+    secret: &Path,
+    device: &Path,
+    label: &str,
+    binding_path: Option<&Path>,
+) -> Result<()> {
+    let recovery = load_signing_identity(secret)?;
+    let recovery_key = recovery.verifying_key();
+    let binding_path = binding_path
+        .map(PathBuf::from)
+        .unwrap_or_else(|| append_extension(log_path, "binding"));
+    let binding = match read_public_file(&binding_path) {
+        Ok(bytes) => RecoveryBinding::decode(&bytes)?,
+        Err(error) => {
+            return Err(format!(
+                "{} cannot be read ({error}); without it the recovery key cannot be told apart \
+                 from one an attacker appended to the log, so no device set is replaced",
+                binding_path.display()
+            )
+            .into());
+        }
+    };
+    if binding.recovery_key != recovery_key {
+        return Err(format!(
+            "{} binds recovery key {}, not the one you gave; refusing to replace the device set",
+            binding_path.display(),
+            fingerprint(&binding.recovery_key)
+        )
+        .into());
+    }
+    let entries = hide_identity::decode(&read_public_file(log_path)?)?;
+    // The founder's signature over this root and this recovery key, then a replay
+    // of the log under it. The pinned value is the root the binding carries, which
+    // is printed below so it can be compared with the one `identity-create`
+    // showed; only that comparison catches a log and a binding swapped together.
+    let mut log = binding.verify_pinned(entries, &binding.root)?;
+    let new_device = load_verifying_identity(device)?;
+    let at = log.recover(&recovery, &new_device, label)?;
+    write_public_file(log_path, &hide_identity::encode(log.entries())?)?;
+    eprintln!("Recovered at entry {at}. Every device enrolled before it is no longer trusted.");
+    eprintln!(
+        "Root {}, head {}. Containers those devices already hold stay readable to them.",
+        full_hex(&log.root()),
+        short_hex(&log.head())
+    );
+    Ok(())
+}
+
+fn identity_show(
+    log_path: &Path,
+    recovery: &Path,
+    root: bool,
+    binding: Option<&Path>,
+) -> Result<()> {
     let (log, _) = load_identity_log(log_path, recovery)?;
     let membership = log.membership();
     println!("head    {}", short_hex(&log.head()));
+    if root {
+        // Printed in full: this is the value a relying party pins, and a
+        // truncated pin is not a pin.
+        println!("root    {}", full_hex(&log.root()));
+    }
     println!("entries {}", log.entries().len());
     println!("devices {}", membership.len());
     for device in membership.devices() {
@@ -1254,6 +1563,32 @@ fn identity_show(log_path: &Path, recovery: &Path) -> Result<()> {
             device.enrolled_at
         );
     }
+    if let Some(binding_path) = binding {
+        report_recovery_binding(binding_path, log_path, &log)?;
+    }
+    Ok(())
+}
+
+/// §16.1 as a relying party runs it. The founder's signature over the root and
+/// the recovery key is what names the genuine recovery key, so a binding that
+/// does not verify under entry 0 is refused rather than preferred.
+fn report_recovery_binding(binding_path: &Path, log_path: &Path, log: &IdentityLog) -> Result<()> {
+    let binding = RecoveryBinding::decode(&read_public_file(binding_path)?)?;
+    let entries = hide_identity::decode(&read_public_file(log_path)?)?;
+    // The pinned root is the log's own entry-0 link; the binding for another
+    // identity is refused, not compared.
+    let verified = binding.verify_pinned(entries, &log.root())?;
+    println!(
+        "binding recovery key {}",
+        fingerprint(verified.recovery_key())
+    );
+    println!("binding root         {}", full_hex(&binding.root));
+    // A second, independent replay: the device set the log yields under the
+    // recovery key *the binding names* rather than the one `--recovery` supplied.
+    // A Recover entry signed by any other key has already been refused by then,
+    // so a disagreement with the listing above means the two keys are not the
+    // same, and it is worth seeing.
+    println!("binding devices      {}", verified.membership().len());
     Ok(())
 }
 
@@ -1441,8 +1776,49 @@ fn epoch_show(chain: &Path) -> Result<()> {
     Ok(())
 }
 
+/// Attributes an epoch chain to an identity (spec §16.4). Without this anyone
+/// can publish a chain and claim it is yours, and a reader has no way to tell.
+///
+/// The bound head mattering here is the log's current head: revoking a device
+/// withdraws every chain it vouched for, and the remaining devices re-bind.
+fn epoch_bind(
+    chain_path: &Path,
+    log_path: &Path,
+    secret: &Path,
+    recovery: &Path,
+    output: &Path,
+) -> Result<()> {
+    let records = hide_epoch::decode_records(&read_public_file(chain_path)?)?;
+    let (log, _) = load_identity_log(log_path, recovery)?;
+    let device = load_signing_identity(secret)?;
+    let binding = EpochBinding::create(&log, &device, &records)?;
+    // Check it exactly as a stranger would before publishing it: the signer has
+    // to be trusted by the log's membership now, and the chain has to be the one
+    // the binding names.
+    binding.verify(&log, &records)?;
+    let mut staging = new_output(output)?;
+    staging.write_all(&binding.encode())?;
+    commit_output(staging, output)?;
+    eprintln!(
+        "Epoch binding written to {}. It vouches for {} epoch(s) at chain head {}, \
+         under identity root {}.",
+        output.display(),
+        binding.epochs,
+        short_hex(&binding.chain_head),
+        short_hex(&binding.identity_root)
+    );
+    Ok(())
+}
+
 fn short_hex(bytes: &[u8]) -> String {
     bytes.iter().take(8).map(|b| format!("{b:02x}")).collect()
+}
+
+/// The whole value, for what has to be compared rather than recognised. The
+/// identity root is 32 bytes and is what a relying party pins, so half of it is
+/// no use for anything but display.
+fn full_hex(bytes: &[u8]) -> String {
+    bytes.iter().map(|byte| format!("{byte:02x}")).collect()
 }
 
 /// The binary reads passphrases only from a terminal, so these drive the
@@ -1738,7 +2114,8 @@ mod key_tests {
             "an identity file must keep its key"
         );
 
-        // A protected legacy-style encryption-only file.
+        // A protected encryption-only file, the shape a recipient key has had
+        // since purposes existed. A file from before them is covered below.
         let legacy = directory.path().join("recipient.sec");
         let recipient = RecipientSecret::from_bytes(&seed).unwrap();
         std::fs::write(
@@ -1752,6 +2129,11 @@ mod key_tests {
             hide_keyring::unprotect_seed(&std::fs::read(&legacy).unwrap(), "new passphrase")
                 .unwrap();
         assert_eq!(purpose, KeyPurpose::Encryption, "the purpose must survive");
+        assert_eq!(
+            public_from_file(&legacy, "new passphrase"),
+            recipient.public_key().unwrap().to_bytes().to_vec(),
+            "an encryption-only file must keep its key"
+        );
     }
 
     #[test]
@@ -1770,5 +2152,59 @@ mod key_tests {
             "a wrong current passphrase must be refused"
         );
         assert_eq!(std::fs::read(&path).unwrap(), before);
+    }
+
+    /// A key file written by v0.4.0, laid out before the purpose byte existed:
+    /// `HIDE-KEY`, version 1, then `parallelism u8 || memory_kib u32be ||
+    /// iterations u32be`, the salt and the nonce, all of it the AAD for a
+    /// ChaCha20-Poly1305 seal of the 32-byte seed. Argon2id at 19456 KiB, two
+    /// iterations and one lane — what that release used — derives the wrapping
+    /// key from the passphrase below.
+    ///
+    /// The test opens it, so this is a real v1 file rather than a guess at one.
+    const LEGACY_V1_FILE: &str = "SElERS1LRVkBAQAATAAAAAACMjIyMjIyMjIyMjIyMjIyMjMzMzMzMzMzMzMzM+Tii+dt1y4jmR0XETkGI4YBQkuBwHIjPf7fQ/luNB+ZxX80Sw+ZPwp99B+HbMECPQ==";
+    const LEGACY_V1_PASSPHRASE: &str = "correct horse battery";
+    /// The seed the fixture seals.
+    const LEGACY_V1_SEED: [u8; 32] = [0x31; 32];
+
+    fn legacy_v1_bytes() -> Vec<u8> {
+        use base64::{Engine, engine::general_purpose::STANDARD};
+        STANDARD.decode(LEGACY_V1_FILE).expect("fixture is base64")
+    }
+
+    /// A v1 file's 32 bytes *are* the recipient seed and it carries no purpose
+    /// byte, so re-sealing must keep it encryption-only and keep its key. Reading
+    /// those bytes as anything but the seed, or sealing them as an identity,
+    /// would silently produce a different key that opens nothing.
+    #[test]
+    fn changing_the_passphrase_keeps_the_key_of_a_v1_key_file() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("legacy.test-secret");
+        std::fs::write(&path, legacy_v1_bytes()).unwrap();
+
+        let (opened, purpose) =
+            hide_keyring::unprotect_seed(&legacy_v1_bytes(), LEGACY_V1_PASSPHRASE).unwrap();
+        assert_eq!(*opened, LEGACY_V1_SEED, "the fixture must be a v1 key file");
+        assert_eq!(purpose, KeyPurpose::Encryption);
+        let expected = RecipientSecret::from_bytes(&LEGACY_V1_SEED)
+            .unwrap()
+            .public_key()
+            .unwrap()
+            .to_bytes()
+            .to_vec();
+
+        let bytes = std::fs::read(&path).unwrap();
+        assert_eq!(bytes.len(), 94, "a v1 key file is 94 bytes");
+        reseal_key(&path, &bytes, Some(LEGACY_V1_PASSPHRASE), "new passphrase").unwrap();
+
+        assert_eq!(
+            hide_keyring::inspect(&std::fs::read(&path).unwrap()),
+            KeyFormat::Protected
+        );
+        assert_eq!(
+            public_from_file(&path, "new passphrase"),
+            expected,
+            "a v1 key file must keep the key it stands for"
+        );
     }
 }

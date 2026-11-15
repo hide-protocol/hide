@@ -1,8 +1,14 @@
 import { useState } from "react";
-import { open } from "@tauri-apps/plugin-dialog";
 
-import { messageOf, sealMessage, unsealMessage } from "../core";
-import { Card, Field, PathPicker, StatusLine } from "../ui";
+import {
+  chooseFile,
+  chooseFiles,
+  messageOf,
+  sealMessage,
+  unsealMessage,
+} from "../core";
+import type { Selection } from "../core";
+import { Card, Field, PathPicker, SignerLine, StatusLine } from "../ui";
 import type { Status } from "../ui";
 
 function basename(path: string): string {
@@ -12,31 +18,31 @@ function basename(path: string): string {
 
 export function Messages() {
   const [text, setText] = useState("");
-  const [recipients, setRecipients] = useState<string[]>([]);
+  const [recipients, setRecipients] = useState<Selection[]>([]);
   const [sealed, setSealed] = useState("");
   const [sealStatus, setSealStatus] = useState<Status>({ kind: "idle" });
 
   const [incoming, setIncoming] = useState("");
-  const [secret, setSecret] = useState<string | null>(null);
+  const [secret, setSecret] = useState<Selection | null>(null);
   const [passphrase, setPassphrase] = useState("");
   const [plaintext, setPlaintext] = useState<string | null>(null);
+  const [signer, setSigner] = useState<string | null>(null);
   const [openStatus, setOpenStatus] = useState<Status>({ kind: "idle" });
 
+  const sealing = sealStatus.kind === "busy";
+  const opening = openStatus.kind === "busy";
+
   async function addRecipients() {
-    const chosen = await open({
-      multiple: true,
-      filters: [{ name: "HIDE public key", extensions: ["hide-pub", "txt"] }],
+    const added = await chooseFiles("public", true);
+    setRecipients((current) => {
+      const seen = new Set(current.map((entry) => entry.path));
+      return [...current, ...added.filter((entry) => !seen.has(entry.path))];
     });
-    const added = Array.isArray(chosen) ? chosen : typeof chosen === "string" ? [chosen] : [];
-    setRecipients((current) => [...new Set([...current, ...added])]);
   }
 
   async function pickSecret() {
-    const chosen = await open({
-      multiple: false,
-      filters: [{ name: "HIDE secret key", extensions: ["hide-key"] }],
-    });
-    if (typeof chosen === "string") setSecret(chosen);
+    const chosen = await chooseFile("secret");
+    if (chosen) setSecret(chosen);
   }
 
   async function seal() {
@@ -50,7 +56,12 @@ export function Messages() {
     }
     setSealStatus({ kind: "busy", text: "Encrypting." });
     try {
-      setSealed(await sealMessage(text, recipients));
+      setSealed(
+        await sealMessage(
+          text,
+          recipients.map((entry) => entry.id),
+        ),
+      );
       setSealStatus({
         kind: "ok",
         text: "Encrypted. Copy the block below into an email or chat.",
@@ -67,16 +78,17 @@ export function Messages() {
       return;
     }
     setOpenStatus({ kind: "busy", text: "Decrypting and verifying." });
+    setPlaintext(null);
+    setSigner(null);
     try {
-      const result = await unsealMessage(incoming, secret, passphrase || null);
+      const result = await unsealMessage(incoming, secret.id, passphrase || null);
       setPassphrase("");
-      setPlaintext(result);
-      setOpenStatus({
-        kind: "ok",
-        text: "The message is intact. HIDE cannot confirm who sent it.",
-      });
+      setPlaintext(result.text);
+      setSigner(result.signer);
+      setOpenStatus({ kind: "ok", text: "The message is intact." });
     } catch (error) {
       setPlaintext(null);
+      setSigner(null);
       setOpenStatus({ kind: "error", text: messageOf(error) });
     }
   }
@@ -99,7 +111,7 @@ export function Messages() {
           <span className="picker">
             <input
               readOnly
-              value={recipients.map(basename).join(", ")}
+              value={recipients.map((entry) => basename(entry.path)).join(", ")}
               placeholder="Nobody yet"
             />
             <button type="button" onClick={addRecipients}>
@@ -112,7 +124,12 @@ export function Messages() {
             ) : null}
           </span>
         </Field>
-        <button type="button" className="primary" onClick={seal}>
+        <button
+          type="button"
+          className="primary"
+          onClick={seal}
+          disabled={sealing}
+        >
           Encrypt message
         </button>
         <StatusLine status={sealStatus} />
@@ -143,7 +160,7 @@ export function Messages() {
         </Field>
         <PathPicker
           label="Your secret key"
-          value={secret}
+          value={secret?.path ?? null}
           buttonText="Choose key"
           onPick={pickSecret}
         />
@@ -154,7 +171,12 @@ export function Messages() {
             onChange={(event) => setPassphrase(event.target.value)}
           />
         </Field>
-        <button type="button" className="primary" onClick={unseal}>
+        <button
+          type="button"
+          className="primary"
+          onClick={unseal}
+          disabled={opening}
+        >
           Read message
         </button>
         <StatusLine status={openStatus} />
@@ -162,6 +184,7 @@ export function Messages() {
           <div className="result">
             <p className="field-label">Message:</p>
             <textarea readOnly rows={5} value={plaintext} />
+            <SignerLine signer={signer} />
           </div>
         ) : null}
       </Card>

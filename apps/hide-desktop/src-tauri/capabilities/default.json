@@ -1,12 +1,7 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
-  "description": "File pickers only. The application has no network, shell or filesystem-wide access; every read and write goes through a Rust command on a path the user picked.",
+  "description": "No dialog, network, shell or filesystem access for the webview. The file dialogs run in Rust, which keeps the path the user chose and hands the webview an opaque id instead; every read and write goes through a Rust command that resolves such an id and nothing else.",
   "windows": ["main"],
-  "permissions": [
-    "core:default",
-    "dialog:allow-open",
-    "dialog:allow-save",
-    "dialog:allow-message"
-  ]
+  "permissions": ["core:default"]
 }

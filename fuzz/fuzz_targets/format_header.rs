@@ -37,10 +37,18 @@ fuzz_target!(|data: &[u8]| {
     }
 
     if let Ok(header) = ProtectedHeader::decode(data) {
-        assert_eq!(header.encode().unwrap(), data, "non-canonical header accepted");
+        assert_eq!(
+            header.encode().unwrap(),
+            data,
+            "non-canonical header accepted"
+        );
     }
 
     if let Ok(metadata) = Metadata::decode(data) {
-        assert_eq!(metadata.encode().unwrap(), data, "non-canonical metadata accepted");
+        assert_eq!(
+            metadata.encode().unwrap(),
+            data,
+            "non-canonical metadata accepted"
+        );
     }
 });

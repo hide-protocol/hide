@@ -2,7 +2,7 @@
 
 *HIDE is experimental and has not been audited by a third party. See [audit-status.md](audit-status.md).*
 
-Short factual answers. Each links to the document that carries the detail. "HIDE" here means version 0.6.x of the crates, CLI and SDKs in this repository.
+Short factual answers. Each links to the document that carries the detail. "HIDE" here means version 0.9.x of the crates, CLI and SDKs in this repository.
 
 ## What is HIDE?
 
@@ -42,7 +42,7 @@ X-Wing is a specified, analysed combiner of X25519 and ML-KEM-768 with an IANA-a
 
 ## Why 64 KiB chunks?
 
-64 KiB is large enough that per-chunk overhead (16-byte tag, 5-byte record header) is 0.03 %, and small enough that a decryptor holds two fixed buffers — measured peak RSS is 7 MB for a 256 MB file. It is also the chunk size age's STREAM uses, so the trade-off is well understood. Each chunk's AAD binds object id, header hash, counter, kind and length ([../spec/hide-1.md](../spec/hide-1.md) §5).
+64 KiB is large enough that per-chunk overhead (16-byte tag, 5-byte record header) is 0.03 %, and small enough that a decryptor holds two fixed 64 KiB buffers however large the file is. It is also the chunk size age's STREAM uses, so the trade-off is well understood. Each chunk's AAD binds object id, header hash, counter, kind and length ([../spec/hide-1.md](../spec/hide-1.md) §5).
 
 ## Can HIDE stream large files?
 
@@ -120,7 +120,7 @@ No. It calls the same Rust crates as the CLI, key material never reaches the web
 
 ## Is there a formal specification and are there test vectors?
 
-Yes: [../spec/hide-1.md](../spec/hide-1.md) is normative, and `conformance/vectors/` holds frozen containers, GREASE vectors that exercise the extension points, subsystem vectors and thirty rejection vectors, all listed with expected outcome and SHA-256 in `manifest.json` ([../conformance/vectors/README.md](../conformance/vectors/README.md)). An independent Node implementation (`conformance/node/verify.mjs`) decrypts the vectors and refuses the rejections, so two implementations agree on what is invalid, not only on what is valid. Both are maintained in this repository; an outside implementation would be worth more.
+Yes: [../spec/hide-1.md](../spec/hide-1.md) is normative, and `conformance/vectors/` holds frozen containers, GREASE vectors that exercise the extension points, subsystem vectors and thirty-two rejection vectors, all listed with expected outcome and SHA-256 in `manifest.json` ([../conformance/vectors/README.md](../conformance/vectors/README.md)). An independent Node implementation (`conformance/node/verify.mjs`) decrypts the vectors and refuses the rejections, so two implementations agree on what is invalid, not only on what is valid. Both are maintained in this repository; an outside implementation would be worth more.
 
 ## How can I help, audit or fund?
 

@@ -2,11 +2,11 @@
 
 *HIDE is experimental and has not been audited by a third party. See [audit-status.md](audit-status.md).*
 
-HIDE is a Rust workspace of ten library crates and one binary, a Tauri desktop app kept outside the workspace, and nine language SDKs that all sit on one C ABI. This document describes the crate boundaries, the single seam every binding crosses, how the SDKs find the compiled core, how releases are built, and how CI enforces the invariants in [../AGENTS.md](../AGENTS.md).
+HIDE is a Rust workspace of eleven library crates and one binary, a Tauri desktop app kept outside the workspace, and nine language SDKs that all sit on one C ABI. This document describes the crate boundaries, the single seam every binding crosses, how the SDKs find the compiled core, how releases are built, and how CI enforces the invariants in [../AGENTS.md](../AGENTS.md).
 
 ## Crate dependency graph
 
-Derived from each crate's `Cargo.toml` on 0.8.0. Arrows point at dependencies.
+Derived from each crate's `Cargo.toml` on 0.9.1, dev-dependency edges included (`hide-identity` reaches `hide-transparency`, and `hide-object` reaches `hide-keyring`, only for their vector checkers). Arrows point at dependencies.
 
 ```mermaid
 graph TD
@@ -31,7 +31,10 @@ graph TD
     object --> sign
     object --> keyring
     identity --> sign
+    identity --> epoch
+    identity --> transparency
     epoch --> crypto
+    transparency --> sign
     mls --> identity
     mls --> sign
 
@@ -44,7 +47,7 @@ graph TD
     browser[@hide-protocol/wasm] -.-> wasm
 ```
 
-`hide-transparency` has no HIDE dependencies (SHA-256 only). `hide-mls` is not reached by the CLI, the FFI or WASM yet; it is a Rust-only surface in 0.6.x.
+`hide-transparency` reaches `hide-sign` only (its own leaf work is SHA-256). `hide-mls` is not reached by the CLI, the FFI or WASM yet; it is a Rust-only surface in 0.9.x.
 
 ## One paragraph per crate
 
@@ -64,7 +67,7 @@ graph TD
 
 **hide-transparency** — RFC 6962 Merkle tree with `0x00`/`0x01` leaf/node prefixes, checkpoint `size ‖ root`, inclusion and consistency proofs, swept over every size 1..=33 in tests. No witnessing, so split views are not detected.
 
-**hide-mls** — MLS (RFC 9420) through `mls-rs` 0.56 on `MLS_128_DHKEMX25519_AES128GCM_SHA256_Ed25519` (classical; `PQ_STATUS` says so). Supplies credential type `0xF01D`: a HIDE-signed binding of device id and MLS signature key, checked against the identity log's current membership on every roster change. `accept_from_trusted` refuses messages from revoked devices; `untrusted_members` lists who to remove.
+**hide-mls** — MLS (RFC 9420) through `mls-rs` 0.57 on `MLS_128_DHKEMX25519_AES128GCM_SHA256_Ed25519` (classical; `PQ_STATUS` says so). Supplies credential type `0xF01D`: a HIDE-signed binding of device id and MLS signature key, checked against the identity log's current membership on every roster change. `accept_from_trusted` refuses messages from revoked devices; `untrusted_members` lists who to remove.
 
 **hide-ffi** — The C ABI, and the only crate without `unsafe_code = "forbid"`. Opaque handles for secret keys, signing identities and spent-nonce sets; length-prefixed `HideBuffer` for every output; integer error codes including `HIDE_ERR_MALFORMED` distinct from `HIDE_ERR_AUTHENTICATION`. Built with `panic = "unwind"` so a panic becomes `HIDE_ERR_PANIC` instead of aborting the host. The header is `include/hide.h`.
 
@@ -93,9 +96,9 @@ Each package bundles the compiled core for seven targets listed in [../sdk/nativ
 
 ## Build, test and release
 
-**Local.** `cargo test --workspace --all-features` (360 tests). The desktop crate is tested separately by manifest path. Husky hooks installed by `npm install` at the root: pre-commit runs `cargo fmt` and `clippy -D warnings` when Rust files are staged; pre-push runs the full suite, a release build, the desktop clippy/test, the cross-surface check, and refuses to push if `conformance/vectors` is dirty.
+**Local.** `cargo test --workspace --all-features` (411 tests). The desktop crate is tested separately by manifest path. Husky hooks installed by `npm install` at the root: pre-commit runs `cargo fmt` and `clippy -D warnings` when Rust files are staged; pre-push runs the full suite, a release build, the desktop clippy/test, the cross-surface check, and refuses to push if `conformance/vectors` is dirty.
 
-**CI (`.github/workflows/ci.yml`).** Jobs: `lint` (fmt, clippy, `scripts/set-version.ps1 -Check`), `test` on ubuntu-24.04 / windows-2025 / macos-15, `desktop` (Linux; greps for the interop skip message and fails), `sdks` (builds the core, runs all nine surfaces plus the C ABI test and the cross-surface check, greps for skip messages), `interoperability` (Rust vector test, `generate_v1_vectors -- --check`, and the independent Node verifier over `manifest.json`), `minimum-supported-rust` (`cargo +1.85 check`), `supply-chain` (`cargo audit --deny warnings` and `cargo deny check`: licences, banned `openssl`/`ring`, unknown registries, attributed duplicate versions), `fuzz` (eight libFuzzer targets seeded from the frozen vectors, 45 s each, crashes kept as artifacts). `fuzz-nightly.yml` runs each of the eight for four hours in parallel with the corpus carried forward; a crash or hang opens an issue labelled `fuzz` + `security`.
+**CI (`.github/workflows/ci.yml`).** Jobs: `lint` (fmt, clippy, `scripts/set-version.ps1 -Check`), `test` on ubuntu-24.04 / windows-2025 / macos-15, `desktop` (Linux; greps for the interop skip message and fails), `sdks` (builds the core, runs all nine surfaces plus the C ABI test and the cross-surface check, greps for skip messages), `interoperability` (Rust vector test, `generate_v1_vectors -- --check`, the independent Node verifier over `manifest.json`, and the Rust↔Node differential run), `minimum-supported-rust` (`cargo +1.88 check`), `supply-chain` (`cargo audit --deny warnings` and `cargo deny check`: licences, banned `openssl`/`ring`, unknown registries, attributed duplicate versions), `fuzz` (eleven libFuzzer targets seeded from the frozen vectors, 45 s each, crashes kept as artifacts). `fuzz-nightly.yml` runs each of the eleven for four hours (a `workflow_dispatch` input can raise or lower this, capped at 270 minutes per target) in parallel with the corpus carried forward; a crash or hang opens an issue labelled `fuzz` + `security`.
 
 **Release (`release.yml`).** Builds the CLI for Linux x86-64/ARM64/musl, Windows x86-64/ARM64, macOS ARM64/x86-64; the desktop installers and the portable build; `SHA256SUMS` over every asset; generates `packaging/` manifests from the real checksums (unpublished by policy).
 
@@ -109,12 +112,12 @@ The invariants are written once, in [../AGENTS.md](../AGENTS.md). Each has at le
 | --- | --- |
 | No new primitives, no hand-rolled KEM combiner | Review; the dependency list is pinned `=`, `cargo audit` runs in CI, and `cargo deny` bans a second crypto stack |
 | Secrets never derive `Debug`/`Clone`/`Serialize`; zeroize on drop | Compile-time: a test that `unwrap_err()`s a `Result<RecipientSecret,_>` does not compile, which is the point |
-| Validate limits before allocating | Fuzz targets `format_header`, `object_open`, `keyring_open`, `identity_log`, `epoch_chain`, `transparency_proofs`, `challenge_decode`, `mls_message`; proptest "parser never panics" |
+| Validate limits before allocating | Fuzz targets `format_header`, `object_open`, `keyring_open`, `identity_log`, `epoch_chain`, `transparency_proofs`, `challenge_decode`, `mls_message`, `epoch_store`, `checkpoint_note`, `identity_bindings`; proptest "parser never panics" |
 | Authenticate the exact received `protected` bytes | Frozen vectors are byte-exact; rejection vectors include flipped header bits and re-MACed headers with a changed extension or a removed unknown stanza |
 | Never publish plaintext before FINAL authenticates | Truncation and trailing-byte rejection vectors; property tests; CLI staging-then-commit |
 | Never use a decrypted filename as a path | Filename validation in `hide-format`; `/` refused as malformed at the ABI |
 | Reject small-order X25519 components | Rejection vector `small-order recipient key`; unit test over all seven points |
-| Streaming allocates nothing per chunk | Throughput example and the measured 7 MB peak RSS; reviewed, not asserted in CI |
+| Streaming allocates nothing per chunk | Two fixed buffers and one reused `ChunkCipher` in `hide-object`; reviewed, not asserted in CI |
 | Claims in README/spec are backed by a test | Convention; the "What is verified today" list in the README names the test per claim |
 | Desktop app contains no cryptography | It depends only on `hide-crypto`, `hide-keyring`, `hide-object`; no `unsafe`; key material stays in Rust commands |
 | CLI and desktop open each other's output; the test cannot silently skip | `src-tauri/tests/interop.rs`; CI greps `desktop-tests.log` for the skip message and fails |
