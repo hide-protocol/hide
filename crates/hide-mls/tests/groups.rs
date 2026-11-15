@@ -429,3 +429,105 @@ fn a_real_credential_transplanted_onto_another_mls_key_is_refused() {
         "a binding for one MLS key must not admit a different MLS key"
     );
 }
+
+/// Builds a two-member group and returns both sides plus the identity log and
+/// the provider the founding device keeps. The MLS types are unnameable, so
+/// this is a macro rather than a function.
+macro_rules! two_member_group {
+    () => {{
+        let (log, laptop, phone) = identity();
+        let provider = HideIdentityProvider::new(log.membership());
+        let alice = client_with_provider(provider.clone(), &laptop).unwrap();
+        let bob = client_for(&log.membership(), &phone).unwrap();
+        let mut alice_group = alice
+            .create_group(Default::default(), Default::default(), None)
+            .unwrap();
+        let kp = bob
+            .generate_key_package_message(Default::default(), Default::default(), None)
+            .unwrap();
+        let commit = alice_group
+            .commit_builder()
+            .add_member(kp)
+            .unwrap()
+            .build()
+            .unwrap();
+        alice_group.apply_pending_commit().unwrap();
+        let (bob_group, _) = bob
+            .join_group(None, &commit.welcome_messages[0], None)
+            .unwrap();
+        (log, laptop, phone, provider, alice_group, bob_group)
+    }};
+}
+
+/// The commit a hostile member would send: remove the founding device.
+/// `remove_member(0)` is the laptop, which is always at index 0.
+fn hostile_commit<C: mls_rs::client_builder::MlsConfig>(
+    bob_group: &mut mls_rs::Group<C>,
+) -> mls_rs::MlsMessage {
+    bob_group
+        .commit_builder()
+        .remove_member(0)
+        .unwrap()
+        .build()
+        .unwrap()
+        .commit_message()
+        .clone()
+}
+
+/// B-02: MLS validates the roster when a device is added and never again, so a
+/// device HIDE revoked afterwards is still a member MLS will hear from. The
+/// rules must refuse its commit, or revocation means nothing inside a group the
+/// device is already in.
+#[test]
+fn a_revoked_device_cannot_commit_into_a_group_it_is_still_in() {
+    let (mut log, laptop, phone, provider, mut alice_group, mut bob_group) = two_member_group!();
+    let hostile = hostile_commit(&mut bob_group);
+
+    // The founding device learns of the revocation the way a running client
+    // does: replay a newer log into the provider it shares with the rules.
+    log.revoke(&laptop, device_id(&phone.verifying_key()))
+        .unwrap();
+    provider.update(log.membership());
+
+    assert!(
+        alice_group.process_incoming_message(hostile).is_err(),
+        "a revoked device's commit was applied by an honest member"
+    );
+    // A refused commit must leave nothing pending either, or a later apply
+    // would land it after all.
+    assert!(
+        alice_group.apply_pending_commit().is_err(),
+        "a refused commit was left pending"
+    );
+    // Nothing was applied, so the honest device is still in the group.
+    assert_eq!(alice_group.roster().members().len(), 2);
+}
+
+/// The control for the test above: the identical commit is accepted while its
+/// author is trusted, so the refusal is about the revocation and not about the
+/// commit's shape.
+#[test]
+fn the_same_commit_is_applied_while_its_author_is_trusted() {
+    let (_log, _laptop, _phone, _provider, mut alice_group, mut bob_group) = two_member_group!();
+    let hostile = hostile_commit(&mut bob_group);
+
+    let received = alice_group
+        .process_incoming_message(hostile)
+        .expect("a trusted member's commit is processed");
+    // A received commit is applied inline; a locally built one is left pending.
+    // Accepting either keeps the control about trust rather than about plumbing.
+    let _ = alice_group.apply_pending_commit();
+    // The removal was committed: the honest device is gone from the group. That
+    // is what the test above must prevent when the author has been revoked.
+    match received {
+        hide_mls::Received::Commit(description) => assert!(
+            matches!(
+                description.effect,
+                mls_rs::group::CommitEffect::Removed { .. }
+            ),
+            "expected a removal, got {:?}",
+            description.effect
+        ),
+        other => panic!("unexpected message: {other:?}"),
+    }
+}

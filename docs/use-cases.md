@@ -59,21 +59,26 @@ with hide.SecretKey.load(open("auditor.hide-key", "rb").read(), passphrase=...) 
 
 **Read this before anything else: `hide-mls` group messages are not post-quantum.** The MLS cipher suite is `MLS_128_DHKEMX25519_AES128GCM_SHA256_Ed25519`, because post-quantum MLS suites are still `draft-ietf-mls-pq-ciphersuites` and no Rust provider implements them. `hide_mls::PQ_STATUS` states this in the API. A file sealed with HIDE and a message sent through `hide-mls` are protected differently.
 
-**Fits when** you are building a group messaging feature in Rust, want MLS (RFC 9420) via `mls-rs` 0.56, and want a member's roster entry anchored to a HIDE identity so that revoking a device in the identity log makes its messages detectable as untrusted. `mls-rs` is unaudited, like HIDE.
+**Fits when** you are building a group messaging feature in Rust, want MLS (RFC 9420) via `mls-rs` 0.57, and want a member's roster entry anchored to a HIDE identity so that revoking a device in the identity log makes its messages detectable as untrusted. `mls-rs` is unaudited, like HIDE.
 
 **Does not fit when** you need PQ messaging (Signal's PQXDH, or wait for PQ MLS), a delivery service (HIDE ships none), or an audited stack.
 
 ```rust
-use hide_mls::{client_for, accept_from_trusted, untrusted_members};
+use hide_mls::{accept_from_trusted, client_for, client_with_provider, untrusted_members};
 
 // `membership` is the current head of the identity log (hide_identity).
 // `client_for` returns an mls-rs Client whose credential is the HIDE-signed
 // binding of this device id to its MLS signature key (spec §11).
+// Use `client_with_provider` when the log keeps moving, so a revocation can be
+// pushed into the running client with `HideIdentityProvider::update`.
 let client = client_for(&membership, &device_signer)?;   // Err(UntrustedDevice) if the log does not trust this device
 let mut group = client.create_group(Default::default(), Default::default(), None)?;
 
-// On receipt: MLS proves membership; HIDE proves the member's device is still trusted.
-let message = accept_from_trusted(&mut group, &membership, incoming)?;
+// On receipt, in this order: parse the message, then check the sender.
+// `process_incoming_message` alone lets a revoked device through, because MLS
+// only validates a roster entry when the member is added.
+let received = group.process_incoming_message(incoming)?;
+accept_from_trusted(&group, &received, &membership)?;
 
 // Roster hygiene after a revocation lands in the log:
 for device in untrusted_members(&group, &membership)? { /* propose removal */ }

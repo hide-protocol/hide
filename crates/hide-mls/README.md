@@ -34,6 +34,9 @@ let (mut bobs_group, _) = bob.join_group(None, &commit.welcome_messages[0], None
 let sent = group.encrypt_application_message(b"salut", Default::default())?;
 let received = bobs_group.process_incoming_message(sent)?;
 assert!(matches!(received, hide_mls::Received::ApplicationMessage(_)));
+// Receiving a message is not enough: the sender must still be a device the
+// identity trusts. `process_incoming_message` alone accepts a revoked device.
+accept_from_trusted(&bobs_group, &received, &log.membership())?;
 assert!(untrusted_members(&group, &log.membership())?.is_empty());
 # Ok::<(), Box<dyn std::error::Error>>(())
 ```

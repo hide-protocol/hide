@@ -23,17 +23,21 @@
 //!   group message is protected differently from a sealed file. Saying that
 //!   plainly matters more than implying uniform protection.
 //! - Removing a device from an identity does not by itself evict it from every
-//!   group; [`GroupSession::remove_device`] must be called. The link is
-//!   checked, not automatic.
+//!   group. HIDE checks the link, it does not make eviction automatic: the
+//!   group still has to remove the device with an MLS commit, and
+//!   [`untrusted_members`] is how a caller finds out which ones are due.
 
 use hide_identity::{DeviceId, Membership, device_id};
 use hide_sign::{
     SIGNATURE_LENGTH, SigningIdentity as HideSigner, VERIFYING_KEY_LENGTH, VerifyingIdentity,
 };
 use mls_rs::client_builder::MlsConfig;
-use mls_rs::group::ReceivedMessage;
+use mls_rs::group::{ReceivedMessage, Roster, Sender};
 use mls_rs::identity::SigningIdentity;
-use mls_rs::{CipherSuite, Client, CryptoProvider, MlsMessage};
+use mls_rs::mls_rules::{
+    CommitDirection, CommitOptions, CommitSource, EncryptionOptions, ProposalBundle,
+};
+use mls_rs::{CipherSuite, Client, CryptoProvider, MlsMessage, MlsRules};
 use mls_rs_core::crypto::CipherSuiteProvider;
 use mls_rs_core::error::IntoAnyError;
 use mls_rs_core::extension::ExtensionList;
@@ -210,6 +214,12 @@ impl HideIdentityProvider {
         }
         Ok(())
     }
+
+    /// Whether a signing identity is a device the identity trusts right now.
+    /// Public because the MLS rules below need the same verdict.
+    pub fn is_trusted(&self, signing_identity: &SigningIdentity) -> bool {
+        self.validate(signing_identity).is_ok()
+    }
 }
 
 impl IdentityProvider for HideIdentityProvider {
@@ -265,6 +275,90 @@ impl IdentityProvider for HideIdentityProvider {
     }
 }
 
+/// MLS checks the roster when a member is added, and never again. A device
+/// that HIDE revoked afterwards is still a member MLS is happy to hear from:
+/// it can commit, and it can leave a by-reference proposal in the cache for an
+/// honest client to fold into its next commit (for example a Remove of the
+/// honest device). These rules close that window, using the same membership
+/// the identity provider validates against, so `update` reaches both.
+#[derive(Clone, Debug)]
+pub struct HideMlsRules {
+    membership: HideIdentityProvider,
+}
+
+impl HideMlsRules {
+    pub fn new(membership: HideIdentityProvider) -> Self {
+        Self { membership }
+    }
+
+    /// Whether the member at `index` is a device the identity still trusts.
+    /// A sender that cannot be attributed to a roster member is not trusted:
+    /// HIDE configures no external senders, so there is no honest case for one.
+    fn trusted_member(&self, roster: &Roster<'_>, index: u32) -> bool {
+        roster
+            .member_with_index(index)
+            .map(|member| self.membership.is_trusted(&member.signing_identity))
+            .unwrap_or(false)
+    }
+}
+
+impl MlsRules for HideMlsRules {
+    type Error = MlsError;
+
+    fn filter_proposals(
+        &self,
+        direction: CommitDirection,
+        source: CommitSource,
+        current_roster: &Roster<'_>,
+        _current_context: &mls_rs::group::GroupContext,
+        mut proposals: ProposalBundle,
+    ) -> Result<ProposalBundle, Self::Error> {
+        // The commit's own author first: a revoked device must not be able to
+        // author anything at all.
+        if let CommitSource::ExistingMember(member) = &source
+            && !self.membership.is_trusted(&member.signing_identity)
+        {
+            return Err(MlsError::UntrustedSender);
+        }
+        let mut dropped = false;
+        proposals.retain(|info| {
+            let keep = match info.sender {
+                Sender::Member(index) => self.trusted_member(current_roster, index),
+                _ => false,
+            };
+            dropped |= !keep;
+            Ok::<bool, MlsError>(keep)
+        })?;
+        // Receiving: an untrusted proposal means the group is in a state the
+        // caller must not continue from. Sending: a stale by-reference proposal
+        // is dropped rather than folded in, so one bad proposal cannot deadlock
+        // every later commit.
+        if dropped && matches!(direction, CommitDirection::Receive) {
+            return Err(MlsError::UntrustedSender);
+        }
+        Ok(proposals)
+    }
+
+    fn commit_options(
+        &self,
+        _new_roster: &Roster<'_>,
+        _new_context: &mls_rs::group::GroupContext,
+        _proposals: &ProposalBundle,
+    ) -> Result<CommitOptions, Self::Error> {
+        // An update path always: a commit that removes someone must rekey the
+        // epoch, not merely announce the removal.
+        Ok(CommitOptions::new().with_path_required(true))
+    }
+
+    fn encryption_options(
+        &self,
+        _current_roster: &Roster<'_>,
+        _current_context: &mls_rs::group::GroupContext,
+    ) -> Result<EncryptionOptions, Self::Error> {
+        Ok(EncryptionOptions::default())
+    }
+}
+
 /// Builds the MLS client for one device of a HIDE identity.
 ///
 /// The credential carries the device id, the device's HIDE verifying key, and a
@@ -308,8 +402,13 @@ pub fn client_with_provider(
     let credential = Credential::Custom(CustomCredential::new(HIDE_CREDENTIAL, data));
     let signing = SigningIdentity::new(credential, public);
 
+    // The rules share the provider (and therefore the same `RwLock`), so a
+    // later `update` narrows what the rules accept and what the provider
+    // validates, together.
+    let rules = HideMlsRules::new(provider_handle.clone());
     Ok(Client::builder()
         .identity_provider(provider_handle)
+        .mls_rules(rules)
         .crypto_provider(crypto)
         .signing_identity(signing, secret, SUITE)
         .build())
