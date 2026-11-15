@@ -255,3 +255,52 @@ Release-ul 0.10.0 se face **numai** dacă porțile din secțiunea 1 sunt verzi p
 pentru că majoritatea reparațiilor de mai sus schimbă comportamentul observabil (coduri de eroare,
 semnături de API, permisiuni de fișier). Formatul pe fir nu s-a schimbat: niciun octet din vectorii
 congelați nu s-a modificat, iar `generate_v1_vectors -- --check` și vectorii de subsistem trec.
+
+## 10. Ce a găsit însuși release-ul
+
+Rulează-l și găsește defecte pe care citirea nu le vede. Trei, toate reale, toate în workflow-uri care
+nu se executau pe nicio cale de CI (`release.yml` rulează doar la tag, `publish-sdks.yml` doar la
+dispatch manual), deci niciunul nu putea fi prins înainte:
+
+1. **`tar … | grep -q` sub `set -euo pipefail`.** `release.yml` verifica prezența unui fișier în
+  arhivă citind listarea prin pipe în `grep -q`. `grep -q` iese la prima potrivire și închide pipe-ul;
+  GNU tar raportează atunci `tar: stdout: write error` și iese non-zero, iar `pipefail` face din asta
+  statusul conductei — deci aserțiunea eșua exact când fișierul **era** prezent, cu un mesaj care
+  spunea contrariul (`has no THIRD-PARTY-LICENSES.txt`). Doar Linux: bsdtar de pe macOS nu propagă
+  eroarea, iar Windows folosește 7z. Reparat prin scrierea listării într-un fișier și verificarea
+  fișierului (patru locuri). Nereproducibil local în WSL, cu arhive de 1 KB și de 8 MB — dovada este
+  log-ul rulării, nu o reproducere.
+2. **`.deb`-ul:** aserțiunea fixa un director anume sub `/usr/lib`, pe care bundler-ul îl alege singur
+  (documentația Tauri dă `/usr/lib/<product-name>` atât pentru `.deb`, cât și pentru AppImage, iar
+  maparea `resources` e separată pe fiecare bundler). Acum se verifică prezența fișierului oriunde în
+  pachet, iar eșecul tipărește listarea, ca următorul cititor să vadă layout-ul în loc să-l
+  reconstruiască.
+3. **Două goluri de publicare, găsite de dry run-ul de dinaintea publicării reale** — exact rolul lui:
+  **a)** `HideProtocol.csproj` împacheta deja `LICENSE` din rădăcină, iar `Directory.Build.props`
+  scris de workflow îl adăuga a doua oară → `NU5118`, pe care `TreatWarningsAsErrors` îl face fatal;
+  reparat prin eliminarea dublurii, cu aserțiunea de după pack rămasă să dovedească prezența ambelor
+  fișiere. **b)** Verificarea „Every package must contain LICENSE and LICENSE.third-party.txt” rula
+  **înainte** de pasul care construiește pachetul Node, iar `sdk/node/package.json` declară
+  `prepack: npm run build`: `npm pack` a declanșat `tsc` într-un arbore în care dependențele de
+  dezvoltare nu erau încă instalate, a eșuat cu `error TS2688: Cannot find type definition file for
+  'node'`, și a tipărit **această eroare în loc de JSON** — deci verificarea murea în `JSON.parse`,
+  cu un mesaj care nu spunea nimic despre cauză. Reparat prin mutarea verificării după build, prin
+  `--ignore-scripts` (listarea devine o întrebare pură despre manifest și nu poate fi stricată de un
+  build) și prin raportarea ieșirii brute când parsarea eșuează.
+
+  **O afirmație a acestui raport a fost greșită și o corectez aici.** Prima versiune a acestui
+  paragraf spunea că `LICENSE.third-party.txt` lipsea din câmpul `files` și că de aceea npm nu l-ar
+  fi împachetat. Am testat: **nu este adevărat**. `npm pack` include orice fișier al cărui nume
+  începe cu `LICEN[CS]E`, indiferent de lista `files`. Am adăugat totuși intrarea în trei locuri
+  (este explicită și inofensivă), dar valoarea ei este documentară, nu funcțională, iar mesajul
+  commit-ului `72816c4` suprastimează ce a reparat.
+
+Aserțiunile de licențe adăugate în această rundă (`a9edb6a`) și-au plătit costul la prima rulare:
+ambele au prins goluri reale, nu au produs zgomot.
+
+**Ordinea de publicare.** `publish-sdks.yml` a fost pornit din `main`, nu din tag, pentru că
+reparațiile sunt în workflow și în manifeste, iar un tag rulează workflow-ul de la acel tag.
+Diferența dintre tag și `main` a fost verificată înainte: doar `.github/skills/release/SKILL.md`,
+`.github/workflows/publish-sdks.yml`, `scripts/pack-native.mjs`, `sdk/node/package.json`,
+`sdk/wasm/package.json` — niciun fișier Rust, de frontend, de vectori sau lockfile. Bibliotecile
+publicate sunt deci identice cu cele din release.

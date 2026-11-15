@@ -38,8 +38,11 @@ if (kind === "npm") {
     cpu: [entry.nodeArch],
     ...(entry.libc ? { libc: [entry.libc] } : {}),
     // The compiled core statically links third-party crates, so the notices
-    // have to travel with it; publish-sdks.yml copies them in beside the
-    // library before this manifest is written.
+    // travel with it; publish-sdks.yml copies them in beside the library before
+    // this manifest is written. Both are named here even though npm's packlist
+    // already always includes a LICEN[CS]E* file, because the whitelist is what
+    // a reader looks at to answer "does this package ship its licences", and an
+    // entry that is redundant is cheaper than one that has to be reasoned about.
     files: [entry.library, "LICENSE", "LICENSE.third-party.txt"],
     repository: { type: "git", url: "git+https://github.com/hide-protocol/hide.git" },
     bugs: { url: "https://github.com/hide-protocol/hide/issues" },

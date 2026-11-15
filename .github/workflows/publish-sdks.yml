@@ -481,23 +481,6 @@ jobs:
           done
           ls -la platform-packages/*
 
-      # What npm will actually upload, package by package: the notices must be
-      # in every tarball, or a binary ships without its licences.
-      - name: Every package must contain LICENSE and LICENSE.third-party.txt
-        run: |
-          set -euo pipefail
-          for pkg in ./sdk/wasm ./sdk/node ./platform-packages/*; do
-            listing="$(npm pack --dry-run --json "$pkg" 2>/dev/null | node -e '
-              const [pack] = JSON.parse(require("fs").readFileSync(0, "utf8"));
-              console.log(pack.files.map((f) => f.path).join("\n"));
-            ')"
-            for file in LICENSE LICENSE.third-party.txt; do
-              grep -qx "$file" <<<"$listing" \
-                || { echo "::error::$pkg would be published without $file"; exit 1; }
-            done
-            echo "$pkg: LICENSE and LICENSE.third-party.txt packed"
-          done
-
       - name: Build and test the Node package
         run: |
           set -euo pipefail
@@ -510,6 +493,44 @@ jobs:
           HIDE_LIBRARY=$GITHUB_WORKSPACE/native/native-x86_64-unknown-linux-gnu/libhide_ffi.so \
           HIDE_ALLOW_LIBRARY_OVERRIDE=1 \
             node --test dist/index.test.js
+
+      # What npm will actually upload, package by package: the notices must be
+      # in every tarball, or a binary ships without its licences.
+      #
+      # This runs AFTER the Node build, and with --ignore-scripts, for two
+      # reasons learned on 2026-11-15. sdk/node declares `prepack: npm run
+      # build`, so `npm pack` in a tree whose dev dependencies are not installed
+      # yet runs `tsc`, fails with `error TS2688: Cannot find type definition
+      # file for 'node'`, and prints that INSTEAD of the JSON — the check then
+      # died in JSON.parse with a message about nothing. And a listing taken
+      # before the build describes a package that will never ship: `files` names
+      # `dist`, which does not exist yet. --ignore-scripts makes the listing a
+      # pure question about the manifest, so it is the same at either point and
+      # cannot be broken by a build.
+      - name: Every package must contain LICENSE and LICENSE.third-party.txt
+        run: |
+          set -euo pipefail
+          for pkg in ./sdk/wasm ./sdk/node ./platform-packages/*; do
+            raw="$(npm pack --dry-run --json --ignore-scripts "$pkg" 2>/dev/null)"
+            listing="$(printf '%s' "$raw" | node -e '
+              let text = require("fs").readFileSync(0, "utf8");
+              let parsed;
+              try {
+                parsed = JSON.parse(text);
+              } catch (error) {
+                console.error("could not read npm pack --json output:", error.message);
+                console.error(text.slice(0, 4000));
+                process.exit(1);
+              }
+              const pack = Array.isArray(parsed) ? parsed[0] : Object.values(parsed)[0];
+              console.log(pack.files.map((f) => f.path).join("\n"));
+            ')"
+            for file in LICENSE LICENSE.third-party.txt; do
+              grep -qx "$file" <<<"$listing" \
+                || { echo "::error::$pkg would be published without $file"; exit 1; }
+            done
+            echo "$pkg: LICENSE and LICENSE.third-party.txt packed"
+          done
 
       # The published loader must find the published package, not a stray copy
       # left in the build tree. Installing the tarballs into a clean directory
