@@ -6,7 +6,14 @@ one-screen summary. Update both in the same commit as the work they describe.
 A row that claims DONE without a verifying command in its Evidence column is not
 done.
 
-## What exists at 0.9.1 (published 2026-09-27 to every registry)
+## What exists at 0.10.0 (published 2026-11-15 to every registry)
+
+0.10.0 is the audit round: no byte of the frozen wire changed, and the
+behavioural changes are all API-level (a challenge answer is bound to the
+verifier that issued it, a revoked device cannot commit into an MLS group it is
+still in, the writer refuses to emit metadata a reader must reject, the C ABI
+distinguishes forgery from corruption, `identity-create` no longer overwrites).
+The measurements below were taken at 0.10.0.
 
 - **Format release candidate**: the wire in `spec/hide-1.md` is frozen from
   0.9.0 (security fixes only before 1.0). Critical flags (SIGNED 0x01), minor
@@ -28,7 +35,10 @@ done.
   secrets; erasure is demonstrable; since 0.9.0 secrets persist in a
   passphrase-sealed epoch keystore (`--epoch-store`).
 - **Transparency** (`hide-transparency`): RFC 6962 inclusion and consistency
-  proofs; no operator and no witnessing exist.
+  proofs, and since 0.10.0 the C2SP witness half of the picture — an Ed25519
+  cosignature verifier, the `add-checkpoint` request body and the response
+  classification (`c2sp.org/tlog-witness`). No operator and no running witness
+  exist; ML-DSA-44 cosignatures are out of scope.
 - **Group messaging** (`hide-mls`): MLS via `mls-rs`, classical suite; the
   credential is a HIDE-signed binding of device id to MLS key since 0.7.0.
 - **C ABI** (`hide-ffi`): the single boundary every binding crosses;
@@ -53,14 +63,18 @@ done.
   checkpoints with witness thresholds, transparency leaves and proof encoding,
   epoch binding (spec §16) in Rust, C ABI, WASM and all seven SDKs; every
   spec §15 limitation closed or decided without a wire change.
+- **Third-party conformance (0.10.0, RC-11)**: `conformance/harness` runs any
+  implementation against every frozen vector and reports the verdict through
+  exit statuses, checking the *class* of each refusal; levels and behaviours are
+  machine-readable in `conformance/compliance.json`. **No implementation
+  maintained outside this repository has run it**, so criterion 3 for 1.0 is
+  still open.
 
-## In flight: desktop app P1 audit (2026-11-15, phase 15, unreleased)
-
-## Reality check 2026-11-15 (phase 15, unreleased)
+## Reality check 2026-11-15 (phase 15, released as 0.10.0)
 
 The full audit and its numbers are in
 [`reality-check-2026-11-15.md`](reality-check-2026-11-15.md); the rows are
-`RC-01`…`RC-08` and `DSK-01`…`DSK-09`, `FE-03` in
+`RC-01`…`RC-14`, `DSK-01`…`DSK-09` and `FE-03` in
 [`tracker.csv`](tracker.csv). Every surface was read by a separate reader
 (container, identity/epoch/transparency/MLS, applications, SDK/FFI,
 supply-chain), nothing was compiled during the audit, and every fix was
