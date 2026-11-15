@@ -148,6 +148,28 @@ impl Approver for AskOnTerminal {
     }
 }
 
+/// True when `data` is shaped like a HIDE signing payload: an 8-byte big-endian
+/// context length followed by a context beginning with the reserved `HIDE/`
+/// prefix (`hide_sign::bind`). An SSH userauth payload is an SSH blob, whose
+/// first four bytes are `00 00 00 20` or similar, so honest use never matches.
+fn is_hide_signed_payload(data: &[u8]) -> bool {
+    let Some(length) = data
+        .first_chunk::<8>()
+        .map(|bytes: &[u8; 8]| u64::from_be_bytes(*bytes))
+    else {
+        return false;
+    };
+    // Every HIDE context is a short literal; anything longer is not one.
+    let Ok(length) = usize::try_from(length) else {
+        return false;
+    };
+    if length == 0 || length > 64 {
+        return false;
+    }
+    data.get(8..8 + length)
+        .is_some_and(hide_sign::is_reserved_context)
+}
+
 /// Approves everything, for `--no-confirm`.
 pub struct ApproveEverything;
 
@@ -216,6 +238,14 @@ impl Agent {
 
         if requested != public_key_blob(&self.public) {
             return Err("the requested key is not ours".into());
+        }
+        // The very same Ed25519 key is the classical half of every HIDE
+        // signature. Signing a HIDE-shaped payload here would hand a caller that
+        // half for a reserved context, quietly reducing the hybrid to ML-DSA
+        // alone (§8.5). Honest SSH payloads are SSH blobs or SSHSIG structures,
+        // which never begin with a `HIDE/` context frame.
+        if is_hide_signed_payload(data) {
+            return Err("refused".into());
         }
         if !approver.approve(&fingerprint(&self.public)) {
             return Err("refused".into());
@@ -341,6 +371,43 @@ mod tests {
             agent.respond(&request, &mut ApproveEverything),
             vec![FAILURE]
         );
+    }
+
+    /// The agent's Ed25519 key is the classical half of every HIDE signature.
+    /// Signing a reserved-context payload would hand a caller that half, so the
+    /// request must be refused even with `--no-confirm` (which approves all).
+    #[test]
+    fn a_hide_shaped_payload_is_refused_even_with_auto_approval() {
+        let agent = agent();
+        let context = b"HIDE/1.0 container";
+        let mut payload = Vec::new();
+        payload.extend_from_slice(&(context.len() as u64).to_be_bytes());
+        payload.extend_from_slice(context);
+        payload.extend_from_slice(b"the message");
+
+        let mut request = framed(SIGN_REQUEST, &[&public_key_blob(agent.public()), &payload]);
+        request.extend_from_slice(&0u32.to_be_bytes());
+        assert_eq!(
+            agent.respond(&request, &mut ApproveEverything),
+            vec![FAILURE]
+        );
+    }
+
+    /// A context that is not reserved may be signed: the refusal must be
+    /// narrow enough that ordinary SSH payloads still work.
+    #[test]
+    fn a_non_reserved_context_frame_is_signed() {
+        let agent = agent();
+        let context = b"example/application";
+        let mut payload = Vec::new();
+        payload.extend_from_slice(&(context.len() as u64).to_be_bytes());
+        payload.extend_from_slice(context);
+        payload.extend_from_slice(b"the message");
+
+        let mut request = framed(SIGN_REQUEST, &[&public_key_blob(agent.public()), &payload]);
+        request.extend_from_slice(&0u32.to_be_bytes());
+        let reply = agent.respond(&request, &mut ApproveEverything);
+        assert_eq!(reply[0], SIGN_RESPONSE);
     }
 
     /// Refusing at the prompt must produce no signature at all.
