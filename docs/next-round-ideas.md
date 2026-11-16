@@ -123,33 +123,46 @@ hardware) înainte de 1.0, pentru că după înghețare devine o schimbare de fo
 
 ## 9. (găsit de această rundă) 15 alerte dependabot deschise pe ramura implicită
 
-La împingerea commitului `46ed2d6`, GitHub raportează **15 vulnerabilități
-deschise: 3 high, 10 moderate, 2 low**. Este o suprafață pe care raportul din
-15 noiembrie nu a citit-o: a citit *PR-urile* dependabot, nu *alertele*, iar cele
-două sunt liste diferite. Cineva care citește doar „0 issues, N PR-uri” crede că
-depozitul e curat.
+La împingerea commitului `46ed2d6`, dependabot a raportat pe ramura implicită
+**15 vulnerabilități deschise (3 high, 10 moderate, 2 low)**. Este o suprafață pe
+care raportul din 15 noiembrie nu a citit-o: a citit *PR-urile* dependabot, nu
+*alertele*, iar cele două sunt liste diferite. Cineva care citește doar „0
+issues, N PR-uri” crede că depozitul e curat.
+
+**Măsurat după împingere: 1 alertă deschisă, 14 închise.** Alertele erau reale
+față de starea *împinsă* la acea dată (`7e42a55`), în care `vite` era 8.2.2 și
+`serde_with` 3.17.0: reparațiile erau în arborele de lucru dar necomise, deci
+serverul nu le putea vedea. Commitul care le-a dus pe server a închis 14 dintre
+ele. Cea care rămâne:
 
 | alerte | pachet | unde | verdict |
 | --- | --- | --- | --- |
-| 1 (medium) | `serde_with` GHSA-7gcf-g7xr-8hxj | `apps/hide-desktop/src-tauri/Cargo.lock` | **rezolvată de această rundă**: intervalul vulnerabil este `>= 2.3.0, < 3.21.0`, iar lock-ul are acum 3.24.0 (RC-18). Alerta se închide la următoarea scanare |
-| 1 (medium) | `glib` GHSA-wrw7-89jp-8q8g | `apps/hide-desktop/src-tauri/Cargo.lock` | **deja documentată și acceptată**: intervalul este `>= 0.15.0, < 0.20.0` fără versiune reparată, adică exact `RUSTSEC-2024-0429`, pe care `apps/hide-desktop/src-tauri/.cargo/audit.toml` îl listează cu motivul scris (linia GTK3, fix-ul cere o versiune de Tauri care nu există) |
-| 3 (1 high, 1 low, 1 medium × 2) | `vite` | `apps/hide-desktop/package.json` + `pnpm-lock.yaml` | unealtă de **build/dev**, nu cod livrat: riscul cere un `vite dev` local sau un `preview` expus. Fix = bump de vite |
-| 1 (high) | `source-map-js` | `apps/hide-desktop/pnpm-lock.yaml` | dependență tranzitivă a lui vite, tot dev |
+| 1 (medium) | `glib` GHSA-wrw7-89jp-8q8g | `apps/hide-desktop/src-tauri/Cargo.lock` | **deja documentată și acceptată**: intervalul este `>= 0.15.0, < 0.20.0` fără versiune reparată, adică exact `RUSTSEC-2024-0429`, pe care `apps/hide-desktop/src-tauri/.cargo/audit.toml` îl listează cu motivul scris (linia GTK3, fix-ul cere o versiune de Tauri care nu există). Nu o poate închide nicio actualizare de lockfile |
 
-Recomandare, în ordine:
+Ce rămâne de făcut, și ce s-a învățat:
 
-1. **Nu le trata ca echivalentul lui `cargo audit` / `cargo deny`**: acelea rulează
-  pe codul livrat, iar 14 din 15 alerte sunt în unelte de build sau în linia
-  GTK3 pe care proiectul a decis deja să o accepte. Aici e vorba de un post de
-  lucru de dezvoltator, nu de octeți pe care îi deschide un utilizator.
-2. **Lasă bump-ul de `vite`/`source-map-js` în seama dependabot** — dar verifică
-  că deschide PR-ul: după ce vite a sărit la 8.2.4, alertele sunt încă deschise,
-  deci versiunea care repară nu e în lock.
-3. **Pentru `glib`, corelează alerta cu lista de ignorări**: fie o închizi cu
-  motivul documentat, fie adaugi un pas care o leagă de `.cargo/audit.toml`.
-  Altfel 15 alerte deschise ascund exact următoarea alertă care contează, iar
-  asta este costul real al zgomotului.
-4. **Notă de efect secundar**: `conformance/cross-surface/adapters/go/go.mod` a
+1. **Corelează alerta `glib` cu lista de ignorări.** Este singura rămasă și nu o
+  poate închide niciun update: fie o închizi cu motivul documentat, fie adaugi un
+  pas care o leagă de `.cargo/audit.toml`. O alertă deschisă permanent este
+  exact zgomotul care ascunde următoarea alertă care contează.
+2. **Nu le trata ca echivalentul lui `cargo audit` / `cargo deny`**: acelea rulează
+  pe codul livrat, iar toate cele 15 erau în unealta de build a aplicației
+  desktop sau în linia GTK3 pe care proiectul a decis deja să o accepte. Aici
+  e vorba de un post de lucru de dezvoltator, nu de octeți pe care îi deschide
+  un utilizator.
+3. **Lecția de proces, care e cea care merită scrisă**: 14 alerte „deschise” erau
+  reparații care stăteau necomise în arborele de lucru. Un raport care citește
+  serverul în timp ce arborele local e înaintea lui citește o stare veche — și
+  invers, un arbore cu nopți de muncă necommise raportează pe server
+  vulnerabilități pe care deja le-a rezolvat. Ambele direcții mint, și ambele
+  se rezolvă prin același lucru: comite, apoi măsoară.
+4. **PR-ul #40 rămâne deschis, parțial aplicat.** Grupul npm-minor are 11
+  actualizări în două directoare; commitul acestei runde a dus doar jumătatea de
+  `apps/hide-desktop` (vite și source-map-js, care sunt și cele ce au închis
+  alertele). `sdk/node/package.json` + `package-lock.json` sunt încă în PR și
+  cer un bump plus re-rularea suitei Node. Un PR nou (#63,
+  `softprops/action-gh-release` 3.0.3 → 3.0.4) a apărut între timp.
+5. **Notă de efect secundar**: `conformance/cross-surface/adapters/go/go.mod` a
   adăugat o intrare nouă în graful de dependențe (workflow-ul
   „Graph Update: go_modules” a rulat și a ieșit verde). Modulul are o singură
   dependență, un `replace` local, deci nu are nimic de actualizat — dar dacă
