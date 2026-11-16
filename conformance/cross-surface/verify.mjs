@@ -3,17 +3,22 @@
  * every other surface, so a change to one that breaks another fails loudly
  * instead of being discovered by a user.
  *
- * Covered: the WASM browser build, the Node SDK (which goes through the C
- * FFI), and the CLI — these three are always required. The Ruby, PHP and .NET
- * SDKs are driven through the small adapters in ./adapters, and are exercised
- * when their runtime is present. Set HIDE_CROSS_REQUIRE=ruby,php,dotnet to
- * turn an absent runtime into a failure (CI does this). The Python SDK uses
- * the same C FFI as Node, and is covered by its own suite.
+ * Covered: the WASM browser build, the Node SDK (through the C FFI), and the
+ * CLI — these three are always required. Every other SDK is driven through the
+ * small adapters in ./adapters — Ruby, PHP, .NET, Python, Go and Java — and is
+ * exercised when its runtime is present. Set
+ * HIDE_CROSS_REQUIRE=ruby,php,dotnet,python,go,java to turn an absent runtime
+ * into a failure instead of a silently smaller matrix (CI does this), and note
+ * that Go and Java need their adapter built first: the harness drives a
+ * binary, it does not build one.
  *
  * Run after: cargo build -p hide-cli -p hide-ffi
  *            cargo build -p hide-wasm --target wasm32-unknown-unknown --release
  *            wasm-bindgen ... --target web --out-dir conformance/cross-surface/wasm
  *            dotnet build conformance/cross-surface/adapters/dotnet   (for .NET)
+ *            (cd conformance/cross-surface/adapters/go; CGO_ENABLED=1 go build -o hide-adapter .)
+ *            javac -d target/java-classes $(find sdk/java/src/main \
+ *              conformance/cross-surface/adapters/java -name '*.java')
  */
 import { execFileSync } from "node:child_process";
 import { webcrypto } from "node:crypto";
@@ -99,27 +104,66 @@ if (ffiPath.includes("release")) {
 // HIDE_CROSS_REQUIRE turns absence into a failure instead of a silent gap.
 const adapters = join(here, "adapters");
 const dotnetBinary = binaryIn(join(adapters, "dotnet", "bin"), "HideAdapter");
+// Both are build outputs of the checkout, like the .NET adapter: the harness
+// must not build them, and CI builds them before running this.
+const goBinary = binaryAt(join(adapters, "go", "hide-adapter"), join(adapters, "go", "hide-adapter.exe"));
+const javaClasses = join(root, "target", "java-classes");
+// The class file, not the directory: `javac -d` creates the directory before it
+// compiles, so an empty or half-written one would advertise an adapter that is
+// not there and turn a missing surface into a failure.
+const javaAdapter = join(javaClasses, "org", "hideprotocol", "crosssurface", "CrossSurface.class");
 const languages = [
   {
     name: "ruby",
-    command: "ruby",
+    commands: ["ruby"],
     args: ["-I", join(root, "sdk", "ruby", "lib"), join(adapters, "ruby_adapter.rb")],
     probe: ["--version"],
   },
   {
     name: "php",
-    command: "php",
+    commands: ["php"],
     // Ubuntu ships ffi.enable=preload, which refuses FFI from a plain script.
     args: ["-d", "ffi.enable=1", join(adapters, "php_adapter.php")],
     probe: ["-d", "ffi.enable=1", "--version"],
   },
   {
     name: "dotnet",
-    command: dotnetBinary ?? "HideAdapter",
+    commands: [dotnetBinary ?? "HideAdapter"],
     args: [],
     // The adapter itself is the probe: with no arguments it exits 2 on purpose.
     probe: null,
     available: Boolean(dotnetBinary),
+  },
+  {
+    name: "python",
+    // The same SDK answers to `python3` (Linux, macOS) and `python` (Windows),
+    // so the first name that runs is the one used. Naming one of them would
+    // make the surface depend on which OS the matrix is run from.
+    commands: ["python3", "python"],
+    args: [join(adapters, "python_adapter.py")],
+    probe: ["--version"],
+  },
+  {
+    name: "go",
+    commands: [goBinary ?? "hide-adapter"],
+    args: [],
+    probe: null,
+    available: Boolean(goBinary),
+  },
+  {
+    name: "java",
+    commands: ["java"],
+    // HIDE_LIBRARY and HIDE_ALLOW_LIBRARY_OVERRIDE come from the environment
+    // the harness exports for every adapter, which is the first place the
+    // binding looks.
+    args: [
+      "--enable-native-access=ALL-UNNAMED",
+      "-cp",
+      javaClasses,
+      "org.hideprotocol.crosssurface.CrossSurface",
+    ],
+    probe: ["-version"],
+    available: existsSync(javaAdapter),
   },
 ];
 
@@ -133,18 +177,28 @@ function binaryIn(dir, stem) {
   return null;
 }
 
+function binaryAt(...candidates) {
+  return candidates.find((path) => existsSync(path)) ?? null;
+}
+
 const required = (process.env.HIDE_CROSS_REQUIRE ?? "")
   .split(",")
   .map((name) => name.trim().toLowerCase())
   .filter(Boolean);
 
 for (const language of languages) {
+  language.command ??= language.commands[0];
   if (language.available !== undefined) continue;
-  try {
-    execFileSync(language.command, language.probe, { stdio: "ignore" });
-    language.available = true;
-  } catch {
-    language.available = false;
+  language.available = false;
+  for (const candidate of language.commands) {
+    try {
+      execFileSync(candidate, language.probe, { stdio: "ignore" });
+      language.command = candidate;
+      language.available = true;
+      break;
+    } catch {
+      // Try the next name this runtime may have on this OS.
+    }
   }
 }
 

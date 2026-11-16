@@ -102,8 +102,11 @@ Known and documented, not new findings:
 - Identity and epoch decoders no longer reserve memory from the declared entry
   count; MLS messages and `hide unseal` input are capped at 1 MiB; a `u64`
   length or index is refused on 32-bit targets instead of being truncated.
-- Eight fuzz targets (eleven since 0.9.1) cover every parser of untrusted
-  bytes, each fuzzed four hours every night with the corpus carried forward.
+- Sixteen fuzz targets cover every parser of untrusted bytes — the container,
+  key files, identity logs, epoch chains, transparency proofs, MLS messages,
+  the ssh-agent decoder, public-key armor, the MLS device credential, the
+  relying-party verifiers, and every byte-taking entry point of the C ABI —
+  each fuzzed four hours every night with the corpus carried forward.
 
 Found after 0.8.0 shipped: the identity-log transport encoding declared six
 fields per entry and wrote seven. Rust read its own output, so no HIDE surface

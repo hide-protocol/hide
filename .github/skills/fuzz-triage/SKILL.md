@@ -6,8 +6,12 @@ description: Triage a libFuzzer finding in HIDE — locate the failing CI/nightl
 # Fuzz triage
 
 Fuzz targets: `format_header object_open keyring_open identity_log epoch_chain
-transparency_proofs challenge_decode mls_message` (`fuzz/fuzz_targets/*.rs`).
-Findings so far were all bound/canonicality bugs code review missed. Assume the same.
+transparency_proofs challenge_decode mls_message epoch_store checkpoint_note
+identity_bindings agent_request device_credential public_key_armor relying_party
+ffi_bytes` (`fuzz/fuzz_targets/*.rs`; the directory, the `[[bin]]` list in `fuzz/Cargo.toml`
+and the nightly matrix must name the same set, which `.github/actions/fuzz-targets`
+enforces). Findings so far were all bound/canonicality bugs code review missed.
+Assume the same.
 
 ## 1. Find the run
 

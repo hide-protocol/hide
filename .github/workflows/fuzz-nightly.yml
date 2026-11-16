@@ -48,14 +48,18 @@ jobs:
           - agent_request
           - challenge_decode
           - checkpoint_note
+          - device_credential
           - epoch_chain
           - epoch_store
+          - ffi_bytes
           - format_header
           - identity_bindings
           - identity_log
           - keyring_open
           - mls_message
           - object_open
+          - public_key_armor
+          - relying_party
           - transparency_proofs
     env:
       # Through the environment, never pasted into a script: a value that
@@ -67,10 +71,10 @@ jobs:
       - uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable
         with:
           toolchain: nightly
-      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
         with:
           workspaces: fuzz
-      - uses: taiki-e/install-action@3f74d7c16a4242f1c95561e98edc25d36adb4375 # v2
+      - uses: taiki-e/install-action@cfdb7ed4ccc7c7dce37759eae89dc5674b469b39 # v2
         with:
           tool: cargo-fuzz
 
@@ -102,16 +106,18 @@ jobs:
           mkdir -p "$d"
           case "$TARGET" in
             format_header|object_open) cp conformance/vectors/*.hide conformance/vectors/rejections/*.hide "$d/" ;;
+            ffi_bytes) cp conformance/vectors/*.hide conformance/vectors/rejections/*.hide conformance/vectors/*.test-secret conformance/vectors/*.test-seed "$d/" ;;
             keyring_open) cp conformance/vectors/*.test-secret conformance/vectors/*.test-seed "$d/" ;;
             identity_log) cp conformance/vectors/subsystems/identity-*.bin "$d/" ;;
             epoch_chain) cp conformance/vectors/subsystems/epoch-*.bin "$d/" ;;
             transparency_proofs) cp conformance/vectors/subsystems/*root*.bin "$d/" ;;
             checkpoint_note) cp conformance/vectors/subsystems/checkpoint-*.note conformance/vectors/subsystems/checkpoint-inclusion.bin conformance/vectors/subsystems/checkpoint-consistency.bin "$d/" ;;
             identity_bindings) cp conformance/vectors/subsystems/binding-recovery*.bin conformance/vectors/subsystems/binding-epoch*.bin "$d/" ;;
+            relying_party) cp conformance/vectors/subsystems/*root*.bin conformance/vectors/subsystems/epoch-*.bin conformance/vectors/subsystems/binding-*.bin conformance/vectors/subsystems/checkpoint-*.note conformance/vectors/subsystems/checkpoint-inclusion.bin conformance/vectors/subsystems/checkpoint-consistency.bin "$d/" ;;
             # No frozen vectors: challenges carry a fresh nonce and MLS messages a
             # fresh group state, an agent request carries a session identifier, so
             # none of them is a stable artifact. Empty start.
-            agent_request|challenge_decode|mls_message|epoch_store) ;;
+            agent_request|challenge_decode|device_credential|mls_message|public_key_armor|epoch_store) ;;
             *) echo "::notice::no frozen vectors are mapped to $TARGET; it starts from last night's corpus only" ;;
           esac
           echo "corpus entries: $(find "$d" -type f | wc -l)"
@@ -179,7 +185,7 @@ jobs:
       # exists only when libFuzzer wrote a crash, timeout or oom input.
       - name: Keep the reproducer
         if: failure()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: fuzz-artifacts-${{ matrix.target }}
           # Only the inputs libFuzzer writes when it stops on a failure. A

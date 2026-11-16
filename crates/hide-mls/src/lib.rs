@@ -121,7 +121,10 @@ impl Binding {
             .as_custom()
             .filter(|c| c.credential_type() == HIDE_CREDENTIAL)
             .ok_or(MlsError::NotADeviceCredential)?;
-        let data = custom.data();
+        Self::parse_bytes(custom.data())
+    }
+
+    fn parse_bytes(data: &[u8]) -> Result<Self, MlsError> {
         if data.len() != CREDENTIAL_LEN {
             return Err(MlsError::NotADeviceCredential);
         }
@@ -158,6 +161,19 @@ impl Binding {
             )
             .map_err(|_| MlsError::ForgedCredential)
     }
+}
+
+/// Checks the HIDE device binding inside a credential, from the raw bytes it
+/// carries, and returns nothing but the verdict.
+///
+/// A credential arrives with a message from a delivery service that is not
+/// trusted, so every field in it is attacker-chosen. This is the parser
+/// `Binding::parse` uses, exposed so a caller can validate a credential it
+/// received outside a group — and so the parser has a fuzz target, which the
+/// group-level API cannot give it: reaching `Binding::parse` otherwise requires
+/// a fully joined MLS client, which is not attacker-shaped.
+pub fn validate_device_credential(data: &[u8]) -> Result<(), MlsError> {
+    Binding::parse_bytes(data).map(|_| ())
 }
 
 /// Validates roster entries against a HIDE identity's membership.
@@ -486,4 +502,46 @@ pub fn decode_message(bytes: &[u8]) -> Result<MlsMessage, MlsError> {
         return Err(MlsError::MessageTooLarge);
     }
     MlsMessage::from_bytes(bytes).map_err(protocol)
+}
+
+#[cfg(test)]
+mod credential_tests {
+    use super::*;
+
+    /// A credential arrives from a delivery service, so its length is the first
+    /// thing an attacker controls. The validator must refuse rather than index.
+    #[test]
+    fn a_credential_of_the_wrong_length_is_refused() {
+        for length in [0, 1, DEVICE_ID_LEN, CREDENTIAL_LEN - 1, CREDENTIAL_LEN + 1] {
+            assert!(
+                matches!(
+                    validate_device_credential(&vec![0x5a; length]),
+                    Err(MlsError::NotADeviceCredential)
+                ),
+                "a {length}-byte credential was not refused"
+            );
+        }
+    }
+
+    #[test]
+    fn a_genuine_binding_is_accepted_and_a_mismatched_id_is_a_forgery() {
+        let signing = HideSigner::from_bytes(&[0x6c; 32]).expect("a seed");
+        let device = device_id(&signing.verifying_key());
+        let key = signing.verifying_key().to_bytes();
+        let signature = signing.sign(BINDING_CONTEXT, &binding_message(&device, b"an mls key"));
+
+        let mut data = device.to_vec();
+        data.extend_from_slice(&key);
+        data.extend_from_slice(&signature);
+        assert!(validate_device_credential(&data).is_ok());
+
+        // An id that is not the hash of the key it travels with is a forgery,
+        // not a credential of the wrong type: the two halves came from
+        // different devices.
+        data[0] ^= 1;
+        assert!(matches!(
+            validate_device_credential(&data),
+            Err(MlsError::ForgedCredential)
+        ));
+    }
 }

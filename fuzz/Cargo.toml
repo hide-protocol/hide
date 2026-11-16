@@ -23,6 +23,7 @@ hide-identity = { path = "../crates/hide-identity" }
 hide-sign = { path = "../crates/hide-sign" }
 hide-epoch = { path = "../crates/hide-epoch" }
 hide-cli = { path = "../apps/hide-cli" }
+hide-ffi = { path = "../crates/hide-ffi" }
 hide-transparency = { path = "../crates/hide-transparency" }
 hide-mls = { path = "../crates/hide-mls" }
 
@@ -106,6 +107,34 @@ bench = false
 [[bin]]
 name = "agent_request"
 path = "fuzz_targets/agent_request.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "device_credential"
+path = "fuzz_targets/device_credential.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "ffi_bytes"
+path = "fuzz_targets/ffi_bytes.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "public_key_armor"
+path = "fuzz_targets/public_key_armor.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "relying_party"
+path = "fuzz_targets/relying_party.rs"
 test = false
 doc = false
 bench = false

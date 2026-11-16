@@ -756,6 +756,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "hide-ffi"
+version = "0.10.0"
+dependencies = [
+ "hide-crypto",
+ "hide-epoch",
+ "hide-identity",
+ "hide-keyring",
+ "hide-object",
+ "hide-sign",
+ "hide-transparency",
+ "zeroize",
+]
+
+[[package]]
 name = "hide-format"
 version = "0.10.0"
 dependencies = [
@@ -770,6 +784,7 @@ dependencies = [
  "hide-cli",
  "hide-crypto",
  "hide-epoch",
+ "hide-ffi",
  "hide-format",
  "hide-identity",
  "hide-keyring",
