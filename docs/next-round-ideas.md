@@ -4,6 +4,22 @@
 lucruri **nefăcute**, fiecare cu efortul estimat, de ce merită și ce comandă l-ar
 verifica. Ordinea este a recomandării, nu a dimensiunii.
 
+## Decis (16 noiembrie, în conversație)
+
+- **Punctul 1 este lucrul mare al rundei următoare**: a doua implementare
+  independentă a cititorului de container (biblioteci care nu importă niciun
+  `hide-*`) plus kitul de conformitate, dovedit cu
+  `node conformance/harness/run.mjs --command '<cale>' --require-complete`.
+- **Pachetul de audit (punctul 6) se scrie în aceeași rundă**, ca document
+  comis: scop, extras din threat model, comenzile de poartă cu ieșirea lor, cele
+  două advisory-uri publice, limitările cunoscute și „ce vrem să fie contestat”.
+  Așa se pot cere 2–3 oferte fără să se reconstruiască contextul.
+- **Grupul 3 (hardening ieftin de poartă) intră în aceeași rundă** dacă rămâne
+  timp după punctul 1; punctele 2, 4, 5, 7 și 8 rămân neîncepute, fără ordine
+  stabilită.
+
+Textul de mai jos este păstrat ca istoricul recomandării, nu rescris.
+
 Contextul care schimbă prioritățile față de raportul din 15 noiembrie:
 
 - **eIDAS 2.0 are termen**: Regulamentul (UE) 2024/1183 obligă fiecare stat membru
