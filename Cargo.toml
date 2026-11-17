@@ -32,11 +32,11 @@ zeroize = { version = "=1.9.1", features = ["derive"] }
 getrandom = "=0.4.3"
 clap = { version = "=4.6.7", features = ["derive"] }
 tempfile = "=3.27.0"
-proptest = "=1.11.0"
+proptest = "=1.12.0"
 # zeroize: without it the Argon2 memory blocks (19 MiB of password-derived
 # state) are freed without being wiped.
 argon2 = { version = "=0.6.0", features = ["alloc", "zeroize"] }
-rpassword = "=7.5.4"
+rpassword = "=7.5.5"
 base64 = "=0.23.1"
 # NFC for passphrases before Argon2 (spec §9.3): the same passphrase typed on
 # macOS (NFD input methods) and Windows (NFC) must open the same key file.
@@ -44,10 +44,10 @@ unicode-normalization = "=0.1.26"
 ed25519-dalek = { version = "=3.0.0", default-features = false, features = ["alloc", "fast", "zeroize"] }
 # zeroize: without it the expanded ML-DSA signing key (several KiB) is not wiped on drop.
 ml-dsa = { version = "=0.1.2", default-features = false, features = ["alloc", "zeroize"] }
-interprocess = "=2.4.7"
+interprocess = "=2.4.8"
 # RFC 9420 group messaging. No third-party audit yet, which is stated in the
 # README; HIDE adds no cryptography of its own on top.
-mls-rs = "=0.57.0"
+mls-rs = "=0.57.1"
 mls-rs-core = "=0.27.0"
 mls-rs-crypto-rustcrypto = "=0.23.0"
 
