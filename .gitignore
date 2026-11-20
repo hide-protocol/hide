@@ -31,3 +31,6 @@ sdk/wasm/hide_wasm.js
 sdk/wasm/hide_wasm.d.ts
 sdk/wasm/hide_wasm_bg.wasm
 sdk/wasm/hide_wasm_bg.wasm.d.ts
+
+# local tool state / scratch (autosync drift cleanup 2026-11-20)
+.vscode/
