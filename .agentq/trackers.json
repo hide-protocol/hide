@@ -1,0 +1,30 @@
+{
+  "version": 1,
+  "repo": "HIDE",
+  "trackers": [
+    {
+      "id": "plan",
+      "file": "docs/tracker.csv",
+      "format": "csv",
+      "columns": {
+        "id": "id",
+        "title": "title",
+        "status": "status",
+        "group": "phase",
+        "evidence": "evidence",
+        "notes": "notes"
+      },
+      "idPattern": "^[A-Z]{1,3}(?:-\\d+|\\d+(?:\\.\\d+)?)$",
+      "status": {
+        "map": {
+          "decided": "done",
+          "done": "done"
+        }
+      },
+      "index": {
+        "kind": "plan",
+        "order": 1
+      }
+    }
+  ]
+}
